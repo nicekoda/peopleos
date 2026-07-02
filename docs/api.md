@@ -232,11 +232,82 @@ in this checkpoint — see `docs/security.md` for the gap this closed).
 Documents already using a category that's since been archived are
 completely unaffected.
 
+## Policies
+
+| Method | Path | Permission | Notes |
+|---|---|---|---|
+| `GET` | `/api/v1/policies` | `policies.view` | Paginated |
+| `POST` | `/api/v1/policies` | `policies.create` | Creates the policy record only — no version/content yet |
+| `GET` | `/api/v1/policies/{policy}` | `policies.view` | |
+| `PATCH` | `/api/v1/policies/{policy}` | `policies.update` | Setting `status` to `archived` additionally requires `policies.archive` |
+| `POST` | `/api/v1/policies/{policy}/versions` | `policies.update` | Creates a new draft version; `version_number` is auto-computed |
+| `POST` | `/api/v1/policies/{policy}/publish` | `policies.publish` | Body: `{"policy_version_id": "..."}` — must be a draft version of this policy with content or an attached document |
+| `POST` | `/api/v1/policies/{policy}/assign` | `policies.assign` | Body: `{"employee_ids": [...], "due_date": "..."}` — policy must already be published |
+| `GET` | `/api/v1/policies/{policy}/acknowledgements` | `policies.view_acknowledgements` | Paginated list of acknowledgement records |
+| `POST` | `/api/v1/policies/{policy}/acknowledge` | `policies.acknowledge` | Body: `{"employee_id": "..."}` — **admin/HR-recorded only**, see `docs/security.md` |
+
+**`tenant_id` is never accepted as request input**, same rule as every
+other module.
+
+### Publishing and versioning
+
+- A policy starts as `draft` with no versions. `POST .../versions`
+  creates a draft version (content optional at this stage).
+- `POST .../publish` promotes a specific draft version to `published`,
+  sets `policies.current_version_id`, and moves any *previously*
+  published version for the same policy to `archived` — never deleted.
+- Assignment always targets the policy's **current** version.
+
+### Acknowledgement — read this before assuming self-service works
+
+`POST /policies/{policy}/acknowledge` requires an explicit `employee_id`
+in the request body. It is **not** derived from the authenticated
+session — there is no verified link between a `User` account and an
+`Employee` record (see `docs/security.md`). Every acknowledgement is
+recorded with `acknowledgement_method: "admin_recorded"`. This means:
+`policies.acknowledge` should only be granted to roles trusted to record
+acknowledgements *on behalf of* employees (HR staff), not to the general
+Employee role — which is exactly how the seeded roles are configured.
+
+Acknowledging fails with:
+- `404` if the employee has no `pending` acknowledgement for this policy.
+- `409` if the policy has been republished since the employee was
+  assigned (their pending row points at a superseded version — no
+  auto-reassignment exists yet).
+
+### Response shapes
+
+```json
+// GET /policies/{policy}
+{
+  "data": {
+    "id": "01h...",
+    "title": "Code of Conduct",
+    "slug": "code-of-conduct",
+    "code": null,
+    "status": "published",
+    "current_version_id": "01h...",
+    "effective_date": null,
+    "review_date": null,
+    "created_at": "2026-07-02T00:00:00+00:00"
+  }
+}
+
+// POST /policies/{policy}/assign
+{
+  "created": ["01h...", "01h..."],
+  "skipped_duplicates": []
+}
+```
+
 ## Current limitations
 
 - No export endpoint (`employees.export` permission is seeded but unused — explicitly out of scope this checkpoint).
 - No bulk actions.
 - No `departments`/`locations`/`positions` CRUD endpoints — they exist only to support employee FK validation (unlike `document_categories`, which now has one).
+- No genuine self-service policy acknowledgement — admin-recorded only, see above.
+- No policy campaign automation, reminders, or escalations.
+- No acknowledgement export/report endpoint (`policies.export_acknowledgements` seeded, unused).
 - No document approval workflow endpoint — `documents.approve` permission and `approved_by`/`approved_at` columns are reserved, unused.
 - Pagination uses Laravel's default page-number style; no cursor pagination or configurable page size yet.
 - Session-based auth only — see "Authentication" above for the full future Sanctum/token plan.
@@ -250,6 +321,12 @@ completely unaffected.
 - Document approval workflow (`documents.approve`, `approved_by`/`approved_at` already reserved in the schema).
 - Malware scanning on upload (currently type/size/content-detection validation only, no payload scanning).
 - Cloud storage (S3 or similar) — local private disk only for now; the storage layer is already abstracted behind `storage_disk`/`storage_path` on the model, so this is a lower-effort future change than it might otherwise be.
-- Policy Management / Policy Acknowledgement linking documents to required-reading workflows — `applies_to` already includes a `policy` value in the enum, unused until that module exists.
 - Onboarding documents / compliance document tracking (expiring work permits, certifications) — `document_categories.requires_expiry_date` and `employee_documents.expiry_date` already exist and are enforced at upload time; a dedicated "documents expiring soon" report/notification is future work, not built yet.
 - Candidate documents (`applies_to` includes `candidate`) — no candidate/recruitment module exists yet to attach documents to.
+- Genuine self-service policy acknowledgement (`acknowledgement_method: "web"`) — needs real user-to-employee linking first (see `docs/security.md`).
+- Policy campaigns (bulk-assign a policy to a whole department/location, scheduled/recurring re-acknowledgement cycles).
+- Email/notification reminders and escalations for overdue acknowledgements.
+- Auto-reassignment when a policy is republished (currently: stale assignments are correctly rejected at acknowledge time, but nothing proactively creates a new pending row).
+- Acknowledgement compliance reports/dashboard, and the export endpoint (`policies.export_acknowledgements` already reserved).
+- Frontend UI for policy authoring, publishing, and the acknowledgement experience — this checkpoint is API-only, same as every module so far.
+- A general tenant-level (non-employee-scoped) document table — would resolve the `employee_document_id` schema mismatch on `policy_versions` cleanly.

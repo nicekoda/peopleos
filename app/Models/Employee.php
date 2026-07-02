@@ -23,8 +23,9 @@ class Employee extends Model
      * Deliberately excludes tenant_id — never mass-assignable, always set
      * explicitly by the controller from the resolved tenant (see
      * StoreEmployeeRequest / EmployeeController). created_by/updated_by
-     * are likewise set explicitly by the controller from the acting user,
-     * not accepted as request input.
+     * ARE fillable (fixed in Checkpoint 10 — see note below): they're
+     * never accepted from *request* input, but must be mass-assignable
+     * for the controller's trusted, explicit assignment to persist at all.
      */
     protected $fillable = [
         'employee_number',
@@ -44,6 +45,15 @@ class Employee extends Model
         'start_date',
         'probation_end_date',
         'confirmation_date',
+        // created_by/updated_by are never accepted as *request* input
+        // (not in StoreEmployeeRequest's rules) but are always set
+        // explicitly by the controller from the trusted authenticated
+        // user — they must be fillable for that assignment to actually
+        // persist. Excluding them silently dropped every created_by/
+        // updated_by value since Checkpoint 6 (found and fixed in
+        // Checkpoint 10).
+        'created_by',
+        'updated_by',
     ];
 
     protected function casts(): array
@@ -85,6 +95,11 @@ class Employee extends Model
     public function documents(): HasMany
     {
         return $this->hasMany(EmployeeDocument::class);
+    }
+
+    public function policyAcknowledgements(): HasMany
+    {
+        return $this->hasMany(PolicyAcknowledgement::class);
     }
 
     public function createdBy(): BelongsTo

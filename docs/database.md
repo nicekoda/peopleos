@@ -246,3 +246,82 @@ as of Checkpoint 9 — see [`api.md`](api.md) and
 (soft delete). Using both would let a row be `status=active` *and*
 soft-deleted simultaneously — contradictory. `deleted_at` is the actual
 delete mechanism; `status` covers the remaining three states.
+
+### `policies`
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | ulid, primary key | |
+| `tenant_id` | ulid, FK → `tenants.id` `RESTRICT` | |
+| `title` / `slug` | string | Both unique per tenant |
+| `code` | string, nullable | Unique per tenant where provided |
+| `description` / `category` | text/string, nullable | `category` is a plain free-text field, not a FK — no lookup table for policy categories was requested |
+| `owner_user_id` | bigint, nullable, FK → `users.id` `SET NULL` | Must belong to the same tenant — validated in the FormRequest |
+| `status` | string, default `draft` | `App\Enums\PolicyStatus`: `draft` \| `published` \| `archived` — **shared with `policy_versions.status`**, values are identical for both |
+| `current_version_id` | ulid, nullable, FK → `policy_versions.id` `SET NULL` | Added via a follow-up migration (see note below) |
+| `effective_date` / `review_date` | date, nullable | `review_date` ≥ `effective_date` when both provided |
+| `created_by` / `updated_by` | bigint, nullable, FK → `users.id` `SET NULL` | |
+| `deleted_at` | timestamp, nullable | Soft delete |
+
+**Migration note — forward-referencing FK:** `current_version_id` points
+at a table (`policy_versions`) that doesn't exist yet when `policies` is
+created. Same pattern as `employees.manager_employee_id`'s self-reference
+workaround: the column is added as a plain nullable ULID in the
+`create_policies_table` migration, and the actual FK constraint is added
+in a separate `add_current_version_fk_to_policies_table` migration once
+`policy_versions` exists.
+
+### `policy_versions`
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | ulid, primary key | |
+| `tenant_id` | ulid, FK → `tenants.id` `RESTRICT` | |
+| `policy_id` | ulid, FK → `policies.id` `CASCADE` | |
+| `version_number` | unsigned int | Unique per (`tenant_id`, `policy_id`) — computed as `max(existing) + 1` by the controller, not a DB sequence, since it must be scoped per policy |
+| `title` / `summary` / `content` | string / text / longtext, nullable except title | `content` is the primary path for this checkpoint — see the `employee_document_id` note below |
+| `employee_document_id` | ulid, nullable, FK → `employee_documents.id` `SET NULL` | **Known schema mismatch** — see `security.md` |
+| `status` | string, default `draft` | Shares `App\Enums\PolicyStatus` with `policies.status` |
+| `published_by` / `published_at` | bigint/timestamp, nullable | Set only by the publish action |
+| `created_by` / `updated_by` | bigint, nullable, FK → `users.id` `SET NULL` | |
+| `deleted_at` | timestamp, nullable | Soft delete — old published versions are archived, never deleted |
+
+### `policy_acknowledgements`
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | ulid, primary key | |
+| `tenant_id` | ulid, FK → `tenants.id` `RESTRICT` | |
+| `policy_id` / `policy_version_id` | ulid, FK `CASCADE` | |
+| `employee_id` | ulid, FK → `employees.id` `CASCADE` | |
+| `assigned_by` | bigint, nullable, FK → `users.id` `SET NULL` | |
+| `assigned_at` | timestamp, **required** | |
+| `due_date` | date, nullable | |
+| `acknowledged_at` | timestamp, nullable | |
+| `acknowledgement_status` | string, default `pending` | `App\Enums\AcknowledgementStatus`: `pending` \| `acknowledged` \| `overdue` \| `waived` |
+| `acknowledgement_method` | string, nullable | `App\Enums\AcknowledgementMethod`: `web` \| `admin_recorded` — every row created this checkpoint is `admin_recorded`, see `security.md` |
+| `ip_address` / `user_agent` | string(45)/text, nullable | |
+
+**No soft deletes on this table** — not in the original field list, and
+there's no delete endpoint; these are compliance-evidence records.
+Unique (`tenant_id`, `policy_version_id`, `employee_id`) prevents
+duplicate acknowledgement rows for the same employee + version at the
+database level, not just app-layer checking.
+
+### A real bug found and fixed in this checkpoint, affecting 3 existing models
+
+`Employee` and `DocumentCategory` (from Checkpoints 6 and 9) both
+excluded `created_by`/`updated_by` from `$fillable`, on the reasoning
+that "they're not accepted as request input." That reasoning is correct,
+but the *implementation* was wrong: excluding a column from `$fillable`
+also blocks the controller's own trusted, explicit assignment via
+`Model::create($data)` — Eloquent silently drops it. **Every employee and
+document category created via the API since those checkpoints has had
+`created_by`/`updated_by` = `NULL`**, despite the controller code
+appearing to set them correctly. Confirmed directly (not just reasoned
+about) with a standalone script before fixing. Fixed by adding both
+columns to `$fillable` on `Employee`, `DocumentCategory`, `Policy`, and
+`PolicyVersion` — they're still never accepted from *request* input (not
+present in any FormRequest's validated rules), only from the controller's
+own explicit assignment, which is the actual security boundary that
+matters.

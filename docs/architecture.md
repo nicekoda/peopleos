@@ -191,6 +191,36 @@ explicitly in the controller before `create()` — don't rely on the
 column's schema default alone. Found the same way: a real crash on the
 first test run, not a hypothetical.
 
+## Policy Management
+
+Builds directly on Employee Records and the Document Repository — see
+[`api.md`](api.md) and [`security.md`](security.md#policy-management) for
+the full design.
+
+**The recurring lesson from this checkpoint: identity gaps propagate.**
+`User` and `Employee` were deliberately left unlinked all the way back at
+Checkpoint 3 (documented then as a known limitation). This checkpoint is
+where that gap first had a concrete, security-relevant consequence — the
+acknowledgement endpoint can't verify "is this employee the current
+user," so it had to be designed as admin-recorded rather than genuine
+self-service, and a role grant had to deliberately deviate from the
+spec's own suggestion as a result. Worth remembering for the next module
+that touches employee self-service (Leave Management's own-request flows
+will hit the exact same gap).
+
+**A second `$fillable` bug, from the same root cause as one class of bug
+already seen twice.** `Employee` and `DocumentCategory` had silently
+dropped `created_by`/`updated_by` since Checkpoints 6 and 9 — found and
+fixed here, alongside getting it right in the two new models this
+checkpoint introduces. The lesson generalizes: **a comment saying "not
+accepted as request input" is not the same claim as "excluded from
+`$fillable`."** The former is about what a `FormRequest`'s validated()
+output contains; the latter is about what `Model::create()`/`fill()` will
+actually persist. Conflating them silently drops legitimate
+controller-set values. Worth a deliberate audit of every model's
+`$fillable` list against its controller's actual `create()`/`update()`
+calls before the next checkpoint introduces more.
+
 ## Internal IDs vs. Public-Facing References
 
 Internal database IDs may remain bigint (see

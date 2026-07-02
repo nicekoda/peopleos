@@ -3,6 +3,7 @@
 use App\Http\Controllers\Api\V1\DocumentCategoryController;
 use App\Http\Controllers\Api\V1\EmployeeController;
 use App\Http\Controllers\Api\V1\EmployeeDocumentController;
+use App\Http\Controllers\Api\V1\PolicyController;
 use Illuminate\Support\Facades\Route;
 
 /*
@@ -45,4 +46,18 @@ Route::middleware(['auth', 'tenant.matches'])->prefix('api/v1')->group(function 
     Route::get('document-categories/{documentCategory}', [DocumentCategoryController::class, 'show'])->middleware('permission:document_categories.view');
     Route::patch('document-categories/{documentCategory}', [DocumentCategoryController::class, 'update'])->middleware('permission:document_categories.update');
     Route::delete('document-categories/{documentCategory}', [DocumentCategoryController::class, 'destroy'])->middleware('permission:document_categories.delete');
+
+    // update requires policies.update as a baseline; archiving (status ->
+    // archived in the request body) is additionally gated by
+    // policies.archive inside the controller, since route middleware
+    // can't inspect the request body value.
+    Route::get('policies', [PolicyController::class, 'index'])->middleware('permission:policies.view');
+    Route::post('policies', [PolicyController::class, 'store'])->middleware('permission:policies.create');
+    Route::get('policies/{policy}', [PolicyController::class, 'show'])->middleware('permission:policies.view');
+    Route::patch('policies/{policy}', [PolicyController::class, 'update'])->middleware('permission:policies.update');
+    Route::post('policies/{policy}/versions', [PolicyController::class, 'storeVersion'])->middleware('permission:policies.update');
+    Route::post('policies/{policy}/publish', [PolicyController::class, 'publish'])->middleware('permission:policies.publish');
+    Route::post('policies/{policy}/assign', [PolicyController::class, 'assign'])->middleware('permission:policies.assign');
+    Route::get('policies/{policy}/acknowledgements', [PolicyController::class, 'acknowledgements'])->middleware('permission:policies.view_acknowledgements');
+    Route::post('policies/{policy}/acknowledge', [PolicyController::class, 'acknowledge'])->middleware('permission:policies.acknowledge');
 });

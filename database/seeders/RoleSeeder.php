@@ -81,6 +81,10 @@ class RoleSeeder extends Seeder
             'leave.view', 'leave.approve', 'leave.reject',
             'announcements.view', 'announcements.create', 'announcements.publish',
             'users.view',
+            // Not archive/export_acknowledgements — reserved for Tenant
+            // Admin, per the master spec's own suggested carve-out.
+            'policies.view', 'policies.create', 'policies.update', 'policies.publish',
+            'policies.assign', 'policies.acknowledge', 'policies.view_acknowledgements',
         ]);
 
         $this->grantByKeys($roles['Employee'], [
@@ -88,10 +92,29 @@ class RoleSeeder extends Seeder
             'documents.view', 'documents.upload',
             'leave.view', 'leave.request',
             'announcements.view',
+            // policies.acknowledge is deliberately NOT granted here — see
+            // docs/security.md. No verified user-to-employee link exists
+            // yet, so granting self-acknowledge would let any
+            // Employee-role user record an acknowledgement on behalf of
+            // *any* employee_id in the tenant, not just their own. View
+            // only until real self-service (with identity verification)
+            // exists.
+            'policies.view',
         ]);
 
-        // Remaining roles (HR Director, HR Officer, Line Manager, etc.)
-        // are intentionally left as placeholders with no permissions
+        // HR Officer and Auditor get their first real permission grants
+        // here (previously empty placeholders from Checkpoint 4).
+        $this->grantByKeys($roles['HR Officer'], [
+            'policies.view', 'policies.create', 'policies.update',
+            'policies.assign', 'policies.view_acknowledgements',
+        ]);
+
+        $this->grantByKeys($roles['Auditor'], [
+            'policies.view', 'policies.view_acknowledgements',
+        ]);
+
+        // Remaining roles (HR Director, Line Manager, etc.) are
+        // intentionally left as placeholders with no permissions
         // attached yet.
     }
 

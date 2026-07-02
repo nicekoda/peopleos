@@ -141,6 +141,25 @@ don't assume the rule "just works" because the model has the scope. This
 exact gap existed in Checkpoint 8's code for one checkpoint before
 Checkpoint 9's tests caught it.
 
+## Testing multi-step workflows (create → publish → assign → acknowledge)
+
+`PolicyApiTest` introduces a `publishedPolicy(Tenant, User)` helper that
+sets up a policy already through the create-version-publish sequence, so
+tests focused on assignment/acknowledgement don't need to repeat that
+setup inline. When a resource has a real lifecycle (draft → published →
+assigned → acknowledged, in this case), prefer a small helper that
+produces "a resource in state X" over duplicating the full sequence in
+every test — but still write at least one test that exercises the
+sequence itself end-to-end (`test_policy_can_be_published`), not only
+tests that start from the helper's shortcut.
+
+**Test what "old versions aren't deleted" actually means, not just that
+publishing succeeds:** `test_old_published_version_is_archived_not_deleted_on_republish`
+asserts both that the old version's `status` became `archived` *and*
+that it's `assertNotSoftDeleted` — either assertion alone would pass for
+the wrong reason (e.g. a bug that hard-deletes the row would still leave
+`status` unqueried-but-gone).
+
 ## Verifying against the real app, not just the test suite
 
 Because of the SQLite/Postgres split above, checkpoints in this project

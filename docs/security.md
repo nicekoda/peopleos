@@ -612,6 +612,107 @@ something actually changed, same pattern as Employee/EmployeeDocument),
 `document_category.deleted`. Same tenant-scoping, same "safe old/new
 values only" discipline as every other module's audit trail.
 
+## Policy Management
+
+Builds on the Document Repository / Document Category foundation — see
+[`api.md`](api.md) for the full endpoint reference and
+[`database.md`](database.md#policies) for the table design.
+
+### The core design problem: no user-to-employee link exists
+
+There is no `user_id` on `employees` and no `employee_id` on `users` —
+authentication accounts and HR employee records are entirely separate.
+This directly affects who can "acknowledge" a policy: there's no way to
+derive "which employee is the currently logged-in user."
+
+**Decision: `POST /policies/{policy}/acknowledge` is admin/HR-recorded
+only this checkpoint.** It requires an explicit `employee_id` in the
+request body — there's no session-derived alternative. Every
+acknowledgement created this checkpoint has
+`acknowledgement_method = admin_recorded` (never `web`, which is reserved
+for a future genuine self-service flow once real user-to-employee linking
+exists).
+
+**Consequence for the role mapping — a deliberate deviation from the
+spec's suggestion, documented as instructed:** the suggested mapping gave
+Employee `policies.acknowledge`. I did **not** grant it. Here's why: if a
+rank-and-file Employee-role user could call `/acknowledge` with an
+arbitrary `employee_id`, they could record an acknowledgement on behalf
+of *any* employee in the tenant (already enumerable via the existing
+`employees.view` permission most Employee-role users also hold) — not
+just themselves. That's exactly the "insecure shortcut" instruction I was
+told not to take. `policies.acknowledge` stays with HR-trusted roles
+(Tenant Admin, HR Manager) until real self-service — requiring actual
+identity verification — exists in a future checkpoint.
+
+### Role mapping (as seeded in `RoleSeeder`)
+
+| Role | Permissions |
+|---|---|
+| Tenant Admin | All 9 (automatic — granted every current tenant permission dynamically at seed time) |
+| HR Manager | view, create, update, publish, assign, acknowledge, view_acknowledgements — **not** archive/export (per the spec's own suggested carve-out) |
+| HR Officer | view, create, update, assign, view_acknowledgements — matches the spec exactly. First real permission grant for this role (a placeholder since Checkpoint 4) |
+| Employee | **view only** — see the deviation above |
+| Auditor | view, view_acknowledgements — matches the spec exactly. Also this role's first real grant |
+
+### The acknowledgement flow, precisely
+
+1. **Assign**: `POST /policies/{policy}/assign` — requires the policy to
+   have a `current_version_id` (i.e. be published; assigning a draft
+   isn't meaningful). Creates one `pending` `PolicyAcknowledgement` row
+   per employee, pointing at the policy's *current* version. Duplicate
+   (employee, version) pairs are silently skipped (reported in the
+   response, not an error) — enforced at the database level via a unique
+   constraint, not just an app-layer check.
+2. **Acknowledge**: `POST /policies/{policy}/acknowledge` — finds the
+   employee's `pending` row for this policy. If the policy has been
+   *republished* since that employee was assigned (their row's
+   `policy_version_id` no longer matches `policy.current_version_id`),
+   the request is rejected (`409`) rather than silently acknowledging a
+   superseded version. **No auto-reassignment on republish** — a known
+   limitation, not built this checkpoint (would need its own workflow
+   design).
+3. Publishing a *new* version never deletes the old one — its status
+   moves to `archived`. Acknowledgement history for the archived version
+   remains queryable via `GET /policies/{policy}/acknowledgements`.
+
+### `employee_document_id` on `policy_versions` — a real schema mismatch, not hidden
+
+The spec asks for a field linking a policy version to an uploaded file in
+the document repository. But `employee_documents.employee_id` is
+`NOT NULL` — a policy document isn't owned by any single employee. The
+field is implemented literally (nullable FK, tenant-validated), but in
+practice requires an existing `employee_documents` row, which requires
+picking *some* employee to "own" it — semantically wrong for a
+tenant-wide policy document. `content` (plain text) is the primary,
+fully-supported path this checkpoint; attaching a real file cleanly needs
+a future general "tenant documents" (non-employee-scoped) table, out of
+scope here.
+
+### Permission-value-dependent authorization
+
+Archiving a policy (`status → archived` via `PATCH /policies/{policy}`)
+requires `policies.archive` *in addition to* `policies.update` — checked
+inside the controller, since route-level middleware can't inspect a
+request body value. This is why HR Manager (who has `update` but not
+`archive`) is correctly blocked from archiving even though they can reach
+the same endpoint for every other field.
+
+### Audit events
+
+`policy.created`, `policy.updated`, `policy.archived` (same endpoint as
+`updated`, distinguished by which field changed), `policy.version_created`,
+`policy.published`, `policy.assigned` (one log entry per employee
+assigned, not one per batch — keeps `target`/metadata specific), `policy.acknowledged`.
+
+### A real bug affecting 3 models, found and fixed this checkpoint
+
+See [`database.md`](database.md#a-real-bug-found-and-fixed-in-this-checkpoint-affecting-3-existing-models)
+— `created_by`/`updated_by` were silently dropped on `Employee` and
+`DocumentCategory` since Checkpoints 6 and 9 respectively, due to being
+excluded from `$fillable`. Fixed for those two models plus the two new
+ones (`Policy`, `PolicyVersion`) introduced this checkpoint.
+
 ## Local Demo Credentials
 
 **Local development only — these are not real secrets and only work against your own local database.** Password comes from `SEED_USER_PASSWORD` in `.env` (not committed; `.env.example` has an empty placeholder).
@@ -644,3 +745,8 @@ other 17 roles per tenant exist as empty placeholders for future modules.
 - `/api/v1` routes use the same session-based `web` auth as the rest of the app (no Sanctum/token guard yet) — see `docs/api.md` for the full future plan and what a token layer must support before it's added.
 - `tenant.matches` is applied per-route, not globally — every new authenticated tenant-scoped route must remember to include it (alongside `auth`), the same way `permission:` is remembered per-route. Nothing currently enforces this at a higher level (e.g. a lint rule or test asserting every `web`-registered route under an authenticated prefix has it).
 - No test exists proving `tenant.matches` behavior for a *platform admin who becomes a tenant user* or vice versa (role/type changes mid-session) — an edge case not currently possible via any existing code path (nothing changes `is_platform_admin` after creation), but worth a test if that ever becomes possible.
+- No genuine self-service policy acknowledgement — see "Policy Management" above. Requires real user-to-employee linking, not built yet.
+- No auto-reassignment when a policy is republished — employees already assigned to a superseded version keep their (now-stale) pending acknowledgement, which is correctly rejected if they try to confirm it, but nothing proactively creates a new pending row against the new version.
+- No policy campaign automation, email reminders, escalations, or department-wide auto-assignment — explicitly out of scope this checkpoint.
+- No acknowledgement export/report endpoint — `policies.export_acknowledgements` permission is seeded but unused.
+- `employee_document_id` on `policy_versions` requires an existing employee-owned document — see "Policy Management" above for the schema mismatch this carries.

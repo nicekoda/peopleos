@@ -2,8 +2,7 @@
 
 namespace App\Models;
 
-use App\Enums\DocumentAppliesTo;
-use App\Enums\DocumentCategoryStatus;
+use App\Enums\PolicyStatus;
 use App\Models\Concerns\BelongsToTenant;
 use Illuminate\Database\Eloquent\Concerns\HasUlids;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -12,28 +11,24 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
 
-class DocumentCategory extends Model
+class Policy extends Model
 {
     use BelongsToTenant;
     use HasFactory;
     use HasUlids;
     use SoftDeletes;
 
-    /**
-     * created_by/updated_by are never accepted from *request* input, but
-     * must be fillable for the controller's trusted, explicit assignment
-     * to actually persist (excluding them silently dropped the value —
-     * found and fixed in Checkpoint 10).
-     */
     protected $fillable = [
-        'name',
+        'title',
         'slug',
+        'code',
         'description',
-        'applies_to',
-        'is_sensitive',
-        'is_required',
-        'requires_expiry_date',
+        'category',
+        'owner_user_id',
         'status',
+        'current_version_id',
+        'effective_date',
+        'review_date',
         'created_by',
         'updated_by',
     ];
@@ -41,17 +36,30 @@ class DocumentCategory extends Model
     protected function casts(): array
     {
         return [
-            'applies_to' => DocumentAppliesTo::class,
-            'status' => DocumentCategoryStatus::class,
-            'is_sensitive' => 'boolean',
-            'is_required' => 'boolean',
-            'requires_expiry_date' => 'boolean',
+            'status' => PolicyStatus::class,
+            'effective_date' => 'date',
+            'review_date' => 'date',
         ];
     }
 
-    public function documents(): HasMany
+    public function versions(): HasMany
     {
-        return $this->hasMany(EmployeeDocument::class);
+        return $this->hasMany(PolicyVersion::class);
+    }
+
+    public function currentVersion(): BelongsTo
+    {
+        return $this->belongsTo(PolicyVersion::class, 'current_version_id');
+    }
+
+    public function acknowledgements(): HasMany
+    {
+        return $this->hasMany(PolicyAcknowledgement::class);
+    }
+
+    public function owner(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'owner_user_id');
     }
 
     public function createdBy(): BelongsTo

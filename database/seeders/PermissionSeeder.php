@@ -25,6 +25,7 @@ class PermissionSeeder extends Seeder
             'employees' => ['view', 'create', 'update', 'delete', 'view_sensitive', 'export'],
             'documents' => ['view', 'upload', 'download', 'delete', 'approve', 'view_sensitive'],
             'document_categories' => ['view', 'create', 'update', 'delete'],
+            'policies' => ['view', 'create', 'update', 'publish', 'archive', 'assign', 'acknowledge', 'view_acknowledgements', 'export_acknowledgements'],
             'leave' => ['view', 'request', 'approve', 'reject'],
             'announcements' => ['view', 'create', 'publish'],
             'audit' => ['view', 'export'],

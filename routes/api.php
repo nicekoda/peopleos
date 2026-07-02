@@ -14,9 +14,18 @@ use Illuminate\Support\Facades\Route;
 | authenticated-session model as the rest of the app. Introduce a
 | stateless token guard when an external API consumer actually exists.
 |
+| Middleware order on every route below is deliberate:
+|   auth              -> is anyone authenticated at all?
+|   tenant.matches    -> does that authenticated user actually belong to
+|                        the tenant this subdomain resolved to?
+|   permission:{key}  -> does the user have this specific permission?
+| Skipping 'tenant.matches' would let a valid session from one tenant
+| pass permission checks and reach tenant-scoped queries under a
+| different tenant's subdomain — see docs/security.md.
+|
 */
 
-Route::middleware('auth')->prefix('api/v1')->group(function () {
+Route::middleware(['auth', 'tenant.matches'])->prefix('api/v1')->group(function () {
     Route::get('employees', [EmployeeController::class, 'index'])->middleware('permission:employees.view');
     Route::post('employees', [EmployeeController::class, 'store'])->middleware('permission:employees.create');
     Route::get('employees/{employee}', [EmployeeController::class, 'show'])->middleware('permission:employees.view');

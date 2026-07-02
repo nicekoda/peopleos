@@ -26,19 +26,41 @@ every request:
    the `Tenant` model is bound into the container
    (`app()->instance(Tenant::class, $tenant)`) for the rest of the request.
 
-**Middleware order matters, and got it wrong once.** `ResolveTenant` is
-registered with `prependToGroup('web', ...)`, not `appendToGroup` — it
-must run *before* `SubstituteBindings` (Laravel's route-model-binding
-middleware, part of the default `web` group stack), otherwise a
-tenant-scoped model's `{param}` route binding would resolve before any
-tenant is bound in the container, meaning `BelongsToTenant`'s global scope
-wouldn't be active yet for that lookup. This was originally registered
-with `appendToGroup` (Checkpoint 2) and the bug went undetected until
-Checkpoint 6 actually built a route using tenant-scoped implicit
-binding — see [`security.md`](security.md#employee-records) for the full
-story. If you add another `web`-group middleware that needs to run before
-route model binding, check its position against `SubstituteBindings`
-explicitly; don't assume `appendToGroup` is always safe.
+**Middleware order matters, and got it wrong twice — both times fixed
+before any real damage, but both were genuine bugs, not theoretical
+concerns.**
+
+1. **`ResolveTenant` vs. route model binding** (Checkpoint 6). Registered
+   with `prependToGroup('web', ...)`, not `appendToGroup` — must run
+   *before* `SubstituteBindings` (Laravel's route-model-binding
+   middleware, part of the default `web` group stack), otherwise a
+   tenant-scoped model's `{param}` route binding would resolve before any
+   tenant is bound in the container, meaning `BelongsToTenant`'s global
+   scope wouldn't be active yet for that lookup. Originally registered
+   with `appendToGroup` (Checkpoint 2); the bug went undetected until
+   Checkpoint 6 built a route using tenant-scoped implicit binding.
+
+2. **Tenant identification vs. tenant *authorization*** (Checkpoint 7).
+   `ResolveTenant` correctly identifies *which* tenant a request is for
+   (from the `Host` header) — but identifying the tenant is not the same
+   as confirming the *authenticated user* should be allowed there. A
+   session cookie shared across all subdomains (`SESSION_DOMAIN`) meant an
+   authenticated tenant-A user's browser would automatically send valid
+   credentials to tenant-B's subdomain too, and nothing checked that
+   mismatch. Fixed with `App\Http\Middleware\EnsureTenantMatchesAuthenticatedUser`
+   (`tenant.matches`), applied per-route after `auth` and before
+   `permission:` — see [`security.md`](security.md#tenant-session-isolation--a-real-vulnerability-found-in-checkpoint-7)
+   for the full story and the final middleware-order rule.
+
+**The pattern, stated generally:** *identifying* context (which tenant
+does this URL belong to) and *authorizing* against that context (should
+this specific authenticated user be here) are two different checks, and
+both are required. Getting the first right doesn't imply the second is
+covered. If you add another `web`-group middleware that needs to run
+before route model binding, check its position against
+`SubstituteBindings` explicitly — don't assume `appendToGroup` is always
+safe. If you add a new authenticated route, confirm it includes
+`tenant.matches` — it's opt-in per route, not automatic.
 
 ### Tenant-owned models: `BelongsToTenant`
 
@@ -112,12 +134,16 @@ The first real tenant-owned HR business module — see
 [`security.md`](security.md#employee-records) for the endpoint reference,
 table design, and permission/audit details respectively.
 
-Pattern worth reusing for future modules: **every endpoint verifies
-tenant ownership explicitly in the controller** (`ensureBelongsToCurrentTenant()`
-in `EmployeeController`), even though `BelongsToTenant`'s global scope
-already filters queries and route-model-binding now resolves correctly
-(see the middleware-order note above). Two independent layers, not one —
-if either is ever weakened by a future change, the other still holds.
+Pattern worth reusing for future modules — three independent layers, not
+one:
+
+1. **`tenant.matches` middleware** — does the authenticated user belong to the tenant this request resolved to at all? (Checkpoint 7 fix.)
+2. **`BelongsToTenant` global scope** — queries and route-model-binding filtered to the resolved tenant, active before binding resolves (Checkpoint 6 fix).
+3. **Explicit controller check** (`ensureBelongsToCurrentTenant()` in `EmployeeController`) — defense in depth beyond the global scope.
+
+If any one of these is ever weakened by a future change, the other two
+still hold. Every future tenant-scoped module should include all three,
+not just whichever one is most convenient to remember.
 
 ## Internal IDs vs. Public-Facing References
 

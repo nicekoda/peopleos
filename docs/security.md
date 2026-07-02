@@ -58,6 +58,92 @@ Checking domain/status *after* credentials avoids leaking account-state informat
 
 **JSON-only responses**: since no frontend/login UI exists yet, `/login` and `/logout` are configured (`bootstrap/app.php`) to always render JSON, including on validation failure — otherwise Laravel's default behavior tries to redirect back to a nonexistent form.
 
+## Tenant-Session Isolation — a real vulnerability found in Checkpoint 7
+
+**This is app-wide, not employee-specific.** Found while hardening the
+Employee Records endpoints, but the bug (and the fix) affects every
+current and future authenticated, tenant-scoped route.
+
+### The bug
+
+`SESSION_DOMAIN=.peopleos.test` (leading dot, set in Checkpoint 2 for
+subdomain-based tenancy) means a session cookie is valid across **every**
+subdomain of `peopleos.test`. A user logged in on `uesl.peopleos.test`
+has a browser session cookie that gets sent automatically if they (or a
+malicious link, or a stray bookmark) visit `airpeace.peopleos.test` too.
+
+Nothing checked for this. `hasPermission()` only verifies the user's *own*
+tenant is active — it never compares against the tenant the *current
+request* resolved to. `BelongsToTenant`'s global scope filters queries by
+the request-resolved tenant (correct for tenant *identification*, but
+blind to *who's asking*). The result: an authenticated tenant-A user
+hitting `GET /api/v1/employees` on tenant B's subdomain got a clean `200`
+with tenant B's employee data. Confirmed directly (not theorized) before
+fixing — see `git log` for Checkpoint 7's investigation.
+
+This was reachable with nothing more than a URL — no exploit tooling,
+no crafted headers, just an already-authenticated user's browser
+automatically sending a cookie it legitimately has.
+
+### The fix
+
+`App\Http\Middleware\EnsureTenantMatchesAuthenticatedUser` (aliased
+`tenant.matches`), applied on every authenticated tenant-scoped route
+**after** `auth` and **before** any `permission:` check:
+
+- Tenant user: request must have resolved to *their own* `tenant_id`, or reject (403).
+- Platform admin: request must have resolved to **no** tenant (base domain), or reject (403) — no tenant-impersonation feature exists yet.
+- No authenticated user: pass through (let `auth` handle it).
+
+Every rejection writes a `critical`-severity audit log
+(`tenant.mismatch_blocked`, module `security`) — this is exactly the kind
+of event worth being loud about, since a real occurrence likely means a
+stale session, a shared/leaked cookie, or an actual attack attempt.
+
+### Final middleware order rule for tenant-scoped authenticated routes
+
+```
+auth  →  tenant.matches  →  permission:{key}
+```
+
+1. **Authentication before tenant/user context checks** — you can't check
+   whether a user belongs to a tenant before knowing who the user is.
+2. **Tenant resolution itself must not allow user-controlled tenant
+   switching** — `ResolveTenant` derives the tenant purely from the
+   `Host` header (server-controlled routing), never from request body or
+   headers a client could set arbitrarily. `tenant.matches` is the
+   second half of this guarantee: even though *which* tenant is resolved
+   is safe, *whether the authenticated user should be allowed there* still
+   needed its own check.
+3. **Permission checks happen after both are known** — `hasPermission()`
+   assumes it's being asked about a user who has already been confirmed
+   to belong to the current tenant context; without `tenant.matches`
+   running first, that assumption was silently false.
+4. **Tenant-scoped model binding/queries must not run before tenant
+   context is established** — the Checkpoint 6 `ResolveTenant` ordering
+   fix (`prependToGroup`, must run before `SubstituteBindings`) is the
+   other half of this; both fixes are required together, neither alone is
+   sufficient.
+
+**Every future tenant-scoped authenticated route must include
+`tenant.matches`.** It's not automatic/global — it's applied per-route
+(alongside `auth`) in `routes/api.php`, the same way `permission:` is.
+Forgetting it on a new route silently reopens this exact hole.
+
+### A second bug found while testing the fix
+
+Testing `tenant.matches` with a plain (non-JSON) unauthenticated request
+surfaced a separate, unrelated pre-existing bug: Laravel's default `auth`
+middleware tries to redirect unauthenticated non-JSON requests to a named
+`login` route — which doesn't exist in this app (auth is JSON-only, no
+HTML login form anywhere). This crashed with an uncaught
+`RouteNotFoundException` (500), instead of a clean 401. Fixed via
+`redirectGuestsTo(fn () => null)` in `bootstrap/app.php`, so guests always
+get a plain 401 regardless of `Accept` header. Verified against the real
+running app: `curl -H "Accept: application/json"` (and without that
+header too) to `/api/v1/employees` unauthenticated now returns `401`, not
+a 500.
+
 ## RBAC
 
 ### Platform roles vs. tenant roles
@@ -317,6 +403,12 @@ in the controller — don't rely solely on the global scope, even with the
 ordering now fixed. If a future middleware change reintroduces ordering
 sensitivity, the explicit check is the backstop.
 
+**This is a different bug from the one found in Checkpoint 7** (below) —
+this one was about *route-model-binding resolving before tenant
+identification*; Checkpoint 7's was about *tenant identification not
+being checked against the authenticated user at all*. Both needed fixing;
+neither fix would have caught the other.
+
 ### Audit events
 
 `employee.created`, `employee.updated` (only when something actually
@@ -353,4 +445,6 @@ other 17 roles per tenant exist as empty placeholders for future modules.
 - No `departments`/`locations`/`positions` CRUD endpoints — see Employee Records above.
 - `employee_number` is manually provided, not auto-generated — no numbering-scheme feature exists yet.
 - No salary, bank details, medical information, disciplinary records, or documents on employees yet — deliberately deferred to separate, more sensitive future checkpoints.
-- `/api/v1` routes use the same session-based `web` auth as the rest of the app (no Sanctum/token guard yet) — see `docs/api.md` for why.
+- `/api/v1` routes use the same session-based `web` auth as the rest of the app (no Sanctum/token guard yet) — see `docs/api.md` for the full future plan and what a token layer must support before it's added.
+- `tenant.matches` is applied per-route, not globally — every new authenticated tenant-scoped route must remember to include it (alongside `auth`), the same way `permission:` is remembered per-route. Nothing currently enforces this at a higher level (e.g. a lint rule or test asserting every `web`-registered route under an authenticated prefix has it).
+- No test exists proving `tenant.matches` behavior for a *platform admin who becomes a tenant user* or vice versa (role/type changes mid-session) — an edge case not currently possible via any existing code path (nothing changes `is_platform_admin` after creation), but worth a test if that ever becomes possible.

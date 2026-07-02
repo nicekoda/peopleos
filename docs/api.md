@@ -13,20 +13,49 @@ session-based auth, CSRF, `ResolveTenant`. This means API requests need
 the same authenticated session a browser would have (or, in tests,
 `actingAs()`).
 
-**Why:** no external API consumer exists yet to justify stateless token
-auth. Introduce Sanctum (or similar) when one actually does — don't build
-it speculatively ahead of a real need.
+**This is acceptable for now** — current usage is the app's own
+browser/local-development client, same-origin, same session. It is
+**not** acceptable once any of the following exist:
+
+- An external API client (not this app's own frontend).
+- A mobile app.
+- A third-party integration.
+- Any public/published API usage.
+
+**Before any of those**, a token-based API authentication layer (Sanctum,
+or equivalent) must be added, and it must support:
+
+- **Scoped tokens** — a token should be limited to specific abilities, not
+  a blanket stand-in for a full session; mirrors the existing
+  `employees.*` permission granularity, not a step backward from it.
+- **Rate limiting** — per-token, not just per-IP, so one compromised or
+  misbehaving integration can't exhaust the limit for everyone else.
+- **Audit logging** — token issuance, use, and revocation are all
+  security-relevant events; log them via the existing `AuditLogger`
+  (`app/Services/Audit/AuditLogger.php`), not a separate mechanism.
+- **Tenant isolation** — a token must be bound to exactly one tenant (or
+  explicitly platform-level, mirroring `is_platform_admin`); it must
+  never be usable to reach a different tenant's data than the one it was
+  issued for. This is the same guarantee `tenant.matches` currently
+  provides for session auth (see `docs/security.md`) — a token-auth layer
+  needs its own equivalent check, not an assumption that Sanctum handles
+  it automatically.
+
+**Not implemented this checkpoint** — deliberately. This checkpoint is
+hardening and documentation of the current session-based approach, not a
+speculative build-ahead of a real external-consumer need.
 
 ## Every endpoint enforces (in order)
 
 1. **Authentication** — `auth` middleware.
-2. **Active user** — `hasPermission()` fails closed for inactive users (see `docs/security.md`).
-3. **Active tenant** — same fail-closed check for tenant users.
-4. **Permission** — `permission:{key}` middleware, one specific permission per route/action, not a blanket check on the whole resource.
-5. **Tenant scoping** — `BelongsToTenant` global scope, active before route-model-binding resolves (see the middleware-ordering note in `docs/architecture.md`).
-6. **Object-level ownership** — an explicit check in the controller beyond the global scope (defense in depth — see `docs/architecture.md`).
-7. **Validation** — tenant-scoped uniqueness/FK checks in the FormRequest.
-8. **Audit logging** — create/update/delete all write to `audit_logs`.
+2. **Tenant match** — `tenant.matches` middleware: does the authenticated user actually belong to the tenant this subdomain resolved to? (Added in Checkpoint 7 — see `docs/security.md` for the vulnerability this closes.)
+3. **Active user** — `hasPermission()` fails closed for inactive users (see `docs/security.md`).
+4. **Active tenant** — same fail-closed check for tenant users.
+5. **Permission** — `permission:{key}` middleware, one specific permission per route/action, not a blanket check on the whole resource.
+6. **Tenant scoping** — `BelongsToTenant` global scope, active before route-model-binding resolves (see the middleware-ordering note in `docs/architecture.md`).
+7. **Object-level ownership** — an explicit check in the controller beyond the global scope (defense in depth — see `docs/architecture.md`).
+8. **Validation** — tenant-scoped uniqueness/FK checks in the FormRequest.
+9. **Audit logging** — create/update/delete all write to `audit_logs`.
 
 ## Employees
 
@@ -107,6 +136,7 @@ no internal detail, regardless of `APP_DEBUG`.
 - No bulk actions.
 - No `departments`/`locations`/`positions` CRUD endpoints — they exist only to support employee FK validation.
 - Pagination uses Laravel's default page-number style; no cursor pagination or configurable page size yet.
+- Session-based auth only — see "Authentication" above for the full future Sanctum/token plan.
 
 ## Future
 

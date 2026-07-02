@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Middleware\EnsurePermission;
+use App\Http\Middleware\EnsureTenantMatchesAuthenticatedUser;
 use App\Http\Middleware\ResolveTenant;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
@@ -21,7 +22,19 @@ return Application::configure(basePath: dirname(__DIR__))
         // BelongsToTenant's global scope wouldn't be active yet for that
         // lookup. prependToGroup, not appendToGroup.
         $middleware->prependToGroup('web', ResolveTenant::class);
-        $middleware->alias(['permission' => EnsurePermission::class]);
+        $middleware->alias([
+            'permission' => EnsurePermission::class,
+            'tenant.matches' => EnsureTenantMatchesAuthenticatedUser::class,
+        ]);
+
+        // No HTML login form exists anywhere in this app (auth is
+        // JSON-only — see LoginRequest/AuthenticatedSessionController).
+        // Without this, an unauthenticated non-JSON request to any
+        // 'auth'-protected route crashes with a 500 (Laravel's default
+        // Authenticate middleware tries to redirect to a 'login' named
+        // route that doesn't exist), instead of a clean 401. Found while
+        // testing the tenant-matching middleware in Checkpoint 7.
+        $middleware->redirectGuestsTo(fn () => null);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         // No login/logout UI exists yet (backend-only auth foundation),

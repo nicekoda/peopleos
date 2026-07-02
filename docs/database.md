@@ -4,11 +4,18 @@ PostgreSQL. Migrations only — no manual schema changes.
 
 ## Conventions
 
-- **Primary keys**: ULIDs (`$table->ulid('id')->primary()`) for
-  tenant-facing tables (sortable, safe to expose in URLs, avoids leaking
-  sequential counts). Laravel's default auto-increment `id()` remains
-  acceptable for framework-internal tables (e.g. `users`, `jobs`) unless a
-  table is tenant-owned or externally referenced.
+- **Primary keys**: ULIDs (`$table->ulid('id')->primary()`) for `tenants`.
+  `users`, `roles`, `permissions`, and their pivot tables deliberately use
+  Laravel's default bigint auto-increment (a Checkpoint 4 decision — not
+  changed to ULID even though `users` is now central to the app).
+  **Internal database IDs may remain bigint.** The rule that matters is
+  about what's *exposed*, not the storage type: public-facing links,
+  invitation links, external portal links, document links, and any other
+  sensitive reference visible outside an authenticated session must never
+  expose a raw internal ID. Future modules that need a public-facing
+  identifier must use a secure token, a ULID/UUID public ID (separate
+  column from the bigint PK if needed), a signed URL, or a configured
+  reference code — not `/employees/482`.
 - **Tenant-owned tables** must include `tenant_id` (ULID, references
   `tenants.id`) and use the `BelongsToTenant` trait — see
   [`architecture.md`](architecture.md).
@@ -57,3 +64,59 @@ on SQLite; see `docs/security.md` for the app-layer equivalent).
 
 See [`security.md`](security.md) for the full login/tenant-boundary design
 and local demo credentials.
+
+### `permissions`
+
+A global catalog — not tenant-scoped itself. What's tenant-scoped is the
+*assignment* of a permission to a role or user.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | bigint, primary key | |
+| `key` | string, unique | e.g. `employees.view` — see naming convention in `security.md` |
+| `category` | string | Derived grouping, e.g. `employees`, `platform` |
+| `is_platform_permission` | boolean, default `false` | Platform-level vs. tenant-level |
+| `description` | text, nullable | |
+
+### `roles`
+
+Each tenant owns its **own** copy of every tenant role — roles are not
+shared templates. See `security.md` for why.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | bigint, primary key | |
+| `tenant_id` | ulid, nullable, FK → `tenants.id` `RESTRICT` | Null only for platform roles |
+| `is_platform_role` | boolean, default `false` | |
+| `name` | string | |
+| `slug` | string | Unique per tenant (`tenant_id`,`slug`); platform roles unique among themselves via a partial index (`WHERE tenant_id IS NULL`) |
+| `description` | text, nullable | |
+| `deleted_at` | timestamp, nullable | Soft delete |
+
+Postgres `CHECK` constraint `roles_platform_tenant_consistency` mirrors the
+same rule as `users` (skipped on SQLite; app-layer guard covers it there).
+
+### `role_permission`, `user_role` (pivots)
+
+Standard many-to-many pivots, each with a unique composite constraint to
+prevent duplicate assignment. `user_role` additionally stores a
+denormalized `tenant_id` (copied from the role at assignment time) so
+tenant-scoped queries don't need a join through `roles`.
+
+### `user_permissions`
+
+Direct permission grants, outside role assignment.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | bigint, primary key | |
+| `tenant_id` | ulid, nullable, FK → `tenants.id` `RESTRICT` | |
+| `user_id` | bigint, FK → `users.id` `CASCADE` | |
+| `permission_id` | bigint, FK → `permissions.id` `CASCADE` | |
+| `granted_by` | bigint, nullable, FK → `users.id` `SET NULL` | |
+| `reason` | text, nullable | |
+| `created_at` | timestamp | No `updated_at` — see `security.md` |
+
+Unique (`user_id`,`permission_id`) — a user has at most one direct grant
+per permission. Revocation is a hard delete of the row, not a soft delete
+or status flag.

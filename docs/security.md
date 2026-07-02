@@ -58,25 +58,130 @@ Checking domain/status *after* credentials avoids leaking account-state informat
 
 **JSON-only responses**: since no frontend/login UI exists yet, `/login` and `/logout` are configured (`bootstrap/app.php`) to always render JSON, including on validation failure — otherwise Laravel's default behavior tries to redirect back to a nonexistent form.
 
+## RBAC
+
+### Platform roles vs. tenant roles
+
+Same `is_platform_*` / `tenant_id` pattern as `User`, applied to `Role`:
+`is_platform_role = true` ⟺ `tenant_id IS NULL`. Enforced at both the
+Postgres `CHECK` constraint layer and the `Role::booted()` `saving` guard,
+same reasoning as `users`.
+
+**Tenant roles are not shared templates.** Each tenant owns its own row
+for every role — "UESL's HR Manager" and "Air Peace's HR Manager" are
+different database rows, even though they share a name and (initially) a
+permission set. This is what makes "a role from Tenant A grants nothing in
+Tenant B" a real, enforced guarantee rather than a naming convention that
+could accidentally be violated. The tradeoff: seeding N tenants × M role
+types creates N×M rows. Deemed worth it for correctness at this stage —
+revisit if the row count becomes a real problem (a shared-template layer
+that tenant roles are instantiated from is a plausible future refactor,
+but adds complexity not justified yet).
+
+### Permission naming convention
+
+`{category}.{action}`, e.g. `employees.view`, `platform.tenants.create`.
+Permissions prefixed `platform.` are always `is_platform_permission =
+true`; everything else is tenant-level. The `is_platform_permission` flag
+is the actual enforcement mechanism — the naming convention is a
+readability aid, not itself a security boundary (a permission's scope is
+checked via the column, not by string-matching the key).
+
+### Assignment-time guards, not just query-time checks
+
+`Role::givePermissionTo()`, `User::assignRole()`, and
+`User::grantPermission()` (in `app/Models/Concerns/HasPermissions.php`)
+each validate *before* writing to the database:
+
+- A role can only be given a permission of matching scope (platform role
+  ↔ platform permission, tenant role ↔ tenant permission).
+- A user can only be assigned a role of matching scope, and — for tenant
+  roles — only a role belonging to their **own** tenant.
+- A user can only be directly granted a permission of matching scope.
+
+All three throw `RuntimeException` on violation. **These are plain method
+logic, not Eloquent model events** — deliberately, because
+`DatabaseSeeder`'s `WithoutModelEvents` (see "Known Limitations") would
+silently bypass event-based guards during seeding. Method-logic guards
+stay active regardless, which is why seeding mistakes here surface
+immediately rather than producing silently-wrong data.
+
+### `hasPermission()` — the check every caller should use
+
+`User::hasPermission(string $key): bool`, implementing the full check in
+order (fails closed at every step — inactive user, inactive tenant, or an
+unknown key all return `false`, never throw):
+
+1. Is the user active? (`status`)
+2. If a tenant user: is their tenant active?
+3. Does the permission key exist at all?
+4. Does the user have it via any assigned role?
+5. Does the user have it via a direct grant?
+
+Reusable everywhere: `$user->hasPermission('employees.view')` directly,
+`->middleware('permission:employees.view')` on routes
+(`App\Http\Middleware\EnsurePermission`, aliased `permission`), or
+`$user->can('employees.view')` / `@can('employees.view')` via a
+`Gate::before()` hook in `AppServiceProvider` that delegates to the same
+method — so policies/gates and the permission system never diverge.
+
+### Direct permission grants
+
+`user_permissions`: a user can be granted a permission directly, outside
+role assignment (`granted_by`, `reason` recorded). Scope-checked the same
+way as role assignment. **No expiry yet** — every direct grant is
+permanent until explicitly revoked (`User::revokePermission()`, a hard
+delete of the row). Temporary, time-boxed permissions are an explicitly
+deferred future checkpoint (see "Future: Temporary Permissions" below) —
+not built now to avoid a half-finished expiry mechanism nobody's
+enforcing yet (no scheduled job checks/revokes on expiry).
+
+### Tenant isolation rules (enforced, not just documented)
+
+- Tenant roles belong to exactly one tenant; platform roles belong to
+  none — DB `CHECK` + app guard.
+- A tenant user can only be assigned a role from their own tenant — app
+  guard, tested (`RbacTest::test_tenant_user_cannot_receive_role_from_another_tenant`,
+  `test_role_from_tenant_a_does_not_grant_access_to_tenant_b`).
+- A tenant user can never be assigned a platform role, and a platform
+  admin can never be assigned a tenant role — app guard, tested.
+- Direct grants are scope-checked the same way — a platform admin can't
+  be directly granted a tenant permission, or vice versa.
+
+### Future: Temporary Permissions
+
+Not built yet. When added, the plan is an `expires_at` (nullable
+timestamp) on `user_permissions`, `hasPermission()` additionally checking
+`expires_at IS NULL OR expires_at > now()`, and a scheduled job to prune
+(or just leave — the timestamp check alone is sufficient for correctness;
+pruning is a cleanliness/reporting concern, not a security one) expired
+rows. Deferred rather than half-built now, per your "no sensitive shortcut
+for speed" rule — an expiry column nobody enforces yet would be worse than
+no expiry column.
+
 ## Local Demo Credentials
 
 **Local development only — these are not real secrets and only work against your own local database.** Password comes from `SEED_USER_PASSWORD` in `.env` (not committed; `.env.example` has an empty placeholder).
 
-| Email | Role (descriptive only — no RBAC yet) |
-|---|---|
-| `super.admin@peopleos.test` | Platform Super Admin (base domain only) |
-| `admin@uesl.peopleos.test` | UESL tenant admin |
-| `admin@airpeace.peopleos.test` | Air Peace tenant admin |
-| `admin@ibom.peopleos.test` | Ibom Air tenant admin |
-| `hr.manager@uesl.peopleos.test` | UESL "HR Manager" (label only) |
-| `employee@uesl.peopleos.test` | UESL "Employee" (label only) |
+| Email | Role | Permission highlights |
+|---|---|---|
+| `super.admin@peopleos.test` | Platform Super Admin (base domain only) | All 6 `platform.*` permissions |
+| `admin@uesl.peopleos.test` | UESL Tenant Admin | All tenant-level permissions (37) |
+| `admin@airpeace.peopleos.test` | Air Peace Tenant Admin | All tenant-level permissions (37) |
+| `admin@ibom.peopleos.test` | Ibom Air Tenant Admin | All tenant-level permissions (37) |
+| `hr.manager@uesl.peopleos.test` | UESL HR Manager | Employee/document/leave/announcement management, not roles/tenant settings |
+| `employee@uesl.peopleos.test` | UESL Employee | Self-service basics, plus a direct-grant example (`documents.download`) |
 
-"Tenant Admin" / "HR Manager" / "Employee" are just descriptive names at this checkpoint — no roles/permissions table exists yet (RBAC is a future checkpoint), so these accounts don't currently have different capabilities from each other beyond `is_platform_admin`.
+Every demo tenant gets the full 20-role catalog seeded (see `security.md`
+→ RBAC), but only Tenant Admin / HR Manager / Employee have real
+permission sets attached for `airpeace`/`ibom`/`uesl` respectively — the
+other 17 roles per tenant exist as empty placeholders for future modules.
 
 ## Known Limitations / Follow-up
 
-- No RBAC yet — every non-platform-admin tenant user currently has identical (implicit, undefined) capabilities. Next checkpoint.
 - No email verification enforcement on login (column exists, not yet checked).
 - No password reset flow yet (table exists from Laravel's default scaffold, unused).
-- No audit log table yet — see "Audit-ready, not yet audited" above.
-- `DatabaseSeeder` uses `WithoutModelEvents`, which disables the `saving`/`creating` guards during seeding. `UserSeeder` sets `tenant_id`/`is_platform_admin` explicitly on every row regardless, so this doesn't cause incorrect data — but it does mean a mistake in seed data would surface as a raw Postgres constraint error rather than the cleaner app-level exception.
+- No audit log table yet — see "Audit-ready, not yet audited" above. RBAC assignment/grant/revoke actions aren't logged anywhere yet either.
+- `DatabaseSeeder` uses `WithoutModelEvents`, which disables the `saving`/`creating` guards (on `User` and `Role`) during seeding. `UserSeeder`/`RoleSeeder` set `tenant_id`/`is_platform_admin`/`is_platform_role` explicitly on every row regardless, so this doesn't cause incorrect data — but it does mean a same-row consistency mistake in seed data would surface as a raw Postgres constraint error rather than the cleaner app-level exception. (The RBAC *assignment* guards — `assignRole()`, `givePermissionTo()`, `grantPermission()` — are unaffected by this, since they're plain method logic, not Eloquent events.)
+- No permission caching — `hasPermission()` hits the database on every call (two queries: role-permission lookup, direct-grant lookup). Fine for foundation-stage traffic; revisit if it becomes a hot path.
+- 17 of 20 seeded tenant roles per tenant have no permissions attached yet (by design — placeholders for modules that don't exist yet).

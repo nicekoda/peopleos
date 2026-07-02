@@ -58,6 +58,31 @@ inferred from the request's subdomain).
 See [`security.md`](security.md) for the user model, platform admin vs.
 tenant user rules, and the login flow.
 
+## Authorization (RBAC)
+
+Roles and permissions follow the same platform-vs-tenant split as `User`
+and `Tenant` — see [`security.md`](security.md#rbac) for the full design.
+Two things worth knowing at the architecture level:
+
+- **Tenant roles are per-tenant rows, not shared templates.** This is
+  what makes cross-tenant role/permission leakage structurally prevented
+  rather than just conventionally avoided.
+- **`hasPermission()` is the single source of truth**, reused by the
+  `permission:` middleware and by Laravel's native `can()`/`@can()` (via
+  a `Gate::before()` hook) — there's exactly one place permission logic
+  lives, not three parallel implementations that could drift.
+
+## Internal IDs vs. Public-Facing References
+
+Internal database IDs may remain bigint (see
+[`database.md`](database.md)) — that's a storage detail, not a security
+boundary. The actual rule: **public-facing links, invitation links,
+external portal links, document links, and any other reference exposed
+outside an authenticated session must never expose a raw internal ID.**
+Future modules needing a public-facing identifier should use a secure
+token, a separate ULID/UUID public-ID column, a signed URL, or a
+configured reference code — not the row's primary key.
+
 ## Local Development Environment
 
 See [`README.md`](../README.md) for PHP extension scoping (CLI vs. Apache

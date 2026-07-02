@@ -88,6 +88,12 @@ PeopleOS identifies tenants/clients by subdomain (e.g.
 A helper for adding these entries when a new tenant is provisioned is
 planned as part of the tenant foundation checkpoint.
 
+## Documentation
+
+- [`docs/architecture.md`](docs/architecture.md) — multi-tenancy, tenant resolution, RBAC overview, internal-vs-public IDs.
+- [`docs/database.md`](docs/database.md) — schema conventions and table reference.
+- [`docs/security.md`](docs/security.md) — authentication, RBAC design, local demo credentials, known limitations.
+
 ## Project Standards
 
 See `PeopleOS Master Development Constitution` and related standards

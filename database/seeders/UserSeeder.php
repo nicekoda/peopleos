@@ -2,6 +2,8 @@
 
 namespace Database\Seeders;
 
+use App\Models\Permission;
+use App\Models\Role;
 use App\Models\Tenant;
 use App\Models\User;
 use Illuminate\Database\Seeder;
@@ -10,22 +12,25 @@ use Illuminate\Support\Facades\Hash;
 class UserSeeder extends Seeder
 {
     /**
-     * Seed local demo users: one platform super admin, a tenant admin for
-     * each demo tenant, and an HR manager + employee for the first tenant.
+     * Seed local demo users and assign their roles.
      *
-     * "Tenant Admin" / "HR Manager" / "Employee" are descriptive labels
-     * only at this checkpoint — no roles/permissions table exists yet
-     * (RBAC is a later checkpoint), so these are plain users for exercising
-     * tenant-aware login, not role-assigned accounts.
+     * "Tenant Admin" / "HR Manager" / "Employee" now correspond to real
+     * seeded roles (see RoleSeeder) with real permission sets, not just
+     * descriptive names.
      *
      * Password comes from SEED_USER_PASSWORD (set in .env, never
      * committed) — see docs/security.md for local demo credentials.
+     *
+     * tenant_id / role assignments are set explicitly throughout, since
+     * DatabaseSeeder's WithoutModelEvents disables the User/Role
+     * saving-guard events during seeding (the assignRole()/grantPermission()
+     * method guards still run — see docs/security.md).
      */
     public function run(): void
     {
         $password = Hash::make(env('SEED_USER_PASSWORD', 'password'));
 
-        User::query()->updateOrCreate(
+        $superAdmin = User::query()->updateOrCreate(
             ['email' => 'super.admin@peopleos.test'],
             [
                 'name' => 'Platform Super Admin',
@@ -37,10 +42,14 @@ class UserSeeder extends Seeder
             ],
         );
 
+        if ($platformRole = Role::query()->where('slug', 'platform-super-admin')->where('tenant_id', null)->first()) {
+            $superAdmin->assignRole($platformRole);
+        }
+
         $tenants = Tenant::query()->whereIn('subdomain', ['uesl', 'airpeace', 'ibom'])->get()->keyBy('subdomain');
 
         foreach ($tenants as $subdomain => $tenant) {
-            User::query()->updateOrCreate(
+            $admin = User::query()->updateOrCreate(
                 ['email' => "admin@{$subdomain}.peopleos.test"],
                 [
                     'name' => "{$tenant->name} Admin",
@@ -51,10 +60,14 @@ class UserSeeder extends Seeder
                     'email_verified_at' => now(),
                 ],
             );
+
+            if ($tenantAdminRole = Role::query()->where('slug', 'tenant-admin')->where('tenant_id', $tenant->id)->first()) {
+                $admin->assignRole($tenantAdminRole);
+            }
         }
 
         if ($uesl = $tenants->get('uesl')) {
-            User::query()->updateOrCreate(
+            $hrManager = User::query()->updateOrCreate(
                 ['email' => 'hr.manager@uesl.peopleos.test'],
                 [
                     'name' => 'UESL HR Manager',
@@ -66,7 +79,11 @@ class UserSeeder extends Seeder
                 ],
             );
 
-            User::query()->updateOrCreate(
+            if ($hrManagerRole = Role::query()->where('slug', 'hr-manager')->where('tenant_id', $uesl->id)->first()) {
+                $hrManager->assignRole($hrManagerRole);
+            }
+
+            $employee = User::query()->updateOrCreate(
                 ['email' => 'employee@uesl.peopleos.test'],
                 [
                     'name' => 'UESL Employee',
@@ -77,6 +94,17 @@ class UserSeeder extends Seeder
                     'email_verified_at' => now(),
                 ],
             );
+
+            if ($employeeRole = Role::query()->where('slug', 'employee')->where('tenant_id', $uesl->id)->first()) {
+                $employee->assignRole($employeeRole);
+            }
+
+            // Example of the direct-grant mechanism: this employee gets
+            // documents.download beyond what the Employee role normally
+            // includes, granted by their HR Manager.
+            if ($downloadPermission = Permission::query()->where('key', 'documents.download')->first()) {
+                $employee->grantPermission($downloadPermission, $hrManager, 'Needs to download signed onboarding documents.');
+            }
         }
     }
 }

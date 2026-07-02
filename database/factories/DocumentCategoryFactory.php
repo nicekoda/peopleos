@@ -44,4 +44,9 @@ class DocumentCategoryFactory extends Factory
     {
         return $this->state(fn (array $attributes) => ['requires_expiry_date' => true]);
     }
+
+    public function inactive(): static
+    {
+        return $this->state(fn (array $attributes) => ['status' => DocumentCategoryStatus::Inactive]);
+    }
 }

@@ -114,6 +114,33 @@ under another (`/employees/{employee}/documents/{document}`):
   route and forgot the middleware" even if no test happens to exercise
   the specific cross-tenant scenario that middleware protects against.
 
+## Testing "safe soft-delete" claims directly, not just that the row disappears
+
+When a checkpoint's design relies on soft delete being non-destructive to
+other records (e.g. Checkpoint 9: a soft-deleted `DocumentCategory` must
+not break existing `EmployeeDocument` rows referencing it), test the
+*actual claim*, not just that the delete request succeeded:
+
+```php
+$this->assertSoftDeleted('document_categories', ['id' => $category->id]);
+$this->assertDatabaseHas('employee_documents', ['id' => $document->id, 'document_category_id' => $category->id]);
+$this->assertNull($document->fresh()->deleted_at);
+```
+
+`assertSoftDeleted()` alone doesn't prove the *other* row is unaffected —
+that needs its own explicit assertion. See
+`DocumentCategoryApiTest::test_category_used_by_active_document_cannot_be_unsafely_hard_deleted`.
+
+## `Rule::exists()` doesn't know about Eloquent scopes — test that gap directly if it matters
+
+If a validation rule uses `Rule::exists()`/`Rule::unique()` against a
+table whose model has `SoftDeletes` or a status/active flag, and the
+business rule depends on excluding inactive/deleted rows, write a test
+that creates an inactive/soft-deleted row and confirms it's rejected —
+don't assume the rule "just works" because the model has the scope. This
+exact gap existed in Checkpoint 8's code for one checkpoint before
+Checkpoint 9's tests caught it.
+
 ## Verifying against the real app, not just the test suite
 
 Because of the SQLite/Postgres split above, checkpoints in this project

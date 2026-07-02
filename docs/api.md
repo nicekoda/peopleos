@@ -196,12 +196,47 @@ through the same permission/tenant/ownership/sensitivity check chain as
 every other action — there is no separate signed-URL or direct-link
 mechanism (the `local` disk doesn't support one; see `docs/security.md`).
 
+## Document Categories
+
+Top-level (not nested) tenant-owned resource, since a category isn't
+scoped to any single employee.
+
+| Method | Path | Permission | Notes |
+|---|---|---|---|
+| `GET` | `/api/v1/document-categories` | `document_categories.view` | Paginated |
+| `POST` | `/api/v1/document-categories` | `document_categories.create` | |
+| `GET` | `/api/v1/document-categories/{documentCategory}` | `document_categories.view` | 404 if the category belongs to another tenant |
+| `PATCH` | `/api/v1/document-categories/{documentCategory}` | `document_categories.update` | Partial update |
+| `DELETE` | `/api/v1/document-categories/{documentCategory}` | `document_categories.delete` | Soft delete only — see `docs/security.md` for why this is always safe even for categories with existing documents |
+
+**`tenant_id` is never accepted as request input**, same rule as every
+other module.
+
+### Validation rules
+
+| Field | Rules |
+|---|---|
+| `name` | required (create) / sometimes+required (update), unique per tenant |
+| `slug` | auto-generated from `name` if not provided (create only — never auto-regenerated on update, to avoid silently changing a stable identifier); must be a valid slug format, unique per tenant |
+| `description` | nullable, max 1000 characters |
+| `applies_to` | nullable, valid `DocumentAppliesTo` enum value (defaults to `employee`) |
+| `is_sensitive` / `is_required` / `requires_expiry_date` | nullable, boolean (default `false`) |
+| `status` | nullable, valid `DocumentCategoryStatus` enum value (defaults to `active`) |
+
+### Effect on document uploads
+
+An `inactive` or soft-deleted category cannot be attached to a *new*
+employee document upload — `StoreEmployeeDocumentRequest`'s
+`document_category_id` validation explicitly excludes both states (fixed
+in this checkpoint — see `docs/security.md` for the gap this closed).
+Documents already using a category that's since been archived are
+completely unaffected.
+
 ## Current limitations
 
 - No export endpoint (`employees.export` permission is seeded but unused — explicitly out of scope this checkpoint).
 - No bulk actions.
-- No `departments`/`locations`/`positions` CRUD endpoints — they exist only to support employee FK validation.
-- No `document_categories` CRUD endpoint — same pattern, categories exist only to support document FK validation and the `requires_expiry_date`/`is_sensitive` rules.
+- No `departments`/`locations`/`positions` CRUD endpoints — they exist only to support employee FK validation (unlike `document_categories`, which now has one).
 - No document approval workflow endpoint — `documents.approve` permission and `approved_by`/`approved_at` columns are reserved, unused.
 - Pagination uses Laravel's default page-number style; no cursor pagination or configurable page size yet.
 - Session-based auth only — see "Authentication" above for the full future Sanctum/token plan.
@@ -215,4 +250,6 @@ mechanism (the `local` disk doesn't support one; see `docs/security.md`).
 - Document approval workflow (`documents.approve`, `approved_by`/`approved_at` already reserved in the schema).
 - Malware scanning on upload (currently type/size/content-detection validation only, no payload scanning).
 - Cloud storage (S3 or similar) — local private disk only for now; the storage layer is already abstracted behind `storage_disk`/`storage_path` on the model, so this is a lower-effort future change than it might otherwise be.
-- Policy Management / Policy Acknowledgement linking documents to required-reading workflows — a distinct future module, not built yet.
+- Policy Management / Policy Acknowledgement linking documents to required-reading workflows — `applies_to` already includes a `policy` value in the enum, unused until that module exists.
+- Onboarding documents / compliance document tracking (expiring work permits, certifications) — `document_categories.requires_expiry_date` and `employee_documents.expiry_date` already exist and are enforced at upload time; a dedicated "documents expiring soon" report/notification is future work, not built yet.
+- Candidate documents (`applies_to` includes `candidate`) — no candidate/recruitment module exists yet to attach documents to.

@@ -166,6 +166,31 @@ file written through the actual controller code path, checked to exist
 on disk but not under `public/storage`) rather than inferred from
 Laravel's disk configuration alone.
 
+## Document Category Management
+
+Third tenant-owned resource with a management API — top-level (not
+nested, unlike `EmployeeDocument`), so back to the standard three-layer
+pattern: `tenant.matches` → `BelongsToTenant` global scope → explicit
+controller tenant-ownership check.
+
+**Worth internalizing as a general lesson from this checkpoint:**
+`Rule::exists()` (Laravel's raw-DB validation rule) does not know about
+Eloquent model scopes — including `SoftDeletes`. Any future validation
+rule referencing a tenant-owned table that has soft deletes or a
+status/active flag must explicitly filter for that in the rule's `where`
+closure; it will not happen automatically just because the model has
+`SoftDeletes`. This was a real gap in Checkpoint 8's code, found and
+fixed in Checkpoint 9 — see
+[`security.md`](security.md#a-real-checkpoint-8-validation-gap-found-and-fixed).
+
+**Also worth internalizing:** `Model::create()` does not backfill
+database column defaults into the in-memory model instance for
+attributes omitted from the create array. If a resource/response reads
+an attribute assuming it reflects the DB default when unset, default it
+explicitly in the controller before `create()` — don't rely on the
+column's schema default alone. Found the same way: a real crash on the
+first test run, not a hypothetical.
+
 ## Internal IDs vs. Public-Facing References
 
 Internal database IDs may remain bigint (see

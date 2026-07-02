@@ -200,9 +200,11 @@ separate, more sensitive future checkpoints per your instruction.
 
 ### `document_categories`
 
-Same shape/pattern as `departments`/`locations`/`positions` (tenant-owned
-lookup table, no CRUD endpoints yet), extended with fields specific to
-document governance.
+Tenant-owned lookup table, same base pattern as `departments`/
+`locations`/`positions`, extended with fields specific to document
+governance. Unlike those three, this one **has a full management API**
+as of Checkpoint 9 — see [`api.md`](api.md) and
+[`security.md`](security.md#document-category-management).
 
 | Column | Type | Notes |
 |---|---|---|

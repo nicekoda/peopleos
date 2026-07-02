@@ -2,6 +2,7 @@
 
 namespace App\Http\Requests\Document;
 
+use App\Enums\DocumentCategoryStatus;
 use App\Models\DocumentCategory;
 use App\Models\Tenant;
 use Illuminate\Foundation\Http\FormRequest;
@@ -46,9 +47,19 @@ class StoreEmployeeDocumentRequest extends FormRequest
             ],
             'title' => ['required', 'string', 'max:255'],
             'description' => ['nullable', 'string'],
+            // Deliberately excludes inactive/soft-deleted categories: a
+            // category that's been archived must not be available for
+            // *new* uploads (documents already referencing it are
+            // unaffected — see DocumentCategoryController::destroy()).
+            // Rule::exists() is a raw DB check that bypasses Eloquent's
+            // SoftDeletes scope entirely, so deleted_at/status must be
+            // checked explicitly here — found and fixed in Checkpoint 9.
             'document_category_id' => [
                 'nullable', 'string',
-                Rule::exists('document_categories', 'id')->where(fn ($q) => $q->where('tenant_id', $tenantId)),
+                Rule::exists('document_categories', 'id')->where(fn ($q) => $q
+                    ->where('tenant_id', $tenantId)
+                    ->where('status', DocumentCategoryStatus::Active->value)
+                    ->whereNull('deleted_at')),
             ],
             'issue_date' => ['nullable', 'date'],
             'expiry_date' => ['nullable', 'date', 'after_or_equal:issue_date'],

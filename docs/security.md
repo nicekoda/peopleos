@@ -537,6 +537,81 @@ granularity emerges), `document.downloaded`, `document.deleted`.
 - `checksum` is computed and stored but not yet used to verify integrity
   on download.
 
+## Document Category Management
+
+Closes the gap flagged at the end of Checkpoint 8: `document_categories`
+now has a real management API, not just a schema categories are seeded
+into by hand. See [`api.md`](api.md) for the endpoint reference.
+
+### Dedicated permissions, not reused ones
+
+`document_categories.view/create/update/delete` — deliberately **not**
+reusing `documents.*`, per your explicit recommendation: managing what
+categories exist is an admin/configuration action, distinct from
+uploading/viewing/downloading individual employee documents. Seeded in
+`PermissionSeeder`. Tenant Admin receives them automatically (it's
+granted *all* current non-platform permissions dynamically at seed time —
+confirmed directly: Tenant Admin's permission count matches the total
+non-platform permission count exactly after this checkpoint's seeding,
+42). **HR Manager's grants were deliberately left unchanged** — it
+doesn't need category-management permissions to reference an existing
+category ID when uploading a document; a tenant admin can grant it
+explicitly if a specific tenant wants HR Manager to also manage
+categories.
+
+### A real Checkpoint 8 validation gap found and fixed
+
+`StoreEmployeeDocumentRequest`'s `document_category_id` validation used
+`Rule::exists('document_categories', 'id')->where('tenant_id', ...)` — a
+**raw** database existence check that bypasses Eloquent entirely,
+including `DocumentCategory`'s `SoftDeletes` global scope. A soft-deleted
+or `status=inactive` category could have been attached to a *new*
+document upload, directly contradicting this checkpoint's own rule that
+inactive/deleted categories must not be available for new uploads.
+Fixed by adding explicit `where('status', 'active')` and
+`whereNull('deleted_at')` to the raw rule — found while implementing this
+checkpoint's own requirements, not a separate bug hunt.
+
+### Deletion is soft-delete only — there is no hard-delete path
+
+The `DELETE` endpoint calls `$documentCategory->delete()` (soft delete)
+and nothing else. This means "a category used by active documents can't
+be unsafely hard-deleted" is true **structurally** — there's no code path
+in this API that could hard-delete a category at all, used or not. Soft
+deleting a category:
+
+- Does not touch existing `employee_documents.document_category_id`
+  foreign keys — a soft delete only sets `deleted_at`, it doesn't cascade
+  or null anything.
+- Existing documents referencing the now-deleted category are completely
+  unaffected — verified directly with a test that uploads a document
+  under a category, soft-deletes the category, and confirms the document
+  row is untouched and the category row still exists (soft-deleted).
+- The category becomes unavailable for **new** uploads (via the
+  validation fix above) without breaking anything already using it.
+
+### A second in-memory-attribute bug found and fixed while testing
+
+`DocumentCategory::create()` with an omitted optional field (e.g.
+`applies_to` not sent in the request) doesn't backfill that column's
+database default into the in-memory model — Eloquent sends an `INSERT`
+without that column, Postgres applies its schema default, but the
+just-created `$category` object in PHP memory never learns that value.
+`DocumentCategoryResource` then crashed (`Attempt to read property
+"value" on null`) trying to render `$category->applies_to->value`. Fixed
+by explicitly defaulting `applies_to`/`is_sensitive`/`is_required`/
+`requires_expiry_date` in the controller before `create()`, the same
+pattern already used for `status`. Caught immediately by the first test
+run — a good example of why every checkpoint runs the real test suite
+before considering anything done, not just a read-through of the code.
+
+### Audit events
+
+`document_category.created`, `document_category.updated` (only when
+something actually changed, same pattern as Employee/EmployeeDocument),
+`document_category.deleted`. Same tenant-scoping, same "safe old/new
+values only" discipline as every other module's audit trail.
+
 ## Local Demo Credentials
 
 **Local development only — these are not real secrets and only work against your own local database.** Password comes from `SEED_USER_PASSWORD` in `.env` (not committed; `.env.example` has an empty placeholder).

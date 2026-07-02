@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\Api\V1\DocumentCategoryController;
 use App\Http\Controllers\Api\V1\EmployeeController;
 use App\Http\Controllers\Api\V1\EmployeeDocumentController;
 use Illuminate\Support\Facades\Route;
@@ -38,4 +39,10 @@ Route::middleware(['auth', 'tenant.matches'])->prefix('api/v1')->group(function 
     Route::get('employees/{employee}/documents/{document}', [EmployeeDocumentController::class, 'show'])->middleware('permission:documents.view');
     Route::get('employees/{employee}/documents/{document}/download', [EmployeeDocumentController::class, 'download'])->middleware('permission:documents.download');
     Route::delete('employees/{employee}/documents/{document}', [EmployeeDocumentController::class, 'destroy'])->middleware('permission:documents.delete');
+
+    Route::get('document-categories', [DocumentCategoryController::class, 'index'])->middleware('permission:document_categories.view');
+    Route::post('document-categories', [DocumentCategoryController::class, 'store'])->middleware('permission:document_categories.create');
+    Route::get('document-categories/{documentCategory}', [DocumentCategoryController::class, 'show'])->middleware('permission:document_categories.view');
+    Route::patch('document-categories/{documentCategory}', [DocumentCategoryController::class, 'update'])->middleware('permission:document_categories.update');
+    Route::delete('document-categories/{documentCategory}', [DocumentCategoryController::class, 'destroy'])->middleware('permission:document_categories.delete');
 });

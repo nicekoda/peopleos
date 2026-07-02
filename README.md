@@ -53,10 +53,14 @@ PeopleOS identifies tenants/clients by subdomain (e.g.
   generated with [mkcert](https://github.com/FiloSottile/mkcert) and stored
   at `C:\laragon\etc\ssl\peopleos.test\` (outside the repo — never commit
   certs or keys).
-- An Apache vhost at
-  `C:\laragon\etc\apache2\sites-enabled\auto.peopleos.test.conf` with
-  `ServerAlias *.peopleos.test` and `SSLEngine on`, serving both `:80` and
-  `:443`.
+- Two Apache vhost files in `C:\laragon\etc\apache2\sites-enabled\`:
+  - `auto.peopleos.test.conf` — the plain `:80` vhost, owned by Laragon.
+    Laragon regenerates this whenever it rescans `www/`, so nothing custom
+    lives here.
+  - `ssl.peopleos.test.conf` — the `:443` vhost with `SSLEngine on` and
+    `ServerAlias *.peopleos.test`. Deliberately **not** prefixed `auto.` so
+    Laragon never touches or regenerates it — this is what makes the SSL
+    config durable across Laragon reloads/rescans.
 - Windows' hosts file cannot do wildcard entries, so **each client
   subdomain needs its own line** in
   `C:\Windows\System32\drivers\etc\hosts`, e.g.:

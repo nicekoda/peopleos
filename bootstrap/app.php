@@ -16,7 +16,10 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->appendToGroup('web', ResolveTenant::class);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
+        // No login/logout UI exists yet (backend-only auth foundation),
+        // so these endpoints must always respond JSON, not redirect back
+        // to a nonexistent form on validation failure.
         $exceptions->shouldRenderJsonWhen(
-            fn (Request $request) => $request->is('api/*'),
+            fn (Request $request) => $request->is('api/*') || $request->is('login') || $request->is('logout'),
         );
     })->create();

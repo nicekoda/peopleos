@@ -47,6 +47,17 @@ CLI contexts) — see the Access Control Rules in the master constitution:
 every endpoint must independently verify tenant membership before acting
 on a record.
 
+**`User` is a deliberate exception.** It does not use `BelongsToTenant` —
+see [`security.md`](security.md#why-user-doesnt-use-belongstotenant) for
+why (login must find users before a tenant is "current"; platform admins
+need cross-tenant visibility; tenant assignment must be explicit, not
+inferred from the request's subdomain).
+
+## Authentication
+
+See [`security.md`](security.md) for the user model, platform admin vs.
+tenant user rules, and the login flow.
+
 ## Local Development Environment
 
 See [`README.md`](../README.md) for PHP extension scoping (CLI vs. Apache

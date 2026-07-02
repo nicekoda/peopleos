@@ -10,30 +10,44 @@ Enterprise Human Resource Intelligence Platform. Built with Laravel + PostgreSQL
 - PostgreSQL (this project connects to `peopleos_dev`)
 - Composer
 
-**PostgreSQL PHP extensions are scoped to this project only.**
+**PostgreSQL PHP extensions**
 
-This project requires the `pdo_pgsql` and `pgsql` PHP extensions, but they are
-**not** enabled in the machine-wide `php.ini`. Instead, a project-local
-`php.ini` lives at the repo root (git-ignored, machine-specific) with those
-extensions enabled.
+This project requires the `pdo_pgsql` and `pgsql` PHP extensions.
 
-Because Windows PHP CLI does not automatically pick up a `php.ini` from the
-current working directory, use the wrapper scripts instead of calling `php`,
-`artisan`, or `composer` directly from this project:
+- **CLI** (`artisan`, `composer`): scoped to this project only, via a
+  project-local `php.ini` at the repo root (git-ignored, machine-specific)
+  with the extensions enabled. Use the wrapper scripts instead of calling
+  `php`/`artisan`/`composer` directly, since Windows PHP CLI does not pick
+  up a `php.ini` from the current working directory automatically:
+  ```bash
+  ./artisan.bat migrate
+  ./artisan.bat test
+  ./composer.bat install
+  ```
+  These wrappers set `PHPRC` to the project's `php.ini` before invoking the
+  underlying command. If `php.ini` doesn't exist yet (fresh clone), copy it
+  from your machine's base Laragon `php.ini` and uncomment the `pdo_pgsql`
+  and `pgsql` extension lines.
 
-```bash
-./artisan.bat migrate
-./artisan.bat test
-./composer.bat install
-```
-
-These wrappers set `PHPRC` to the project's `php.ini` before invoking the
-underlying command, so the extensions apply only within this project and
-never leak into other projects on the same machine.
-
-If `php.ini` doesn't exist yet (fresh clone), copy it from your machine's
-base Laragon `php.ini` and uncomment the `pdo_pgsql` and `pgsql` extension
-lines.
+- **Web server (Apache)**: Laragon's Apache uses `mod_php`, which loads a
+  single `php.ini` for the entire Apache process — there is no native
+  per-vhost override. True per-project isolation for browser-facing
+  requests would require switching to FastCGI/PHP-FPM, which is out of
+  scope for local development right now. Instead, `pdo_pgsql` and `pgsql`
+  are enabled directly in Laragon's active Apache PHP `php.ini`
+  (`C:\laragon\bin\php\php-8.3.30-Win32-vs16-x64\php.ini` at time of
+  writing — check `PHPIniDir` in `C:\laragon\etc\apache2\mod_php.conf` if
+  the PHP version changes). This applies to every project served by this
+  Apache instance, not just PeopleOS.
+  - **Why this is acceptable:** loading a DB driver doesn't grant any
+    project access to data — each project still needs its own valid
+    credentials to connect to anything. This is local development only.
+  - **Production** will use a controlled server/container image where
+    required PHP extensions are explicitly installed and no unnecessary
+    extensions are enabled — this global-`php.ini` approach is a local-dev
+    convenience, not a pattern to carry into production.
+  - After editing this file, restart Apache via Laragon (Menu → Apache →
+    Restart, or Reload) to pick up the change.
 
 **Database configuration**
 

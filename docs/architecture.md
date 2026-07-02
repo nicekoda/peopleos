@@ -26,6 +26,20 @@ every request:
    the `Tenant` model is bound into the container
    (`app()->instance(Tenant::class, $tenant)`) for the rest of the request.
 
+**Middleware order matters, and got it wrong once.** `ResolveTenant` is
+registered with `prependToGroup('web', ...)`, not `appendToGroup` — it
+must run *before* `SubstituteBindings` (Laravel's route-model-binding
+middleware, part of the default `web` group stack), otherwise a
+tenant-scoped model's `{param}` route binding would resolve before any
+tenant is bound in the container, meaning `BelongsToTenant`'s global scope
+wouldn't be active yet for that lookup. This was originally registered
+with `appendToGroup` (Checkpoint 2) and the bug went undetected until
+Checkpoint 6 actually built a route using tenant-scoped implicit
+binding — see [`security.md`](security.md#employee-records) for the full
+story. If you add another `web`-group middleware that needs to run before
+route model binding, check its position against `SubstituteBindings`
+explicitly; don't assume `appendToGroup` is always safe.
+
 ### Tenant-owned models: `BelongsToTenant`
 
 Every tenant-owned Eloquent model must use
@@ -90,6 +104,20 @@ architectural points worth knowing here:
 Future modules (Employee Records onward) should call `AuditLogger::log()`
 or `AuditLogger::logFor()` directly from controllers/model methods for
 any sensitive action — don't build a parallel logging mechanism.
+
+## Employee Records
+
+The first real tenant-owned HR business module — see
+[`api.md`](api.md), [`database.md`](database.md#employees), and
+[`security.md`](security.md#employee-records) for the endpoint reference,
+table design, and permission/audit details respectively.
+
+Pattern worth reusing for future modules: **every endpoint verifies
+tenant ownership explicitly in the controller** (`ensureBelongsToCurrentTenant()`
+in `EmployeeController`), even though `BelongsToTenant`'s global scope
+already filters queries and route-model-binding now resolves correctly
+(see the middleware-order note above). Two independent layers, not one —
+if either is ever weakened by a future change, the other still holds.
 
 ## Internal IDs vs. Public-Facing References
 

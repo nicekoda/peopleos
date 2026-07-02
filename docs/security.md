@@ -257,6 +257,73 @@ viewing platform-level logs; export as a separate, explicitly-permissioned
 capability (`audit.export`, already seeded as a permission key, unused
 until then); no SIEM integration planned at this stage.
 
+## Employee Records
+
+The first real tenant-owned business module — see
+[`api.md`](api.md) for the full endpoint reference and
+[`database.md`](database.md#employees) for the table design.
+
+### Permission mapping
+
+| Permission | Grants |
+|---|---|
+| `employees.view` | List/view employees (excluding sensitive fields) |
+| `employees.create` | Create employee records |
+| `employees.update` | Update employee records |
+| `employees.delete` | Soft-delete employee records |
+| `employees.view_sensitive` | See `personal_email`/`phone` in API responses, on top of `employees.view` |
+| `employees.export` | Reserved, not implemented this checkpoint |
+
+### `personal_email` / `phone` are sensitive — a decision, not a given
+
+Your spec left it to me whether these count as sensitive enough to gate
+behind `employees.view_sensitive`. Decided **yes** — treated consistently
+in two places:
+
+1. **API responses** (`EmployeeResource`) — `null` unless the requester
+   has `employees.view_sensitive`.
+2. **Audit logs** (`AuditLogger`) — masked in `old_values`/`new_values`
+   the same way `password`/`bank`/`national_id`/etc. already are.
+
+`work_email` is *not* gated — it's business contact information, not
+personal.
+
+### Tenant isolation — a real bug found and fixed during this checkpoint
+
+Tracing the actual Laravel middleware pipeline (from a stack trace
+captured back in Checkpoint 3) revealed that `SubstituteBindings` (which
+resolves `{employee}` in a route) ran **before** `ResolveTenant`, because
+`ResolveTenant` had been registered with `appendToGroup` (added to the
+*end* of the `web` group), while `SubstituteBindings` is part of Laravel's
+earlier default stack. That meant implicit route-model-binding on any
+tenant-scoped model would resolve **before** a tenant was bound in the
+container — `BelongsToTenant`'s global scope wouldn't have been active
+yet for that lookup. A real cross-tenant IDOR risk, not a theoretical one.
+
+**Fixed** by switching to `prependToGroup` (`bootstrap/app.php`), so
+`ResolveTenant` now runs first. **Also** added an explicit tenant-ownership
+check in `EmployeeController` (`ensureBelongsToCurrentTenant()`) as
+defense in depth, independent of the global scope or middleware order —
+matching the "not the only safeguard" principle in `docs/architecture.md`.
+Both are exercised by
+`EmployeeApiTest::test_user_cannot_view_employee_from_another_tenant_by_id`,
+which passed on the first run after the fix — but existed specifically to
+catch this class of bug, and would have caught it before the fix too, had
+it been written first.
+
+**Consequence for future modules:** any future tenant-scoped model reached
+via route-model-binding should still add its own explicit ownership check
+in the controller — don't rely solely on the global scope, even with the
+ordering now fixed. If a future middleware change reintroduces ordering
+sensitivity, the explicit check is the backstop.
+
+### Audit events
+
+`employee.created`, `employee.updated` (only when something actually
+changed — `updated_at`/`updated_by` bumps alone don't trigger a log
+entry), `employee.deleted` (soft delete). All include `old_values`/
+`new_values` where relevant, with `personal_email`/`phone` masked.
+
 ## Local Demo Credentials
 
 **Local development only — these are not real secrets and only work against your own local database.** Password comes from `SEED_USER_PASSWORD` in `.env` (not committed; `.env.example` has an empty placeholder).
@@ -283,3 +350,7 @@ other 17 roles per tenant exist as empty placeholders for future modules.
 - See "Current limitations" under Audit Logging above for the audit-specific gaps (no read endpoint, `givePermissionTo()`/tenant CRUD not logged yet).
 - No permission caching — `hasPermission()` hits the database on every call (two queries: role-permission lookup, direct-grant lookup). Fine for foundation-stage traffic; revisit if it becomes a hot path.
 - 17 of 20 seeded tenant roles per tenant have no permissions attached yet (by design — placeholders for modules that don't exist yet).
+- No `departments`/`locations`/`positions` CRUD endpoints — see Employee Records above.
+- `employee_number` is manually provided, not auto-generated — no numbering-scheme feature exists yet.
+- No salary, bank details, medical information, disciplinary records, or documents on employees yet — deliberately deferred to separate, more sensitive future checkpoints.
+- `/api/v1` routes use the same session-based `web` auth as the rest of the app (no Sanctum/token guard yet) — see `docs/api.md` for why.

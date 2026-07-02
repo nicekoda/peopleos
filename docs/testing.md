@@ -56,10 +56,9 @@ Requests to the bare base domain (no tenant) or a reserved subdomain use
 
 ## Testing permission-protected routes without a real endpoint yet
 
-Several modules (Employee Records, etc.) don't have real routes yet, but
-`permission:` middleware behavior still needs coverage. Register an
-ad-hoc route directly inside the test method rather than adding a fake
-permanent route to `routes/web.php`:
+For modules with no real routes yet, register an ad-hoc route directly
+inside the test method rather than adding a fake permanent route to
+`routes/web.php`:
 
 ```php
 Route::middleware(['web', 'auth', 'permission:employees.view'])
@@ -67,7 +66,25 @@ Route::middleware(['web', 'auth', 'permission:employees.view'])
 ```
 
 See `RbacTest::test_middleware_allows_user_with_permission` for the full
-pattern (including `actingAs()` + hitting the tenant's subdomain).
+pattern (including `actingAs()` + hitting the tenant's subdomain). Once a
+module has real endpoints (Employee Records now does), test against
+those directly instead — see `EmployeeApiTest`.
+
+## Testing tenant-scoped CRUD endpoints
+
+`EmployeeApiTest` establishes the pattern for testing a tenant-isolated
+resource end-to-end:
+
+- A `userWithPermission(Tenant $tenant, string ...$permissionKeys)` helper
+  that creates a user, a role scoped to that tenant, grants the given
+  permissions to the role, and assigns it — avoids repeating RBAC setup
+  boilerplate in every test.
+- Cross-tenant isolation tests always create fixtures in **two** tenants
+  (`$tenantA`/`$tenantB`) and assert the acting user's tenant can't see,
+  update, or delete the other tenant's records — not just "no data
+  exists," since an empty result can pass for the wrong reason.
+- `assertNotFound()` (404), not `assertForbidden()` (403), for cross-tenant
+  access attempts — don't reveal that a record exists in another tenant.
 
 ## Verifying against the real app, not just the test suite
 

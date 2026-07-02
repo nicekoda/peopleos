@@ -150,3 +150,50 @@ and the masking rules.
 Indexed on `action`, `module`, `(auditable_type, auditable_id)`, plus the
 implicit indexes from the `tenant_id`/`actor_user_id`/`target_user_id`
 foreign keys.
+
+### `departments`, `locations`, `positions`
+
+Minimal, identical shape — `id` (ulid, PK), `tenant_id` (ulid, FK →
+`tenants.id` `RESTRICT`), `name`, timestamps, soft delete, unique
+(`tenant_id`, `name`). No CRUD endpoints yet; they exist to give
+`employees.department_id`/`location_id`/`position_id` something real to
+validate against. First real usage of `BelongsToTenant` on actual business
+data (Checkpoint 2 only exercised it against a throwaway test fixture).
+
+### `employees`
+
+The first real tenant-owned HR business record. One table — deliberately
+not split into `employee_contact_details`/`employee_employment_details`/
+etc. (per your "don't over-engineer" guidance; nothing in this checkpoint
+needed a separate table, and no emergency-contact fields were specified).
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | ulid, primary key | |
+| `tenant_id` | ulid, FK → `tenants.id` `RESTRICT` | |
+| `employee_number` | string | Unique per tenant. **Manually provided, not auto-generated** — no numbering-scheme feature exists yet |
+| `first_name` / `last_name` | string, required | |
+| `middle_name` / `preferred_name` | string, nullable | |
+| `work_email` | string, nullable | Unique per tenant (nullable — Postgres/SQLite allow multiple NULLs in a composite unique, which is the desired behavior here, unlike the platform-role-slug case) |
+| `personal_email` | string, nullable | **Sensitive** — see `security.md` |
+| `phone` | string, nullable | **Sensitive** — see `security.md` |
+| `status` | string, default `draft` | `App\Enums\EmployeeStatus`: `draft` \| `active` \| `inactive` \| `terminated` |
+| `employment_type` | string, required | `App\Enums\EmploymentType`: `full_time` \| `part_time` \| `contractor` \| `intern` \| `consultant` |
+| `department_id` / `location_id` / `position_id` | ulid, nullable, FK `SET NULL` | Must belong to the same tenant — validated in the FormRequest, not just a DB constraint |
+| `manager_employee_id` | ulid, nullable, FK → `employees.id` `SET NULL` | Self-referencing — see migration note below |
+| `start_date` / `probation_end_date` / `confirmation_date` | date, nullable | `probation_end_date` must be ≥ `start_date` when both provided |
+| `created_by` / `updated_by` | bigint, nullable, FK → `users.id` `SET NULL` | Set from the authenticated user, never request input |
+| `deleted_at` | timestamp, nullable | Soft delete — the `DELETE` endpoint soft-deletes, never hard-deletes |
+
+**Migration note — self-referencing FK:** `manager_employee_id` can't have
+its FK constraint added within the same `CREATE TABLE` statement that
+creates `employees` (Postgres: `there is no unique constraint matching
+given keys for referenced table "employees"` — the primary key isn't
+visible yet to a same-statement self-reference). Fixed by defining the
+column inline and adding the FK constraint in a separate `Schema::table()`
+call immediately after. Hit and fixed during this checkpoint — a real
+error, not a false start.
+
+No payroll, salary, bank details, medical information, disciplinary
+information, or documents in this table — deliberately deferred to
+separate, more sensitive future checkpoints per your instruction.

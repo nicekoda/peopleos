@@ -37,6 +37,8 @@ class AuditLogger
         'salary',
         'ssn',
         'tax_id',
+        'personal_email',
+        'phone',
     ];
 
     private const MASK = '***MASKED***';

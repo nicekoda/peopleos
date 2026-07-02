@@ -14,7 +14,13 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware): void {
-        $middleware->appendToGroup('web', ResolveTenant::class);
+        // Must run before SubstituteBindings (route model binding), which
+        // is part of Laravel's default 'web' group stack — otherwise a
+        // tenant-scoped model's {param} route binding would resolve
+        // before any tenant is bound in the container, meaning
+        // BelongsToTenant's global scope wouldn't be active yet for that
+        // lookup. prependToGroup, not appendToGroup.
+        $middleware->prependToGroup('web', ResolveTenant::class);
         $middleware->alias(['permission' => EnsurePermission::class]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {

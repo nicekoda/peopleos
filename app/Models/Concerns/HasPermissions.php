@@ -5,6 +5,7 @@ namespace App\Models\Concerns;
 use App\Models\Permission;
 use App\Models\Role;
 use App\Models\UserPermission;
+use App\Services\Audit\AuditLogger;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use RuntimeException;
@@ -15,7 +16,8 @@ use RuntimeException;
  *
  * Assignment guards below are plain method logic, not Eloquent model
  * events — deliberately, since DatabaseSeeder's WithoutModelEvents would
- * otherwise silently bypass them during seeding.
+ * otherwise silently bypass them during seeding. Audit logging calls are
+ * likewise plain method logic for the same reason.
  */
 trait HasPermissions
 {
@@ -33,7 +35,7 @@ trait HasPermissions
      * Assign a role to this user. Rejects platform-vs-tenant scope
      * mismatches and cross-tenant role assignment.
      */
-    public function assignRole(Role $role): void
+    public function assignRole(Role $role, ?self $performedBy = null): void
     {
         if ($this->is_platform_admin !== $role->is_platform_role) {
             throw new RuntimeException('Cannot assign a role whose scope (platform vs tenant) does not match the user.');
@@ -44,11 +46,35 @@ trait HasPermissions
         }
 
         $this->roles()->syncWithoutDetaching([$role->id => ['tenant_id' => $role->tenant_id]]);
+
+        AuditLogger::logFor(
+            actor: $performedBy,
+            action: 'role.assigned',
+            module: 'rbac',
+            tenantId: $this->tenant_id,
+            auditableType: Role::class,
+            auditableId: (string) $role->id,
+            targetUserId: $this->id,
+            description: "Role '{$role->name}' assigned to user #{$this->id}.",
+            newValues: ['role_id' => $role->id, 'role_slug' => $role->slug],
+        );
     }
 
-    public function removeRole(Role $role): void
+    public function removeRole(Role $role, ?self $performedBy = null): void
     {
         $this->roles()->detach($role->id);
+
+        AuditLogger::logFor(
+            actor: $performedBy,
+            action: 'role.removed',
+            module: 'rbac',
+            tenantId: $this->tenant_id,
+            auditableType: Role::class,
+            auditableId: (string) $role->id,
+            targetUserId: $this->id,
+            description: "Role '{$role->name}' removed from user #{$this->id}.",
+            oldValues: ['role_id' => $role->id, 'role_slug' => $role->slug],
+        );
     }
 
     public function hasRole(string $slug): bool
@@ -67,7 +93,9 @@ trait HasPermissions
             throw new RuntimeException('Cannot grant a permission whose scope (platform vs tenant) does not match the user.');
         }
 
-        return $this->permissionGrants()->firstOrCreate(
+        $wasRecentlyCreated = ! $this->permissionGrants()->where('permission_id', $permission->id)->exists();
+
+        $grant = $this->permissionGrants()->firstOrCreate(
             ['permission_id' => $permission->id],
             [
                 'tenant_id' => $this->tenant_id,
@@ -75,11 +103,39 @@ trait HasPermissions
                 'reason' => $reason,
             ],
         );
+
+        if ($wasRecentlyCreated) {
+            AuditLogger::logFor(
+                actor: $grantedBy,
+                action: 'permission.granted',
+                module: 'rbac',
+                tenantId: $this->tenant_id,
+                auditableType: Permission::class,
+                auditableId: (string) $permission->id,
+                targetUserId: $this->id,
+                description: "Permission '{$permission->key}' granted directly to user #{$this->id}.",
+                newValues: ['permission_id' => $permission->id, 'permission_key' => $permission->key, 'reason' => $reason],
+            );
+        }
+
+        return $grant;
     }
 
-    public function revokePermission(Permission $permission): void
+    public function revokePermission(Permission $permission, ?self $performedBy = null): void
     {
         $this->permissionGrants()->where('permission_id', $permission->id)->delete();
+
+        AuditLogger::logFor(
+            actor: $performedBy,
+            action: 'permission.revoked',
+            module: 'rbac',
+            tenantId: $this->tenant_id,
+            auditableType: Permission::class,
+            auditableId: (string) $permission->id,
+            targetUserId: $this->id,
+            description: "Direct permission '{$permission->key}' revoked from user #{$this->id}.",
+            oldValues: ['permission_id' => $permission->id, 'permission_key' => $permission->key],
+        );
     }
 
     /**

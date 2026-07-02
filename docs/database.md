@@ -120,3 +120,33 @@ Direct permission grants, outside role assignment.
 Unique (`user_id`,`permission_id`) — a user has at most one direct grant
 per permission. Revocation is a hard delete of the row, not a soft delete
 or status flag.
+
+### `audit_logs`
+
+Append-only — no `updated_at`, no `deleted_at`. Enforced at the model
+layer too (`AuditLog::save()`/`delete()` throw on any update/delete
+attempt), not just by the absence of an edit/delete UI. See
+[`security.md`](security.md#audit-logging) for what's currently logged
+and the masking rules.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | bigint, primary key | |
+| `tenant_id` | ulid, nullable, FK → `tenants.id` `RESTRICT` | Null for platform-level events |
+| `actor_user_id` | bigint, nullable, FK → `users.id` `SET NULL` | Null for system/seeder-driven events |
+| `actor_type` | string, nullable | `user` \| `system`, inferred from `actor_user_id` if not given |
+| `action` | string, required | e.g. `login.success`, `role.assigned` |
+| `module` | string, required | e.g. `auth`, `rbac` |
+| `auditable_type` / `auditable_id` | string, nullable | Polymorphic reference — `auditable_id` is a string (not a real FK) since referenced models have mixed PK types (bigint today, ULID for future tenant-owned models) |
+| `target_user_id` | bigint, nullable, FK → `users.id` `SET NULL` | The user an action was performed *on* |
+| `description` | text, nullable | |
+| `old_values` / `new_values` | json, nullable | Masked for known-sensitive keys — see `security.md` |
+| `metadata` | json, nullable | Not masked — don't put sensitive data here either |
+| `ip_address` | string(45), nullable | |
+| `user_agent` | text, nullable | |
+| `severity` | string, nullable, default `info` | `info` \| `warning` \| `critical` |
+| `created_at` | timestamp | No `updated_at` |
+
+Indexed on `action`, `module`, `(auditable_type, auditable_id)`, plus the
+implicit indexes from the `tenant_id`/`actor_user_id`/`target_user_id`
+foreign keys.

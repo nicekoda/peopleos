@@ -4,6 +4,7 @@ namespace App\Http\Requests\Auth;
 
 use App\Models\Tenant;
 use App\Models\User;
+use App\Services\Audit\AuditLogger;
 use Illuminate\Auth\Events\Lockout;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Support\Facades\Auth;
@@ -43,6 +44,8 @@ class LoginRequest extends FormRequest
         if (! Auth::attempt($this->only('email', 'password'), $this->boolean('remember'))) {
             RateLimiter::hit($this->throttleKey());
 
+            $this->logFailedLogin(null, 'Invalid credentials.');
+
             throw ValidationException::withMessages([
                 'email' => 'These credentials do not match our records.',
             ]);
@@ -56,6 +59,8 @@ class LoginRequest extends FormRequest
         if (! $this->isAllowedToLoginHere($user)) {
             Auth::logout();
 
+            $this->logFailedLogin($user, 'Wrong domain for this account.');
+
             throw ValidationException::withMessages([
                 'email' => 'These credentials do not match our records.',
             ]);
@@ -64,6 +69,8 @@ class LoginRequest extends FormRequest
         if (! $user->isActive()) {
             Auth::logout();
 
+            $this->logFailedLogin($user, "Account status is {$user->status}.");
+
             throw ValidationException::withMessages([
                 'email' => "Your account is {$user->status}. Contact your administrator.",
             ]);
@@ -71,6 +78,8 @@ class LoginRequest extends FormRequest
 
         if (! $user->is_platform_admin && (! $user->tenant || ! $user->tenant->isActive())) {
             Auth::logout();
+
+            $this->logFailedLogin($user, 'Tenant is not active.');
 
             throw ValidationException::withMessages([
                 'email' => 'Your organisation is not currently active. Contact your administrator.',
@@ -84,7 +93,42 @@ class LoginRequest extends FormRequest
 
         $this->session()->regenerate();
 
+        AuditLogger::logFor(
+            actor: $user,
+            action: 'login.success',
+            module: 'auth',
+            targetUserId: $user->id,
+            description: 'User logged in.',
+            ipAddress: $this->ip(),
+            userAgent: $this->userAgent(),
+        );
+
         return $user;
+    }
+
+    /**
+     * Logs a failed login attempt. actorUserId is only set when we've
+     * already resolved which user was targeted (i.e. credentials were
+     * valid but a later check failed) — for an outright bad-credentials
+     * attempt, the attempted email is recorded in metadata instead, never
+     * the password.
+     */
+    protected function logFailedLogin(?User $user, string $reason): void
+    {
+        $resolvedTenant = app()->bound(Tenant::class) ? app(Tenant::class) : null;
+
+        AuditLogger::log(
+            action: 'login.failed',
+            module: 'auth',
+            actorUserId: $user?->id,
+            tenantId: $user?->tenant_id ?? $resolvedTenant?->id,
+            targetUserId: $user?->id,
+            description: $reason,
+            metadata: $user ? null : ['attempted_email' => $this->input('email')],
+            ipAddress: $this->ip(),
+            userAgent: $this->userAgent(),
+            severity: 'warning',
+        );
     }
 
     /**

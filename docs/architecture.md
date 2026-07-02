@@ -72,6 +72,25 @@ Two things worth knowing at the architecture level:
   a `Gate::before()` hook) — there's exactly one place permission logic
   lives, not three parallel implementations that could drift.
 
+## Audit Logging
+
+`AuditLogger` (`app/Services/Audit/AuditLogger.php`) is the single
+reusable entry point every module should use to record security-relevant
+events — see [`security.md`](security.md#audit-logging) for the full
+design, what's currently wired up, and the masking rules. Two
+architectural points worth knowing here:
+
+- **`AuditLog` is append-only at the model layer** — `save()` on an
+  existing row and `delete()` both throw, not just "no UI exists to do
+  it yet."
+- **`tenant_id` is always explicit**, same rule as `User` — no
+  `BelongsToTenant` auto-fill, since audit events happen in contexts
+  (login, CLI, seeders) where an ambient bound tenant would be unreliable.
+
+Future modules (Employee Records onward) should call `AuditLogger::log()`
+or `AuditLogger::logFor()` directly from controllers/model methods for
+any sensitive action — don't build a parallel logging mechanism.
+
 ## Internal IDs vs. Public-Facing References
 
 Internal database IDs may remain bigint (see

@@ -52,7 +52,7 @@ Order matters, and is deliberate:
 
 Checking domain/status *after* credentials avoids leaking account-state information (e.g. "this account is suspended") to someone who hasn't already proven they hold the correct password.
 
-**Audit-ready, not yet audited.** Login/logout use Laravel's `Auth` facade directly, which automatically fires `Login`, `Logout`, and `Failed` events. No `audit_logs` table exists yet (a later checkpoint) — when it does, a listener on these events can capture login activity without touching this code.
+**Audited.** `login.success`, `login.failed` (at every rejection point — bad credentials, wrong domain, inactive account, inactive tenant), and `logout` are all written to `audit_logs` directly from `LoginRequest`/`AuthenticatedSessionController` via `AuditLogger` — see [Audit Logging](#audit-logging) below.
 
 **CSRF**: standard Laravel `web` middleware group protection is active on `/login` and `/logout` (verified against the real running app — an unauthenticated POST without a valid CSRF token is correctly rejected with 419).
 
@@ -159,6 +159,104 @@ rows. Deferred rather than half-built now, per your "no sensitive shortcut
 for speed" rule — an expiry column nobody enforces yet would be worse than
 no expiry column.
 
+## Audit Logging
+
+### Table design
+
+`audit_logs` is append-only — no `updated_at`, no soft delete. Enforced at
+the model layer: `AuditLog::save()` throws if called on an existing row,
+`AuditLog::delete()` always throws. This holds regardless of what future
+code touches the model — not dependent on "no UI exists to do it yet."
+Full column reference in [`database.md`](database.md#audit_logs).
+
+**`tenant_id` is always explicit, never inferred.** Unlike tenant-owned
+business models (which use `BelongsToTenant`'s auto-fill from the
+container-bound `Tenant`), `AuditLog` doesn't use that trait — audit
+events happen in contexts (login, CLI, seeders) where an ambient bound
+tenant would be unreliable or simply absent. Every call site passes
+`tenantId` explicitly (or explicitly `null` for platform-level events).
+
+### The `AuditLogger` service
+
+`app/Services/Audit/AuditLogger.php` — two entry points:
+
+- `AuditLogger::log(...)` — full control, every field explicit.
+- `AuditLogger::logFor($actor, ...)` — convenience wrapper that derives
+  `actorUserId`/`actorType`/`tenantId` from a `?User $actor` (falls back to
+  `system`/`null` when `$actor` is `null`, e.g. seeder-driven actions).
+
+Designed to be callable from anywhere — controllers, model methods,
+services, jobs, authentication events — since it takes plain scalars/arrays,
+not a `Request` object or other HTTP-bound dependency.
+
+### Automatic sensitive-value masking
+
+`old_values`/`new_values` are scanned for known-sensitive key
+names/substrings (`password`, `token`, `secret`, `bank`,
+`account_number`, `national_id`, `passport`, `salary`, `ssn`, `tax_id` —
+case-insensitive substring match, so `bank_account_number`,
+`national_id_number`, etc. are all caught without enumerating every exact
+field name) and masked to `***MASKED***`. **This happens automatically,
+regardless of whether the caller remembered to exclude the field** —
+defense in depth, not just caller discipline. `metadata` is *not*
+masked — don't put sensitive data there; it's meant for small contextual
+tags (e.g. `attempted_email` on a failed login), not record snapshots.
+
+### What's currently logged
+
+| Action | Module | Where |
+|---|---|---|
+| `login.success` | `auth` | `LoginRequest::authenticate()` |
+| `login.failed` | `auth` | `LoginRequest::authenticate()` — at every rejection point (bad credentials, wrong domain, inactive account, inactive tenant) |
+| `logout` | `auth` | `AuthenticatedSessionController::destroy()` |
+| `role.assigned` | `rbac` | `User::assignRole()` |
+| `role.removed` | `rbac` | `User::removeRole()` |
+| `permission.granted` | `rbac` | `User::grantPermission()` |
+| `permission.revoked` | `rbac` | `User::revokePermission()` |
+
+**Not yet logged, and why:**
+- `Role::givePermissionTo()` (attaching a permission to a *role*, as
+  opposed to a direct grant to a *user*) — not in the originally-scoped
+  event list for this checkpoint. A role's permission set changing is
+  still security-relevant (it affects everyone holding that role); revisit
+  before RBAC management gets a real admin UI.
+- Tenant creation/update — no tenant management code path exists yet
+  beyond `TenantSeeder` (a dev bootstrapping script, not a meaningful
+  security event to log). Wire this when a real Platform Super Admin
+  tenant-management feature is built.
+
+`assignRole()`/`removeRole()`/`grantPermission()`/`revokePermission()` all
+accept an optional `?User $performedBy` parameter — `null` when called
+from a seeder/system context (`actor_type` becomes `system`), the acting
+user when called from a real request context.
+
+### Platform-level vs. tenant-level audit logs
+
+Same pattern as everywhere else: `tenant_id IS NULL` for platform-level
+events (e.g. a platform admin's own role assignment), non-null for
+tenant-scoped events. Tested directly
+(`AuditLoggingTest::test_platform_level_action_can_create_audit_log_with_nullable_tenant_id`).
+
+### Current limitations
+
+- **No read/viewing endpoint** — this checkpoint is write-only (recording
+  events), by design (no Audit UI, no export, no search — explicitly
+  out of scope). Tenant-scoped read access control is future work.
+- **No audit trail for `Role::givePermissionTo()`** — see above.
+- **No audit trail for tenant creation/update** — see above.
+- **`RbacTest`'s pre-Checkpoint-5 role/permission assertions don't pass an
+  actor** — they still work (actor is optional), but predate audit
+  logging, so don't demonstrate the `performedBy` parameter. New tests in
+  `AuditLoggingTest` do.
+
+### Future: Audit UI / Export
+
+Not built. When it is: a read-only viewing interface, tenant-scoped for
+tenant users (never cross-tenant), unrestricted for platform admins
+viewing platform-level logs; export as a separate, explicitly-permissioned
+capability (`audit.export`, already seeded as a permission key, unused
+until then); no SIEM integration planned at this stage.
+
 ## Local Demo Credentials
 
 **Local development only — these are not real secrets and only work against your own local database.** Password comes from `SEED_USER_PASSWORD` in `.env` (not committed; `.env.example` has an empty placeholder).
@@ -181,7 +279,7 @@ other 17 roles per tenant exist as empty placeholders for future modules.
 
 - No email verification enforcement on login (column exists, not yet checked).
 - No password reset flow yet (table exists from Laravel's default scaffold, unused).
-- No audit log table yet — see "Audit-ready, not yet audited" above. RBAC assignment/grant/revoke actions aren't logged anywhere yet either.
-- `DatabaseSeeder` uses `WithoutModelEvents`, which disables the `saving`/`creating` guards (on `User` and `Role`) during seeding. `UserSeeder`/`RoleSeeder` set `tenant_id`/`is_platform_admin`/`is_platform_role` explicitly on every row regardless, so this doesn't cause incorrect data — but it does mean a same-row consistency mistake in seed data would surface as a raw Postgres constraint error rather than the cleaner app-level exception. (The RBAC *assignment* guards — `assignRole()`, `givePermissionTo()`, `grantPermission()` — are unaffected by this, since they're plain method logic, not Eloquent events.)
+- `DatabaseSeeder` uses `WithoutModelEvents`, which disables the `saving`/`creating` guards (on `User` and `Role`) during seeding. `UserSeeder`/`RoleSeeder` set `tenant_id`/`is_platform_admin`/`is_platform_role` explicitly on every row regardless, so this doesn't cause incorrect data — but it does mean a same-row consistency mistake in seed data would surface as a raw Postgres constraint error rather than the cleaner app-level exception. (The RBAC *assignment* guards — `assignRole()`, `givePermissionTo()`, `grantPermission()` — and audit logging calls are unaffected by this, since they're plain method logic, not Eloquent events.)
+- See "Current limitations" under Audit Logging above for the audit-specific gaps (no read endpoint, `givePermissionTo()`/tenant CRUD not logged yet).
 - No permission caching — `hasPermission()` hits the database on every call (two queries: role-permission lookup, direct-grant lookup). Fine for foundation-stage traffic; revisit if it becomes a hot path.
 - 17 of 20 seeded tenant roles per tenant have no permissions attached yet (by design — placeholders for modules that don't exist yet).

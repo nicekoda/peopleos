@@ -23,7 +23,7 @@ class PermissionSeeder extends Seeder
             'roles' => ['view', 'create', 'update', 'delete'],
             'permissions' => ['view', 'assign', 'grant_direct', 'revoke_direct'],
             'employees' => ['view', 'create', 'update', 'delete', 'view_sensitive', 'export'],
-            'documents' => ['view', 'upload', 'download', 'delete', 'approve'],
+            'documents' => ['view', 'upload', 'download', 'delete', 'approve', 'view_sensitive'],
             'leave' => ['view', 'request', 'approve', 'reject'],
             'announcements' => ['view', 'create', 'publish'],
             'audit' => ['view', 'export'],

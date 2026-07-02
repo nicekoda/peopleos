@@ -416,6 +416,127 @@ changed — `updated_at`/`updated_by` bumps alone don't trigger a log
 entry), `employee.deleted` (soft delete). All include `old_values`/
 `new_values` where relevant, with `personal_email`/`phone` masked.
 
+## Document Repository
+
+The second tenant-owned business module — see [`api.md`](api.md) for the
+endpoint reference and [`database.md`](database.md#document_categories)
+for the table design.
+
+### Private storage — the core rule
+
+Files live on the `local` disk (`storage/app/private`), Laravel 11's
+default private root — **not** `storage/app/public` (which is symlinked
+to `public/storage` and *is* web-accessible). No document is ever placed
+under the public disk. Verified directly during this checkpoint: a
+real (non-faked) file written through the same code path the controller
+uses was confirmed to exist on disk but **not** exist under
+`public/storage` — not just asserted, checked.
+
+Additional layers beyond "which disk":
+
+- **Randomized stored filename** (`Str::random(40)` + extension) —
+  `original_filename` is kept as display-only metadata, never used for
+  the actual storage path or serving. This also structurally prevents
+  double-extension attacks (`resume.pdf.exe`) — the file is never stored
+  or served under any name derived from the client-provided one.
+- **Tenant- and employee-segregated storage path**
+  (`employee-documents/{tenant_id}/{employee_id}/{random}.{ext}`) —
+  defense in depth on top of the database-level tenant scoping, in case
+  storage-path logic is ever reused somewhere that doesn't go through the
+  DB layer.
+- **No signed temporary URLs** — Laravel's `temporaryUrl()` isn't
+  supported by the `local` driver (only cloud drivers like S3). Every
+  download goes through `EmployeeDocumentController::download()`, which
+  runs the full permission/tenant/ownership/sensitivity check chain
+  before streaming the file — per your explicit fallback instruction.
+- **Checksum** (SHA-256) computed at upload time and stored — not yet
+  used to verify integrity on download (no corruption-detection feature
+  built), but available for a future one without a schema change.
+
+### File validation
+
+Extension **and** detected MIME type must both match the allow-list
+(`pdf`, `doc`, `docx`, `jpg`, `jpeg`, `png`) — Laravel's `File` validation
+rule inspects actual file content (via PHP's fileinfo), not just the
+client-declared `Content-Type` header or filename extension, so a
+renamed executable (`malware.exe` → `malware.pdf`) fails validation
+because its real content doesn't match PDF's expected signature.
+
+Max size: **10MB** — not specified in the original spec, chosen as a
+reasonable default for HR document scans/PDFs (`StoreEmployeeDocumentRequest::MAX_FILE_SIZE_KB`).
+Easy to change; flagged as a decision, not a given.
+
+### Permission mapping
+
+| Permission | Grants |
+|---|---|
+| `documents.view` | List/view document metadata (excluding sensitive documents without `view_sensitive`) |
+| `documents.upload` | Upload documents |
+| `documents.download` | Download document files |
+| `documents.delete` | Soft-delete/archive documents |
+| `documents.view_sensitive` | See and download sensitive documents, on top of `documents.view`/`documents.download` |
+| `documents.approve` | Reserved — no approval workflow endpoint exists yet (`approved_by`/`approved_at` columns exist, unused) |
+
+**`documents.view_sensitive` is a new, dedicated permission — not a reuse
+of `employees.view_sensitive`.** A document's sensitivity is a property
+of the document/category, independent of whether specific *employee*
+fields are sensitive; conflating the two would have made both harder to
+reason about. Seeded in `PermissionSeeder`, tested directly.
+
+### Sensitive documents: excluded entirely, not field-masked
+
+Unlike `employees.view_sensitive` (which masks specific *fields* like
+`personal_email`/`phone` while still showing the rest of the record), a
+sensitive *document* without `documents.view_sensitive` is **excluded
+entirely** from list results, and `show`/`download` return `404` (not
+`403`) — the same "don't reveal existence" posture used for cross-tenant
+access. This is deliberate: there's no sensible "partial view" of a
+document the way there is for a masked phone number, and a sensitive
+document's mere existence (e.g. a disciplinary letter) can itself be
+worth protecting.
+
+`is_sensitive` on `employee_documents` is inherited from the chosen
+`document_category.is_sensitive` at upload time — not a field the
+uploader sets directly, since no category-management endpoint exists yet
+to make that a meaningful independent choice.
+
+### Object-level checks — three layers, the Checkpoint 7 pattern applied again
+
+1. `tenant.matches` middleware (session belongs to the right tenant at all).
+2. `BelongsToTenant` global scope (query/route-model-binding filtered to the resolved tenant).
+3. **Two** explicit controller checks, not one: `ensureEmployeeBelongsToCurrentTenant()` *and* `ensureDocumentBelongsToEmployee()` — a document ID valid for a *different employee in the same tenant* must still be rejected. This is a genuinely new check beyond Checkpoint 6/7's pattern, since documents are nested under employees (`/employees/{employee}/documents/{document}`), not top-level.
+
+### Audit events
+
+`document.uploaded`, `document.viewed` (single-document `show` only —
+**not** logged per-row on `index`/list, a scope decision: logging every
+row in a paginated list separately seemed noisy without clear
+investigative value; revisit if a real need for list-level audit
+granularity emerges), `document.downloaded`, `document.deleted`.
+
+**What's deliberately excluded from every audit log entry:**
+- File contents — never read into the log, only metadata.
+- `storage_path`/`storage_disk`/`stored_filename` — the *location* of a
+  private file is itself sensitive-adjacent information; logs record
+  `document_category_id`, `title`, `mime_type`, `file_size`, and similar
+  safe metadata only.
+
+### Current limitations
+
+- No document category management endpoint — categories exist only as a
+  schema + factories for tests; created via seeder/tinker for now.
+- No approval workflow — `documents.approve` permission and
+  `approved_by`/`approved_at` columns are reserved, unused placeholders.
+- No malware scanning — file content is validated by type/size/detected
+  MIME only, not scanned for malicious payloads.
+- No cloud storage (S3, etc.) — local private disk only, matches your
+  explicit "don't build ahead of a real need" instruction for this
+  checkpoint.
+- No document-policy-acknowledgement link — that's a distinct future
+  module (Policy Management), not built yet.
+- `checksum` is computed and stored but not yet used to verify integrity
+  on download.
+
 ## Local Demo Credentials
 
 **Local development only — these are not real secrets and only work against your own local database.** Password comes from `SEED_USER_PASSWORD` in `.env` (not committed; `.env.example` has an empty placeholder).

@@ -145,6 +145,27 @@ If any one of these is ever weakened by a future change, the other two
 still hold. Every future tenant-scoped module should include all three,
 not just whichever one is most convenient to remember.
 
+## Document Repository
+
+Second tenant-owned business module — see [`api.md`](api.md),
+[`database.md`](database.md#document_categories), and
+[`security.md`](security.md#document-repository) for the full design.
+
+**Extends the three-layer pattern above to four**, because documents are
+*nested* under employees (`/employees/{employee}/documents/{document}`),
+not a top-level resource: `tenant.matches` → `BelongsToTenant` global
+scope → employee-belongs-to-tenant check → **document-belongs-to-that-
+specific-employee check**. A document ID that's valid for the current
+tenant but belongs to a *different* employee than the one in the route
+must still be rejected — the tenant-level checks alone don't catch this,
+since it's a same-tenant, different-parent-resource case.
+
+**Private storage is non-negotiable and verified, not assumed.** Files
+go to `storage/app/private` only; this was confirmed directly (a real
+file written through the actual controller code path, checked to exist
+on disk but not under `public/storage`) rather than inferred from
+Laravel's disk configuration alone.
+
 ## Internal IDs vs. Public-Facing References
 
 Internal database IDs may remain bigint (see

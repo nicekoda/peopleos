@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\Api\V1\EmployeeController;
+use App\Http\Controllers\Api\V1\EmployeeDocumentController;
 use Illuminate\Support\Facades\Route;
 
 /*
@@ -31,4 +32,10 @@ Route::middleware(['auth', 'tenant.matches'])->prefix('api/v1')->group(function 
     Route::get('employees/{employee}', [EmployeeController::class, 'show'])->middleware('permission:employees.view');
     Route::patch('employees/{employee}', [EmployeeController::class, 'update'])->middleware('permission:employees.update');
     Route::delete('employees/{employee}', [EmployeeController::class, 'destroy'])->middleware('permission:employees.delete');
+
+    Route::get('employees/{employee}/documents', [EmployeeDocumentController::class, 'index'])->middleware('permission:documents.view');
+    Route::post('employees/{employee}/documents', [EmployeeDocumentController::class, 'store'])->middleware('permission:documents.upload');
+    Route::get('employees/{employee}/documents/{document}', [EmployeeDocumentController::class, 'show'])->middleware('permission:documents.view');
+    Route::get('employees/{employee}/documents/{document}/download', [EmployeeDocumentController::class, 'download'])->middleware('permission:documents.download');
+    Route::delete('employees/{employee}/documents/{document}', [EmployeeDocumentController::class, 'destroy'])->middleware('permission:documents.delete');
 });

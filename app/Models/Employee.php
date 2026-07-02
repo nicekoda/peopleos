@@ -82,6 +82,11 @@ class Employee extends Model
         return $this->hasMany(Employee::class, 'manager_employee_id');
     }
 
+    public function documents(): HasMany
+    {
+        return $this->hasMany(EmployeeDocument::class);
+    }
+
     public function createdBy(): BelongsTo
     {
         return $this->belongsTo(User::class, 'created_by');

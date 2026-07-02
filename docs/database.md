@@ -197,3 +197,50 @@ error, not a false start.
 No payroll, salary, bank details, medical information, disciplinary
 information, or documents in this table — deliberately deferred to
 separate, more sensitive future checkpoints per your instruction.
+
+### `document_categories`
+
+Same shape/pattern as `departments`/`locations`/`positions` (tenant-owned
+lookup table, no CRUD endpoints yet), extended with fields specific to
+document governance.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | ulid, primary key | |
+| `tenant_id` | ulid, FK → `tenants.id` `RESTRICT` | |
+| `name` / `slug` | string | Unique per tenant |
+| `description` | text, nullable | |
+| `applies_to` | string, default `employee` | `App\Enums\DocumentAppliesTo`: `employee` \| `tenant` \| `policy` \| `candidate` \| `general` — only `employee` is actually used yet (no tenant/policy/candidate document flows exist) |
+| `is_sensitive` | boolean, default `false` | Documents uploaded under a sensitive category inherit this on upload — see `security.md` |
+| `is_required` | boolean, default `false` | Reserved — no onboarding/completeness-checking feature reads this yet |
+| `requires_expiry_date` | boolean, default `false` | Enforced at upload time — see `docs/api.md` validation rules |
+| `status` | string, default `active` | `App\Enums\DocumentCategoryStatus`: `active` \| `inactive` |
+| `created_by` / `updated_by` | bigint, nullable, FK → `users.id` `SET NULL` | No category-management endpoint exists yet, so these are unused in practice this checkpoint |
+| `deleted_at` | timestamp, nullable | Soft delete |
+
+### `employee_documents`
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | ulid, primary key | |
+| `tenant_id` | ulid, FK → `tenants.id` `RESTRICT` | |
+| `employee_id` | ulid, FK → `employees.id` `CASCADE` | |
+| `document_category_id` | ulid, nullable, FK → `document_categories.id` `SET NULL` | Must belong to the same tenant — validated in the FormRequest |
+| `title` / `description` | string / text, nullable | |
+| `original_filename` | string | **Display metadata only** — never used for storage or serving |
+| `stored_filename` | string | Randomized (`Str::random(40)` + extension) — never derived from the original filename |
+| `storage_disk` | string | `local` (`storage/app/private`, not web-accessible) |
+| `storage_path` | string | Never exposed via the API — see `security.md` |
+| `mime_type` / `file_extension` / `file_size` | string / string / bigint | From the actual uploaded file, not client-declared values alone |
+| `checksum` | string(64), nullable | SHA-256 of file content |
+| `status` | string, default `active` | `App\Enums\DocumentStatus`: `active` \| `archived` \| `rejected` — **no `deleted` value**, see note below |
+| `is_sensitive` | boolean, default `false` | Inherited from `document_category.is_sensitive` at upload time |
+| `issue_date` / `expiry_date` | date, nullable | `expiry_date` must be ≥ `issue_date`; required if the category has `requires_expiry_date` |
+| `uploaded_by` / `approved_by` / `approved_at` | bigint/bigint/timestamp, nullable | `approved_by`/`approved_at` are placeholder columns — no approval workflow endpoint exists yet |
+| `deleted_at` | timestamp, nullable | Soft delete — the `DELETE` endpoint soft-deletes only |
+
+**Why `status` has no `deleted` value:** the spec listed
+`active/archived/deleted/rejected`, but this table also has `deleted_at`
+(soft delete). Using both would let a row be `status=active` *and*
+soft-deleted simultaneously — contradictory. `deleted_at` is the actual
+delete mechanism; `status` covers the remaining three states.

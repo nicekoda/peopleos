@@ -86,6 +86,34 @@ resource end-to-end:
 - `assertNotFound()` (404), not `assertForbidden()` (403), for cross-tenant
   access attempts — don't reveal that a record exists in another tenant.
 
+## Testing nested tenant-scoped resources (parent + child ownership)
+
+`EmployeeDocumentApiTest` extends the pattern above for a resource nested
+under another (`/employees/{employee}/documents/{document}`):
+
+- Cross-tenant tests need fixtures for **both** the tenant boundary *and*
+  the parent-child boundary — e.g. `test_document_must_belong_to_employee_in_route`
+  creates two employees *in the same tenant* and confirms a document
+  belonging to one is rejected when accessed via the other's route, which
+  a tenant-only check wouldn't catch.
+- `Storage::fake('local')` in `setUp()` — never touches the real
+  filesystem during tests. Use `UploadedFile::fake()->create($name,
+  $kilobytes, $mimeType)` for upload tests; passing an explicit
+  `$mimeType` matters for negative tests (rejecting a `.exe`), since
+  Laravel's fake files don't have real file-signature bytes to detect
+  content from.
+- For tests that need an *existing* document (not uploading a new one —
+  show/download/delete tests), `EmployeeDocumentFactory` writes a real
+  fake file to the faked disk in an `afterCreating()` callback, so
+  `Storage::disk(...)->download(...)` has something real to stream
+  without every test needing its own upload step first.
+- **Structural, not just behavioral, middleware assertions are valuable
+  too.** `test_all_document_routes_include_tenant_matches_middleware`
+  inspects `Route::getRoutes()` directly and asserts `tenant.matches` is
+  present on every document route — this catches "someone added a new
+  route and forgot the middleware" even if no test happens to exercise
+  the specific cross-tenant scenario that middleware protects against.
+
 ## Verifying against the real app, not just the test suite
 
 Because of the SQLite/Postgres split above, checkpoints in this project

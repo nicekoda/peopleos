@@ -130,17 +130,89 @@ Validation errors return Laravel's standard 422 shape
 (`{"message": ..., "errors": {"field": ["message"]}}`) — no stack traces,
 no internal detail, regardless of `APP_DEBUG`.
 
+## Employee Documents
+
+Nested under employees — a document always belongs to exactly one
+employee in the current tenant.
+
+| Method | Path | Permission | Notes |
+|---|---|---|---|
+| `GET` | `/api/v1/employees/{employee}/documents` | `documents.view` | Paginated; sensitive documents excluded without `documents.view_sensitive` |
+| `POST` | `/api/v1/employees/{employee}/documents` | `documents.upload` | `multipart/form-data`, field name `file` |
+| `GET` | `/api/v1/employees/{employee}/documents/{document}` | `documents.view` | 404 if the document belongs to another tenant, another employee, or is sensitive without `documents.view_sensitive` |
+| `GET` | `/api/v1/employees/{employee}/documents/{document}/download` | `documents.download` | Streams the file; same 404 conditions as above |
+| `DELETE` | `/api/v1/employees/{employee}/documents/{document}` | `documents.delete` | Soft delete only |
+
+**`tenant_id` is never accepted as request input**, same rule as
+Employees. `document_category_id` must belong to the same tenant if
+provided.
+
+### Upload validation rules
+
+| Field | Rules |
+|---|---|
+| `file` | required, type in `pdf`/`doc`/`docx`/`jpg`/`jpeg`/`png` (validated by detected content, not just extension), max 10MB |
+| `title` | required, string |
+| `description` | nullable, string |
+| `document_category_id` | nullable, must exist and belong to the same tenant |
+| `issue_date` | nullable, valid date |
+| `expiry_date` | nullable, valid date, ≥ `issue_date`; **required** if the chosen category has `requires_expiry_date` |
+
+### Response shape
+
+`EmployeeDocumentResource` never includes `storage_disk`, `storage_path`,
+or `stored_filename` — only `original_filename` (display metadata) and
+safe fields:
+
+```json
+{
+  "data": {
+    "id": "01h...",
+    "employee_id": "01h...",
+    "document_category_id": null,
+    "title": "Passport Copy",
+    "description": null,
+    "original_filename": "passport.pdf",
+    "mime_type": "application/pdf",
+    "file_extension": "pdf",
+    "file_size": 102400,
+    "status": "active",
+    "is_sensitive": false,
+    "issue_date": null,
+    "expiry_date": null,
+    "uploaded_by": 3,
+    "approved_by": null,
+    "approved_at": null,
+    "created_at": "2026-07-02T00:00:00+00:00",
+    "updated_at": "2026-07-02T00:00:00+00:00"
+  }
+}
+```
+
+### Download
+
+`GET .../download` streams the file directly (`Storage::download()`)
+through the same permission/tenant/ownership/sensitivity check chain as
+every other action — there is no separate signed-URL or direct-link
+mechanism (the `local` disk doesn't support one; see `docs/security.md`).
+
 ## Current limitations
 
 - No export endpoint (`employees.export` permission is seeded but unused — explicitly out of scope this checkpoint).
 - No bulk actions.
 - No `departments`/`locations`/`positions` CRUD endpoints — they exist only to support employee FK validation.
+- No `document_categories` CRUD endpoint — same pattern, categories exist only to support document FK validation and the `requires_expiry_date`/`is_sensitive` rules.
+- No document approval workflow endpoint — `documents.approve` permission and `approved_by`/`approved_at` columns are reserved, unused.
 - Pagination uses Laravel's default page-number style; no cursor pagination or configurable page size yet.
 - Session-based auth only — see "Authentication" above for the full future Sanctum/token plan.
 
 ## Future
 
 - `employees.export` — CSV/Excel export, permission already reserved.
-- Salary, bank details, medical information, disciplinary records, documents — separate future checkpoints, each with their own sensitivity handling (per the master constitution — these are explicitly more sensitive than what this checkpoint covers).
+- Salary, bank details, medical information, disciplinary records — separate future checkpoints, each with their own sensitivity handling (per the master constitution — these are explicitly more sensitive than what this checkpoint covers).
 - Leave, performance, lifecycle timeline — later HR modules building on this foundation.
 - A real numbering scheme for `employee_number` (currently manually provided).
+- Document approval workflow (`documents.approve`, `approved_by`/`approved_at` already reserved in the schema).
+- Malware scanning on upload (currently type/size/content-detection validation only, no payload scanning).
+- Cloud storage (S3 or similar) — local private disk only for now; the storage layer is already abstracted behind `storage_disk`/`storage_path` on the model, so this is a lower-effort future change than it might otherwise be.
+- Policy Management / Policy Acknowledgement linking documents to required-reading workflows — a distinct future module, not built yet.

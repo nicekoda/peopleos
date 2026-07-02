@@ -1,58 +1,52 @@
-<p align="center"><a href="https://laravel.com" target="_blank"><img src="https://raw.githubusercontent.com/laravel/art/master/logo-lockup/5%20SVG/2%20CMYK/1%20Full%20Color/laravel-logolockup-cmyk-red.svg" width="400" alt="Laravel Logo"></a></p>
+# PeopleOS
 
-<p align="center">
-<a href="https://github.com/laravel/framework/actions"><img src="https://github.com/laravel/framework/workflows/tests/badge.svg" alt="Build Status"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/dt/laravel/framework" alt="Total Downloads"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/v/laravel/framework" alt="Latest Stable Version"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/l/laravel/framework" alt="License"></a>
-</p>
+Enterprise Human Resource Intelligence Platform. Built with Laravel + PostgreSQL.
 
-## About Laravel
+## Local Development Setup (Windows / Laragon)
 
-Laravel is a web application framework with expressive, elegant syntax. We believe development must be an enjoyable and creative experience to be truly fulfilling. Laravel takes the pain out of development by easing common tasks used in many web projects, such as:
+**Requirements**
 
-- [Simple, fast routing engine](https://laravel.com/docs/routing).
-- [Powerful dependency injection container](https://laravel.com/docs/container).
-- Multiple back-ends for [session](https://laravel.com/docs/session) and [cache](https://laravel.com/docs/cache) storage.
-- Expressive, intuitive [database ORM](https://laravel.com/docs/eloquent).
-- Database agnostic [schema migrations](https://laravel.com/docs/migrations).
-- [Robust background job processing](https://laravel.com/docs/queues).
-- [Real-time event broadcasting](https://laravel.com/docs/broadcasting).
+- PHP 8.3+
+- PostgreSQL (this project connects to `peopleos_dev`)
+- Composer
 
-Laravel is accessible, powerful, and provides tools required for large, robust applications.
+**PostgreSQL PHP extensions are scoped to this project only.**
 
-## Learning Laravel
+This project requires the `pdo_pgsql` and `pgsql` PHP extensions, but they are
+**not** enabled in the machine-wide `php.ini`. Instead, a project-local
+`php.ini` lives at the repo root (git-ignored, machine-specific) with those
+extensions enabled.
 
-Laravel has the most extensive and thorough [documentation](https://laravel.com/docs) and video tutorial library of all modern web application frameworks, making it a breeze to get started with the framework.
-
-In addition, [Laracasts](https://laracasts.com) contains thousands of video tutorials on a range of topics including Laravel, modern PHP, unit testing, and JavaScript. Boost your skills by digging into our comprehensive video library.
-
-You can also watch bite-sized lessons with real-world projects on [Laravel Learn](https://laravel.com/learn), where you will be guided through building a Laravel application from scratch while learning PHP fundamentals.
-
-## Agentic Development
-
-Laravel's predictable structure and conventions make it ideal for AI coding agents like Claude Code, Cursor, and GitHub Copilot. Install [Laravel Boost](https://laravel.com/docs/ai) to supercharge your AI workflow:
+Because Windows PHP CLI does not automatically pick up a `php.ini` from the
+current working directory, use the wrapper scripts instead of calling `php`,
+`artisan`, or `composer` directly from this project:
 
 ```bash
-composer require laravel/boost --dev
-
-php artisan boost:install
+./artisan.bat migrate
+./artisan.bat test
+./composer.bat install
 ```
 
-Boost provides your agent 15+ tools and skills that help agents build Laravel applications while following best practices.
+These wrappers set `PHPRC` to the project's `php.ini` before invoking the
+underlying command, so the extensions apply only within this project and
+never leak into other projects on the same machine.
 
-## Contributing
+If `php.ini` doesn't exist yet (fresh clone), copy it from your machine's
+base Laragon `php.ini` and uncomment the `pdo_pgsql` and `pgsql` extension
+lines.
 
-Thank you for considering contributing to the Laravel framework! The contribution guide can be found in the [Laravel documentation](https://laravel.com/docs/contributions).
+**Database configuration**
 
-## Code of Conduct
+Copy `.env.example` to `.env` and fill in your local PostgreSQL credentials
+(`DB_CONNECTION=pgsql`). Then run:
 
-In order to ensure that the Laravel community is welcoming to all, please review and abide by the [Code of Conduct](https://laravel.com/docs/contributions#code-of-conduct).
+```bash
+./artisan.bat migrate
+```
 
-## Security Vulnerabilities
+## Project Standards
 
-If you discover a security vulnerability within Laravel, please send an e-mail to Taylor Otwell via [taylor@laravel.com](mailto:taylor@laravel.com). All security vulnerabilities will be promptly addressed.
-
-## License
-
-The Laravel framework is open-sourced software licensed under the [MIT license](https://opensource.org/licenses/MIT).
+See `PeopleOS Master Development Constitution` and related standards
+documents (security, database, API, QA, Git, AI governance) for the rules
+governing how this codebase is built. Development proceeds checkpoint by
+checkpoint — no major feature is added without explicit scope agreement.

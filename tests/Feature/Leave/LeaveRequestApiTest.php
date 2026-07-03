@@ -251,7 +251,11 @@ class LeaveRequestApiTest extends TestCase
     public function test_hr_user_with_approve_can_approve_pending_request(): void
     {
         $tenant = Tenant::factory()->create();
-        $hrUser = $this->userWithPermissions($tenant, 'leave.approve');
+        // leave.approve alone is no longer sufficient as of Checkpoint
+        // 14 — HR/Admin-scoped approval requires leave.view_all too
+        // (Line Manager-scoped approval requires a direct-management
+        // relationship instead, see ManagerScopedLeaveApprovalTest).
+        $hrUser = $this->userWithPermissions($tenant, 'leave.approve', 'leave.view_all');
         $employee = Employee::factory()->create(['tenant_id' => $tenant->id]);
         $leaveRequest = LeaveRequest::factory()->pending()->create(['tenant_id' => $tenant->id, 'employee_id' => $employee->id]);
 
@@ -280,7 +284,9 @@ class LeaveRequestApiTest extends TestCase
     public function test_hr_user_with_reject_can_reject_pending_request(): void
     {
         $tenant = Tenant::factory()->create();
-        $hrUser = $this->userWithPermissions($tenant, 'leave.reject');
+        // leave.reject alone is no longer sufficient as of Checkpoint 14
+        // — see the leave.approve note above.
+        $hrUser = $this->userWithPermissions($tenant, 'leave.reject', 'leave.view_all');
         $employee = Employee::factory()->create(['tenant_id' => $tenant->id]);
         $leaveRequest = LeaveRequest::factory()->pending()->create(['tenant_id' => $tenant->id, 'employee_id' => $employee->id]);
 
@@ -313,7 +319,9 @@ class LeaveRequestApiTest extends TestCase
     public function test_rejection_requires_rejection_reason(): void
     {
         $tenant = Tenant::factory()->create();
-        $hrUser = $this->userWithPermissions($tenant, 'leave.reject');
+        // leave.reject alone is no longer sufficient as of Checkpoint 14
+        // — see the leave.approve note above.
+        $hrUser = $this->userWithPermissions($tenant, 'leave.reject', 'leave.view_all');
         $employee = Employee::factory()->create(['tenant_id' => $tenant->id]);
         $leaveRequest = LeaveRequest::factory()->pending()->create(['tenant_id' => $tenant->id, 'employee_id' => $employee->id]);
 
@@ -362,7 +370,11 @@ class LeaveRequestApiTest extends TestCase
     public function test_invalid_status_transition_is_rejected(): void
     {
         $tenant = Tenant::factory()->create();
-        $hrUser = $this->userWithPermissions($tenant, 'leave.approve');
+        // leave.approve alone is no longer sufficient as of Checkpoint
+        // 14 — HR/Admin-scoped approval requires leave.view_all too
+        // (Line Manager-scoped approval requires a direct-management
+        // relationship instead, see ManagerScopedLeaveApprovalTest).
+        $hrUser = $this->userWithPermissions($tenant, 'leave.approve', 'leave.view_all');
         $employee = Employee::factory()->create(['tenant_id' => $tenant->id]);
         $leaveRequest = LeaveRequest::factory()->approved()->create(['tenant_id' => $tenant->id, 'employee_id' => $employee->id]);
 
@@ -459,7 +471,11 @@ class LeaveRequestApiTest extends TestCase
     public function test_approve_request_writes_audit_log(): void
     {
         $tenant = Tenant::factory()->create();
-        $hrUser = $this->userWithPermissions($tenant, 'leave.approve');
+        // leave.approve alone is no longer sufficient as of Checkpoint
+        // 14 — HR/Admin-scoped approval requires leave.view_all too
+        // (Line Manager-scoped approval requires a direct-management
+        // relationship instead, see ManagerScopedLeaveApprovalTest).
+        $hrUser = $this->userWithPermissions($tenant, 'leave.approve', 'leave.view_all');
         $employee = Employee::factory()->create(['tenant_id' => $tenant->id]);
         $leaveRequest = LeaveRequest::factory()->pending()->create(['tenant_id' => $tenant->id, 'employee_id' => $employee->id]);
 
@@ -471,7 +487,9 @@ class LeaveRequestApiTest extends TestCase
     public function test_reject_request_writes_audit_log(): void
     {
         $tenant = Tenant::factory()->create();
-        $hrUser = $this->userWithPermissions($tenant, 'leave.reject');
+        // leave.reject alone is no longer sufficient as of Checkpoint 14
+        // — see the leave.approve note above.
+        $hrUser = $this->userWithPermissions($tenant, 'leave.reject', 'leave.view_all');
         $employee = Employee::factory()->create(['tenant_id' => $tenant->id]);
         $leaveRequest = LeaveRequest::factory()->pending()->create(['tenant_id' => $tenant->id, 'employee_id' => $employee->id]);
 
@@ -497,7 +515,9 @@ class LeaveRequestApiTest extends TestCase
     public function test_rejection_reason_is_not_stored_raw_in_audit_log(): void
     {
         $tenant = Tenant::factory()->create();
-        $hrUser = $this->userWithPermissions($tenant, 'leave.reject');
+        // leave.reject alone is no longer sufficient as of Checkpoint 14
+        // — see the leave.approve note above.
+        $hrUser = $this->userWithPermissions($tenant, 'leave.reject', 'leave.view_all');
         $employee = Employee::factory()->create(['tenant_id' => $tenant->id]);
         $leaveRequest = LeaveRequest::factory()->pending()->create(['tenant_id' => $tenant->id, 'employee_id' => $employee->id]);
         $secretReason = 'Undergoing chemotherapy treatment.';

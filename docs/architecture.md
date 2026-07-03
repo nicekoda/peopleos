@@ -431,6 +431,54 @@ and the note in `RoleSeeder` — worth treating this recurring shape
 the scoping feature that makes it safe") as a standing checklist item
 for every future role-mapping decision, not a one-off exception.
 
+## Manager-Hierarchy-Scoped Leave Approval
+
+Closes the loop Checkpoint 13 explicitly set up: `LeaveRequestController::
+approve()`/`reject()` now call `ManagerHierarchyService::directlyManages()`
+to determine whether a caller may act on a specific request, rather than
+tenant-wide reach for anyone holding `leave.approve`/`leave.reject`. See
+[`security.md`](security.md#manager-hierarchy-scoped-leave-approval) for
+the full design.
+
+**A permission's presence stopped being sufficient on its own — this is
+the notable shift.** Every prior checkpoint's authorization model was
+"does the caller hold permission X" (checked once, by route middleware).
+This checkpoint introduces the first case in the app where holding the
+route-gating permission (`leave.approve`) is *necessary but not
+sufficient* — the controller must additionally resolve *which* scope
+justifies the specific action (`hr_admin` via `leave.view_all`, or
+`direct_manager` via a verified relationship), and reject if neither
+applies. `resolveApprovalScope()` returning `null` is a distinct outcome
+from "permission missing" (which route middleware already handles) —
+it's "permission present, but this specific resource isn't within your
+authorized scope." Worth recognizing this shape for any future module
+where a single permission needs to mean different things depending on
+*who* holds it (HR vs. line manager is unlikely to be the last such
+case — the same shape would apply to, say, a future "approve expense
+reports" permission split between finance and direct managers).
+
+**Direct reports only, by explicit design decision — not a limitation
+to be worked around quietly.** `directlyManages()` (not `isManagerOf()`,
+which walks the full chain) is used deliberately. A grandparent manager
+cannot approve a grandchild's leave this checkpoint, even though
+`ManagerHierarchyService` is technically capable of answering that
+question via `isManagerOf()`. This is a policy choice, not a technical
+gap — see `security.md` for the reasoning, and don't "fix" this by
+swapping in `isManagerOf()` without a deliberate decision to broaden
+scope, since that changes who can act on whose data.
+
+**`leave.view_team` is a new, third visibility tier — not a
+reinterpretation of an existing permission.** `leave.view` (self only),
+`leave.view_team` (self + direct reports), `leave.view_all` (tenant-
+wide) are three genuinely different scopes with three different
+permission keys, deliberately not collapsed into fewer flags with
+conditional meaning. This mirrors the `employees.view_team`/
+`employees.update_manager` split from Checkpoint 13 and the
+`policies.acknowledge`/`policies.assign` split from Checkpoint 11 — the
+recurring pattern in this app is: when an action needs a genuinely
+different authorization scope, introduce a new permission key rather
+than overload an existing one with context-dependent meaning.
+
 ## Internal IDs vs. Public-Facing References
 
 Internal database IDs may remain bigint (see

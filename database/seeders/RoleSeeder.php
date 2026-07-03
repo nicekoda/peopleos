@@ -138,22 +138,21 @@ class RoleSeeder extends Seeder
             'employees.view_team',
         ]);
 
-        // Line Manager receives employees.view_team ONLY this checkpoint
-        // — no employees.update_manager (manager assignment stays
-        // HR/admin-only), and still NO leave.approve/leave.reject. This
-        // checkpoint builds the hierarchy *foundation*
-        // (ManagerHierarchyService, direct-reports/reporting-tree
-        // visibility) — it deliberately does not yet change who can
-        // approve leave. Line Manager will receive
-        // leave.approve/leave.reject in a future checkpoint once
-        // LeaveRequestController's approve()/reject() are updated to
-        // scope by ManagerHierarchyService::isManagerOf() rather than
-        // being tenant-wide for any holder of the permission. Granting
-        // either now would repeat the exact "unscoped blast radius"
-        // mistake flagged and avoided in Checkpoint 12. See
-        // docs/security.md.
+        // Line Manager (Checkpoint 13: employees.view_team only).
+        // Checkpoint 14 adds leave approval, now that
+        // LeaveRequestController::approve()/reject() are scoped by
+        // ManagerHierarchyService::directlyManages() — leave.approve/
+        // leave.reject are no longer sufficient on their own (see
+        // resolveApprovalScope()), so granting them here no longer
+        // repeats the "unscoped blast radius" mistake flagged in
+        // Checkpoint 12. Deliberately NOT granted: leave.view_all
+        // (tenant-wide visibility — Line Manager gets leave.view_team
+        // instead, direct reports only), leave.request/leave.cancel
+        // (not requested this checkpoint — a Line Manager managing
+        // their own leave is a separate decision). See docs/security.md.
         $this->grantByKeys($roles['Line Manager'], [
             'employees.view_team',
+            'leave.view', 'leave.view_team', 'leave.approve', 'leave.reject',
         ]);
 
         // Remaining roles (HR Director, Department Head, etc.) are

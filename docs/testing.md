@@ -267,6 +267,33 @@ used for `employees.user_id` in Checkpoint 11), add this exact shape of
 test: prove the *old* endpoint no longer works, not just that the *new*
 one does.
 
+## Testing an authorization tightening — prove the old sufficient condition is now insufficient (Checkpoint 14)
+
+When a permission that used to be *sufficient* on its own becomes
+merely *necessary* (Checkpoint 14: `leave.approve`/`leave.reject` alone
+used to authorize tenant-wide action; now also requires `leave.view_all`
+or a direct-management relationship), the single most important test is
+the negative one: a caller holding *only* the old sufficient condition,
+with none of the new qualifying scopes, must now be rejected.
+`ManagerScopedLeaveApprovalTest::test_user_with_approve_but_no_hr_scope_and_no_manager_relationship_cannot_approve`
+(and its reject equivalent) exist specifically to prove this — without
+them, a regression that silently reverted the scope check back to
+"permission alone is enough" would pass every other test in the suite
+(HR/Admin and Line Manager scenarios both still work fine under the old,
+broken rule) and only this test would catch it.
+
+**Re-running an existing test file after an authorization change is not
+optional — it's how you find what the change actually broke.**
+Tightening `approve()`/`reject()` broke 6 pre-existing
+`LeaveRequestApiTest` fixtures that granted `leave.approve`/`leave.reject`
+alone (previously sufficient, Checkpoint 12). Found by literally running
+`LeaveRequestApiTest` after the change and reading the failures — not by
+reasoning about which tests "should" be affected. Same pattern as
+Checkpoint 11's `PolicyApiTest` fix: when a checkpoint changes existing
+authorization logic, re-run the affected module's full test suite before
+writing any new tests, and fix what breaks by adding the *now-required*
+permission to the fixture, not by loosening the new check.
+
 ## Verifying against the real app, not just the test suite
 
 Because of the SQLite/Postgres split above, checkpoints in this project

@@ -430,14 +430,43 @@ no route parameter, no permission middleware required.
 | `GET` | `/api/v1/leave-types/{leaveType}` | `leave_types.view` | 404 if the type belongs to another tenant |
 | `PATCH` | `/api/v1/leave-types/{leaveType}` | `leave_types.update` | Partial update |
 | `DELETE` | `/api/v1/leave-types/{leaveType}` | `leave_types.delete` | Soft delete only |
-| `GET` | `/api/v1/leave-requests` | `leave.view` | Own requests only, unless the caller also holds `leave.view_all` (then tenant-wide) |
+| `GET` | `/api/v1/leave-requests` | `leave.view` | Scope depends on what else the caller holds — see "Visibility scope" below |
 | `POST` | `/api/v1/leave-requests` | `leave.request` | Self-service only — see below |
-| `GET` | `/api/v1/leave-requests/{leaveRequest}` | `leave.view` | 404 if not the caller's own request and the caller lacks `leave.view_all` |
+| `GET` | `/api/v1/leave-requests/{leaveRequest}` | `leave.view` | See "Visibility scope" below; `404` if out of scope |
 | `PATCH` | `/api/v1/leave-requests/{leaveRequest}` | `leave.request` | Owner-only, **draft status only** — `409` otherwise |
 | `POST` | `/api/v1/leave-requests/{leaveRequest}/submit` | `leave.request` | Owner-only; `draft → pending` |
-| `POST` | `/api/v1/leave-requests/{leaveRequest}/approve` | `leave.approve` | Cannot approve own request (`403`); `pending → approved` |
-| `POST` | `/api/v1/leave-requests/{leaveRequest}/reject` | `leave.reject` | Cannot reject own request (`403`); body: `{"rejection_reason": "..."}` (required); `pending → rejected` |
+| `POST` | `/api/v1/leave-requests/{leaveRequest}/approve` | `leave.approve` | **Checkpoint 14: manager-hierarchy-scoped** — see "Approval scope" below; cannot approve own request (`403`); `pending → approved` |
+| `POST` | `/api/v1/leave-requests/{leaveRequest}/reject` | `leave.reject` | Same scoping as approve; body: `{"rejection_reason": "..."}` (required); `pending → rejected` |
 | `POST` | `/api/v1/leave-requests/{leaveRequest}/cancel` | `leave.cancel` | Owner-only, no exceptions (not even for `leave.view_all` holders — see `docs/security.md`); `draft/pending → cancelled` |
+
+### Visibility scope (`GET /leave-requests`, `GET /leave-requests/{id}`)
+
+| Permission held | List (`index`) | Single (`show`) |
+|---|---|---|
+| `leave.view_all` | Every leave request in the tenant | Any request — `200` |
+| `leave.view_team` (no `view_all`) | Own + direct reports' requests only — **not** the full reporting tree | Own or a direct report's — `200`; otherwise `404` |
+| `leave.view` only | Own requests only | Own only — `200`; otherwise `404` |
+| No linked employee, no `leave.view_all` | Empty list, `200` | `404` |
+
+A caller holding both `leave.view_all` and `leave.view_team` gets the
+broader (`leave.view_all`) scope.
+
+### Approval/rejection scope (`POST .../approve`, `POST .../reject`) — Checkpoint 14
+
+Holding `leave.approve`/`leave.reject` (the route-level permission) is
+**necessary but no longer sufficient**. The caller must additionally
+qualify as one of:
+
+- **`hr_admin`** — holds `leave.view_all`. Can act on any pending
+  request in the tenant (except their own).
+- **`direct_manager`** — has a linked employee who **directly**
+  manages the request's employee (`manager_employee_id` points straight
+  at the caller's own employee — indirect/skip-level reports don't
+  qualify, a deliberate scope decision, see `docs/security.md`).
+
+Neither → `403`, regardless of holding `leave.approve`/`leave.reject`.
+Self-approval/self-rejection is blocked before this check even runs,
+for both scopes equally.
 
 **`tenant_id` is never accepted as request input**, same rule as every
 other module.
@@ -512,9 +541,9 @@ second `approve` call, etc.) returns `409`.
 - No `departments`/`locations`/`positions` CRUD endpoints — they exist only to support employee FK validation (unlike `document_categories`, which now has one).
 - No self-linking / invitation-token flow — linking a user to an employee is HR/admin-only, see `docs/security.md`.
 - No employee profile self-update endpoint — `/me/employee` is read-only.
-- No leave balances/accrual, no manager-hierarchy-scoped approval, no notifications, no calendar integration — see `docs/security.md#leave-management`.
+- No leave balances/accrual, no notifications, no calendar integration — see `docs/security.md#leave-management`.
 - `reporting-tree` is depth-capped at 5 levels — no pagination/lazy-loading beyond it, no org chart UI.
-- Line Manager still cannot approve/reject leave — the hierarchy foundation exists (Checkpoint 13) but `LeaveRequestController` isn't wired to use it yet.
+- Manager-scoped leave approval is direct-reports-only — a manager cannot approve/reject an indirect (skip-level) report's leave; see `docs/security.md#manager-hierarchy-scoped-leave-approval`.
 - No policy campaign automation, reminders, or escalations.
 - No acknowledgement export/report endpoint (`policies.export_acknowledgements` seeded, unused).
 - No document approval workflow endpoint — `documents.approve` permission and `approved_by`/`approved_at` columns are reserved, unused.
@@ -534,7 +563,7 @@ second `approve` call, etc.) returns `409`.
 - Candidate documents (`applies_to` includes `candidate`) — no candidate/recruitment module exists yet to attach documents to.
 - Self-linking / invitation-token flow for User ↔ Employee linking (currently HR/admin-only).
 - Employee profile self-update — `/me/employee` is read-only; no endpoint lets an employee edit their own record.
-- Manager-hierarchy-scoped leave approval — `ManagerHierarchyService::isManagerOf()` now exists (Checkpoint 13); wiring `LeaveRequestController::approve()`/`reject()` to use it, and granting Line Manager `leave.approve`/`leave.reject`, is the explicit next step (see `docs/security.md`).
+- Indirect (skip-level) manager leave approval — `ManagerHierarchyService::isManagerOf()` already exists and could answer this; extending `resolveApprovalScope()` to use it is a deliberate future policy decision (see `docs/security.md`), not a technical blocker.
 - Org chart UI, manager self-service dashboard, performance/probation review usage of the manager hierarchy — `ManagerHierarchyService` is built to be reusable for these, none exist yet.
 - Leave balances / accrual engine, business-day calculation, weekend/holiday exclusion, half-day leave — `leave_types.max_days_per_year` already reserved.
 - Leave notifications, email approval, and calendar integration.

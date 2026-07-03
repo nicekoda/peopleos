@@ -853,7 +853,7 @@ design. Built directly on Checkpoint 11's User ↔ Employee Linking:
 leave request creation is self-service by construction, not by later
 retrofit.
 
-### Permission mapping (as seeded in `RoleSeeder`)
+### Permission mapping (as seeded in `RoleSeeder`, updated in Checkpoint 14)
 
 | Role | Permissions |
 |---|---|
@@ -862,7 +862,7 @@ retrofit.
 | HR Officer | `leave_types.view`, `leave.view`, `leave.view_all`, `leave.approve`, `leave.reject` |
 | Employee | `leave.view`, `leave.request`, `leave.cancel` — **no** `leave.view_all` |
 | Auditor | `leave.view`, `leave.view_all` |
-| Line Manager | **None** — see below |
+| Line Manager | `leave.view`, `leave.view_team`, `leave.approve`, `leave.reject` — **no** `leave.view_all`/`leave.request`/`leave.cancel` (Checkpoint 14; the latter two weren't requested, avoiding scope creep) |
 
 ### Why `leave.view_all` is needed, not skippable
 
@@ -879,23 +879,153 @@ rather than by permission (fragile, and inconsistent with every other
 permission check in the app being data-driven, not role-name-driven).
 `leave.view_all` avoids both.
 
-### Why Line Manager gets no leave permissions this checkpoint
+### Why Line Manager now safely gets `leave.approve`/`leave.reject` (Checkpoint 14)
 
-Your suggested mapping lists `leave.approve`/`leave.reject` for Line
-Manager "if manager approval is supported." It isn't, this checkpoint —
-`Employee.manager_employee_id` exists (Checkpoint 6) but nothing
-validates "is this approver actually this employee's manager."
-`LeaveRequestController::approve()`/`reject()` have no hierarchy scoping
-at all: any holder of `leave.approve`/`leave.reject` can act on *any*
-pending request in their tenant. Granting these to Line Manager under
-that condition would let any Line Manager approve any employee's leave
-company-wide — not scoped to their own reports, which is presumably the
-entire point of a "Line Manager" role existing separately from "HR
-Manager." This is the same category of decision as Checkpoint 10's
-Employee/`policies.acknowledge` withholding: a suggested grant that
-would create an unscoped blast radius without the feature that would
-make it safe. Line Manager stays an empty placeholder (like 15 other
-roles already are) until manager-hierarchy-scoped approval is built.
+Checkpoints 10 and 12 both withheld a suggested permission grant
+(`policies.acknowledge` from Employee; `leave.approve`/`leave.reject`
+from Line Manager) because granting it would have created an unscoped
+blast radius — anyone holding the permission could act on *any* record
+tenant-wide, with no feature yet in place to narrow that down safely.
+Checkpoint 13 built that missing feature (`ManagerHierarchyService`).
+This checkpoint is what actually *uses* it: `LeaveRequestController::
+approve()`/`reject()` now require, in addition to holding
+`leave.approve`/`leave.reject`, that the caller either holds
+`leave.view_all` (HR/Admin-level, tenant-wide) or
+`ManagerHierarchyService::directlyManages()` confirms they directly
+manage the request's employee. A caller with `leave.approve` but
+neither qualification gets `403` — see "Manager-Hierarchy-Scoped Leave
+Approval" below for the full design. This is the resolution of the
+pattern flagged in Checkpoints 10/12/13, not a fourth instance of it.
+
+## Manager-Hierarchy-Scoped Leave Approval
+
+Uses `ManagerHierarchyService::directlyManages()` (Checkpoint 13) to
+scope `LeaveRequestController::approve()`/`reject()` — see
+[`architecture.md`](architecture.md#manager-hierarchy-scoped-leave-approval)
+and [`api.md`](api.md#leave-management) for the design rationale and
+endpoint reference. No new routes, no schema change — this checkpoint
+is purely an authorization-logic and permission-catalog change on the
+existing `POST /leave-requests/{leaveRequest}/approve`/`reject`
+endpoints.
+
+### The design decision: direct reports only (as instructed)
+
+`directlyManages()` — not `isManagerOf()` — is used for every check
+this checkpoint. A Line Manager can approve/reject leave only for
+employees whose `manager_employee_id` points directly at their own
+linked employee. A grandparent manager cannot act on a grandchild's
+leave request, even though the full chain-walk (`isManagerOf()`) exists
+and could technically answer that question. **This is a deliberate
+policy choice, not a technical limitation** — indirect-report approval
+may need its own company-specific policy (does a skip-level manager get
+the same authority? does it depend on the direct manager's absence?)
+that wasn't specified, so it's left as explicit future work rather than
+guessed at.
+
+### The authorization rule, precisely
+
+```
+allowed = holds(leave.approve or leave.reject)      // route middleware
+      AND NOT (target employee == caller's own linked employee)  // self-block, checked first
+      AND (
+            holds(leave.view_all)                                     → scope = 'hr_admin'
+            OR (caller has a linked employee AND directlyManages(caller, target)) → scope = 'direct_manager'
+          )
+```
+
+Holding `leave.approve`/`leave.reject` is **necessary but no longer
+sufficient** — the first time this shape of rule appears in the app
+(every earlier permission check was "does the caller hold this one
+permission," full stop). `resolveApprovalScope()` returns `'hr_admin'`,
+`'direct_manager'`, or `null`; a `null` result aborts with `403`,
+regardless of which route-level permission got the caller past
+middleware. Confirmed directly (Refinement 6 — the most important
+regression test this checkpoint): a user holding `leave.approve` alone,
+with no `leave.view_all` and no management relationship to the target
+employee, is rejected — this is exactly the Checkpoint 12 behavior that
+would have been unsafe to keep once Line Manager holds the same
+permission.
+
+### Self-approval/self-rejection block runs first (Refinement 3)
+
+`ensureNotOwnRequestForApprovalAction()` is checked *before*
+`resolveApprovalScope()`, so it applies uniformly regardless of which
+scope would otherwise apply. A dual-role user — a Tenant Admin, HR
+Manager, or Line Manager who is *also* a linked employee — is blocked
+from approving/rejecting their own leave request whether they'd
+otherwise qualify as `hr_admin` or `direct_manager`. Tested directly for
+both roles (`test_hr_admin_cannot_approve_own_leave_request`,
+`test_line_manager_cannot_approve_own_request`).
+
+### Manager-scoped approval requires a linked employee, not role alone (Refinement 2)
+
+`resolveApprovalScope()`'s `direct_manager` branch only evaluates
+`directlyManages()` if `$user->employee` is non-null. A user holding
+`leave.approve` via the Line Manager role but with no linked employee
+record cannot qualify for `direct_manager` scope at all — role
+membership is never treated as a proxy for an actual verified
+management relationship. Tested directly
+(`test_user_without_linked_employee_cannot_manager_approve`).
+
+### Leave visibility: three tiers, exact behavior (Refinement 1)
+
+| Permission held | `GET /leave-requests` (list) | `GET /leave-requests/{id}` (single) |
+|---|---|---|
+| `leave.view_all` | Every leave request in the tenant | Any request in the tenant — `200` |
+| `leave.view_team` (no `view_all`) | Own request(s) + direct reports' — via `directReportsOf()`, **direct only** | Own, or a direct report's — `200`; otherwise `404` |
+| `leave.view` only | Own request(s) only | Own only — `200`; otherwise `404` |
+| No linked employee, no `leave.view_all` | Empty list, `200` | `404` |
+| `leave.view_team` held but no linked employee | Empty list, `200` (no employee to resolve direct reports from) | `404` |
+
+A user holding **both** an HR-level and a manager-level permission
+(e.g. `leave.view_all` *and* `leave.view_team`) gets the broader access
+(`leave.view_all`'s tenant-wide scope) — checked first in both
+`index()` and `ensureCanView()`, so the narrower `leave.view_team` logic
+is never reached once `leave.view_all` is present. Still fully
+tenant-scoped either way — `leave.view_all` never crosses tenant
+boundaries (see `BelongsToTenant` and the pre-existing route-model-
+binding tenant-scope behavior documented under Checkpoint 13 above).
+
+### `leave.view_team` vs. `leave.view_all` — deliberately not the same permission
+
+`leave.view_all` already existed (Checkpoint 12) and means tenant-wide
+visibility — granting it to Line Manager would give them visibility
+into *every* employee's leave, not just their own reports, which is
+exactly the over-broad grant your refinements explicitly ruled out.
+`leave.view_team` is new this checkpoint, seeded only to Line Manager
+(and not, deliberately, to HR Officer/Auditor/Employee — none of those
+roles needed it this checkpoint; HR Officer/Auditor already have
+`leave.view_all`, and Employee has neither).
+
+### Audit metadata (Refinement 5)
+
+Every `leave_request.approved`/`leave_request.rejected` audit entry's
+`metadata` now includes:
+
+```json
+{
+  "leave_request_id": "01h...",
+  "employee_id": "01h...",
+  "leave_type_id": "01h...",
+  "actor_user_id": 7,
+  "actor_employee_id": "01h...",
+  "approval_scope": "direct_manager",
+  "old_status": "pending",
+  "new_status": "approved"
+}
+```
+
+`actor_employee_id` is `null` when the acting user has no linked
+employee (e.g. a pure HR/Admin account with no employee record) — not
+omitted, so its absence is explicit rather than ambiguous.
+`approval_scope` lets a future audit review distinguish "an HR/Admin
+acted with tenant-wide authority" from "a direct manager acted on their
+own report" without needing to cross-reference the actor's role
+separately. `rejection_reason` remains excluded from `new_values`
+(masked, per the Checkpoint 12 rule) and is never present in `metadata`
+either — confirmed directly with a real free-text reason
+("Recovering from surgery") asserted absent from both the masked
+`new_values` and the (never-masked) `metadata` JSON.
 
 ### Employee self-service rules (enforced, not just documented)
 
@@ -1047,10 +1177,11 @@ your quality-review instruction — see `database.md`).
   instruction — building a placeholder here would risk exactly the
   "half-finished, nobody enforcing it" trap already avoided for
   temporary permissions (see RBAC section above).
-- **No manager-hierarchy-scoped approval** — see "Why Line Manager gets
-  no leave permissions" above. `approve()`/`reject()` are tenant-wide
-  for any `leave.approve`/`leave.reject` holder, not scoped to direct
-  reports.
+- **Manager-hierarchy-scoped approval is direct-reports-only** (Checkpoint 14) —
+  see [Manager-Hierarchy-Scoped Leave Approval](#manager-hierarchy-scoped-leave-approval)
+  above. A manager cannot approve/reject an indirect (grandchild)
+  report's leave; this is a deliberate scope decision, not a gap to be
+  quietly closed later without a fresh policy decision.
 - **`leave.cancel` has no "on behalf of" capability** — cancellation is
   strictly self-only this checkpoint, even for roles holding
   `leave.cancel` tenant-wide in principle. See above.
@@ -1068,10 +1199,11 @@ your quality-review instruction — see `database.md`).
   on `leave_types`).
 - Business-day calculation, weekend exclusion, country/location holiday
   calendars, half-day leave — see "Current limitations" above.
-- Manager-hierarchy-scoped approval (`Employee.manager_employee_id`
-  already exists; needs an actual "is this approver this employee's
-  manager" check before Line Manager can safely receive
-  `leave.approve`/`leave.reject`).
+- Indirect (skip-level/grandparent) manager approval — `ManagerHierarchyService::
+  isManagerOf()` already exists and could answer "is this a
+  manager-of-a-manager" today; extending `resolveApprovalScope()` to use
+  it is a deliberate future policy decision (see Checkpoint 14 above),
+  not a technical blocker.
 - Notifications / email approval / reminders for pending requests.
 - Calendar integration.
 - Document attachment requirement enforcement (`requires_document` is
@@ -1315,6 +1447,6 @@ other 17 roles per tenant exist as empty placeholders for future modules.
 - `employee_document_id` on `policy_versions` requires an existing employee-owned document — see "Policy Management" above for the schema mismatch this carries.
 - **No self-linking / invitation-token flow, no employee profile self-update, no manager-approval linking workflow** — see [User ↔ Employee Linking](#user--employee-linking) above for the full list of what Checkpoint 11 deliberately left out.
 - No Payroll, Performance, or Onboarding modules yet.
-- **Leave Management has no balances/accrual, no manager-hierarchy-scoped approval, no notifications, no calendar integration** — see [Leave Management](#leave-management) above for the full list.
-- **Line Manager still cannot approve/reject leave** — the hierarchy foundation now exists (Checkpoint 13), but `LeaveRequestController` hasn't been updated to use it yet. See [Manager Hierarchy](#manager-hierarchy) above.
+- **Leave Management has no balances/accrual, no notifications, no calendar integration** — see [Leave Management](#leave-management) above for the full list.
+- **Line Manager can now approve/reject leave, but direct reports only** (Checkpoint 14) — indirect (skip-level) approval is a deliberate future policy decision, not built. See [Manager-Hierarchy-Scoped Leave Approval](#manager-hierarchy-scoped-leave-approval) above.
 - **No org chart, manager self-service dashboard, or performance/probation review usage of the manager hierarchy** — see [Manager Hierarchy](#manager-hierarchy) above for the full list.

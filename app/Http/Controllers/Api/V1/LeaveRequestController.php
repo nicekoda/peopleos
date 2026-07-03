@@ -10,7 +10,9 @@ use App\Http\Requests\Leave\UpdateLeaveRequestRequest;
 use App\Http\Resources\LeaveRequestResource;
 use App\Models\LeaveRequest;
 use App\Models\Tenant;
+use App\Models\User;
 use App\Services\Audit\AuditLogger;
+use App\Services\ManagerHierarchyService;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -20,12 +22,22 @@ use Illuminate\Pagination\LengthAwarePaginator;
 class LeaveRequestController extends Controller
 {
     /**
-     * Without leave.view_all, a caller only ever sees their own linked
-     * employee's leave requests — never a tenant-wide list. A user with
-     * no linked employee and no leave.view_all sees an empty list, not
-     * an error: there's nothing self-service to show them, and this
-     * mirrors GET /me/employee's "safe empty response" posture rather
-     * than treating "no employee" as a hard failure on a read endpoint.
+     * Three visibility tiers, checked in order (Checkpoint 14):
+     *
+     * - leave.view_all: every leave request in the tenant.
+     * - leave.view_team (no leave.view_all): the caller's own requests,
+     *   plus their direct reports' — via ManagerHierarchyService::
+     *   directReportsOf(), direct only, not the full reporting tree
+     *   (see docs/security.md for why).
+     * - leave.view only: own requests only (unchanged from Checkpoint 12).
+     *
+     * A caller with no linked employee and no leave.view_all sees an
+     * empty list, not an error — there's nothing self-service to show
+     * them, mirroring GET /me/employee's "safe empty response" posture
+     * rather than treating "no employee" as a hard failure on a read
+     * endpoint. A leave.view_team holder with no linked employee
+     * likewise sees an empty list — there's no employee to resolve
+     * direct reports from.
      */
     public function index(Request $request): AnonymousResourceCollection
     {
@@ -37,14 +49,14 @@ class LeaveRequestController extends Controller
             return LeaveRequestResource::collection($leaveRequests);
         }
 
-        $employeeId = $user->employee?->id;
+        $employeeIds = $this->visibleEmployeeIds($user);
 
-        if ($employeeId === null) {
+        if ($employeeIds === []) {
             return LeaveRequestResource::collection(new LengthAwarePaginator([], 0, 15));
         }
 
         $leaveRequests = LeaveRequest::query()
-            ->where('employee_id', $employeeId)
+            ->whereIn('employee_id', $employeeIds)
             ->orderByDesc('created_at')
             ->paginate();
 
@@ -184,16 +196,22 @@ class LeaveRequestController extends Controller
     }
 
     /**
-     * No manager-hierarchy scoping this checkpoint — any user holding
-     * leave.approve can approve any pending request in their own tenant.
-     * See docs/security.md for why (manager hierarchy enforcement isn't
-     * built yet — explicitly deferred, not a shortcut).
+     * Manager-hierarchy-scoped as of Checkpoint 14. Holding leave.approve
+     * is necessary but no longer sufficient — see resolveApprovalScope().
+     * Self-block is checked first (before scope resolution), so it
+     * applies uniformly to both hr_admin and direct_manager callers —
+     * matters most for a dual-role Tenant Admin/HR Manager/Line Manager
+     * who is also a linked employee themselves (Refinement 3).
      */
     public function approve(Request $request, LeaveRequest $leaveRequest): LeaveRequestResource
     {
         $this->ensureBelongsToCurrentTenant($leaveRequest);
         $this->ensureNotOwnRequestForApprovalAction($request, $leaveRequest);
+        $scope = $this->resolveApprovalScope($request->user(), $leaveRequest);
+        abort_if($scope === null, 403, 'You are not authorized to approve this leave request.');
         $this->ensureTransitionAllowed($leaveRequest, LeaveRequestStatus::Approved);
+
+        $oldStatus = $leaveRequest->status->value;
 
         $leaveRequest->update([
             'status' => LeaveRequestStatus::Approved,
@@ -209,9 +227,9 @@ class LeaveRequestController extends Controller
             tenantId: $leaveRequest->tenant_id,
             auditableType: LeaveRequest::class,
             auditableId: $leaveRequest->id,
-            description: 'Leave request approved.',
+            description: "Leave request approved ({$scope}).",
             newValues: ['status' => LeaveRequestStatus::Approved->value],
-            metadata: ['employee_id' => $leaveRequest->employee_id, 'leave_type_id' => $leaveRequest->leave_type_id],
+            metadata: $this->approvalAuditMetadata($request, $leaveRequest, $scope, $oldStatus, LeaveRequestStatus::Approved->value),
             ipAddress: $request->ip(),
             userAgent: $request->userAgent(),
         );
@@ -223,7 +241,11 @@ class LeaveRequestController extends Controller
     {
         $this->ensureBelongsToCurrentTenant($leaveRequest);
         $this->ensureNotOwnRequestForApprovalAction($request, $leaveRequest);
+        $scope = $this->resolveApprovalScope($request->user(), $leaveRequest);
+        abort_if($scope === null, 403, 'You are not authorized to reject this leave request.');
         $this->ensureTransitionAllowed($leaveRequest, LeaveRequestStatus::Rejected);
+
+        $oldStatus = $leaveRequest->status->value;
 
         $leaveRequest->update([
             'status' => LeaveRequestStatus::Rejected,
@@ -240,18 +262,72 @@ class LeaveRequestController extends Controller
             tenantId: $leaveRequest->tenant_id,
             auditableType: LeaveRequest::class,
             auditableId: $leaveRequest->id,
-            description: 'Leave request rejected.',
+            description: "Leave request rejected ({$scope}).",
             // rejection_reason is deliberately included here — it's
             // auto-masked by AuditLogger's sensitive-key patterns (see
             // app/Services/Audit/AuditLogger.php), the same defense-in-
             // depth posture used everywhere else, not caller discipline.
+            // approval_scope/old_status/new_status live in metadata
+            // (never masked, never sensitive) — see
+            // approvalAuditMetadata().
             newValues: $leaveRequest->only(['status', 'rejection_reason']),
-            metadata: ['employee_id' => $leaveRequest->employee_id, 'leave_type_id' => $leaveRequest->leave_type_id],
+            metadata: $this->approvalAuditMetadata($request, $leaveRequest, $scope, $oldStatus, LeaveRequestStatus::Rejected->value),
             ipAddress: $request->ip(),
             userAgent: $request->userAgent(),
         );
 
         return new LeaveRequestResource($leaveRequest->fresh());
+    }
+
+    /**
+     * Determines whether the caller may approve/reject this specific
+     * request, and under which scope — for authorization *and* for the
+     * audit trail's approval_scope field:
+     *
+     * - 'hr_admin': the caller holds leave.view_all (tenant-wide HR/
+     *   Admin authority). leave.approve/leave.reject alone (route
+     *   middleware) is necessary but not sufficient — see
+     *   docs/security.md for why this changed in Checkpoint 14.
+     * - 'direct_manager': the caller has a linked employee (Refinement
+     *   2 — role alone is never enough) who directly manages the
+     *   request's employee, per ManagerHierarchyService::directlyManages().
+     *   Indirect reports are deliberately out of scope this checkpoint.
+     * - null: neither applies — caller is not authorized, regardless of
+     *   what permission got them past route middleware.
+     */
+    protected function resolveApprovalScope(User $user, LeaveRequest $leaveRequest): ?string
+    {
+        if ($user->hasPermission('leave.view_all')) {
+            return 'hr_admin';
+        }
+
+        $managerEmployee = $user->employee;
+
+        if ($managerEmployee !== null && app(ManagerHierarchyService::class)->directlyManages($managerEmployee, $leaveRequest->employee)) {
+            return 'direct_manager';
+        }
+
+        return null;
+    }
+
+    /**
+     * Safe metadata only (Refinement 5) — IDs, scope, and status
+     * strings, never the request's reason/rejection_reason text.
+     *
+     * @return array<string, mixed>
+     */
+    protected function approvalAuditMetadata(Request $request, LeaveRequest $leaveRequest, string $scope, string $oldStatus, string $newStatus): array
+    {
+        return [
+            'leave_request_id' => $leaveRequest->id,
+            'employee_id' => $leaveRequest->employee_id,
+            'leave_type_id' => $leaveRequest->leave_type_id,
+            'actor_user_id' => $request->user()->id,
+            'actor_employee_id' => $request->user()->employee?->id,
+            'approval_scope' => $scope,
+            'old_status' => $oldStatus,
+            'new_status' => $newStatus,
+        ];
     }
 
     /**
@@ -312,17 +388,51 @@ class LeaveRequestController extends Controller
     }
 
     /**
-     * Visibility gate for show()/index(): own request, or leave.view_all.
-     * 404 (not 403) for a caller with no legitimate visibility path at
-     * all — same "don't reveal existence" posture used for cross-tenant
-     * access.
+     * Visibility gate for show(): own request, leave.view_all (tenant-
+     * wide), or leave.view_team + the request belongs to one of the
+     * caller's direct reports. 404 (not 403) for a caller with no
+     * legitimate visibility path at all — same "don't reveal existence"
+     * posture used for cross-tenant access.
      */
     protected function ensureCanView(Request $request, LeaveRequest $leaveRequest): void
     {
-        $ownEmployeeId = $request->user()->employee?->id;
-        $isOwner = $ownEmployeeId !== null && $leaveRequest->employee_id === $ownEmployeeId;
+        $user = $request->user();
 
-        abort_unless($isOwner || $request->user()->hasPermission('leave.view_all'), 404);
+        if ($user->hasPermission('leave.view_all')) {
+            return;
+        }
+
+        abort_unless(in_array($leaveRequest->employee_id, $this->visibleEmployeeIds($user), true), 404);
+    }
+
+    /**
+     * The set of employee_id values the caller may see, excluding the
+     * leave.view_all (tenant-wide) case, which is checked separately by
+     * callers before reaching here. Always includes the caller's own
+     * linked employee (leave.view's baseline). leave.view_team adds
+     * direct reports only — Refinement 1/Checkpoint 14's explicit
+     * "direct reports only" scope decision, via
+     * ManagerHierarchyService::directReportsOf(), not the full
+     * reporting tree.
+     *
+     * @return list<string>
+     */
+    protected function visibleEmployeeIds(User $user): array
+    {
+        $employee = $user->employee;
+
+        if ($employee === null) {
+            return [];
+        }
+
+        $ids = [$employee->id];
+
+        if ($user->hasPermission('leave.view_team')) {
+            $reportIds = app(ManagerHierarchyService::class)->directReportsOf($employee)->pluck('id')->all();
+            $ids = array_merge($ids, $reportIds);
+        }
+
+        return $ids;
     }
 
     /**

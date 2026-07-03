@@ -93,7 +93,7 @@ class DashboardAndFrontendSecurityTest extends TestCase
     public function test_shared_inertia_props_contain_no_sensitive_fields(): void
     {
         $tenant = Tenant::factory()->create();
-        $user = $this->userWithPermissions($tenant, 'employees.view');
+        $user = $this->userWithPermissions($tenant, 'dashboard.view', 'employees.view');
         Employee::factory()->create(['tenant_id' => $tenant->id, 'user_id' => $user->id]);
 
         $response = $this->actingAs($user)->get($this->url($tenant, 'dashboard'));
@@ -111,7 +111,7 @@ class DashboardAndFrontendSecurityTest extends TestCase
     public function test_shared_props_expose_permission_list_to_frontend(): void
     {
         $tenant = Tenant::factory()->create();
-        $user = $this->userWithPermissions($tenant, 'employees.view', 'leave.view');
+        $user = $this->userWithPermissions($tenant, 'dashboard.view', 'employees.view', 'leave.view');
 
         $response = $this->actingAs($user)->get($this->url($tenant, 'dashboard'));
 
@@ -137,7 +137,7 @@ class DashboardAndFrontendSecurityTest extends TestCase
     {
         $tenantA = Tenant::factory()->create();
         $tenantB = Tenant::factory()->create();
-        $user = User::factory()->create(['tenant_id' => $tenantA->id]);
+        $user = $this->userWithPermissions($tenantA, 'dashboard.view');
 
         $response = $this->actingAs($user)->get($this->url($tenantA, 'dashboard'));
 

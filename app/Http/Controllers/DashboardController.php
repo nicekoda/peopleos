@@ -9,21 +9,24 @@ use Inertia\Response;
 class DashboardController extends Controller
 {
     /**
-     * Deliberately simple this checkpoint — welcome message, linked-
-     * employee status, and a permission-count summary. No real
-     * analytics/charts; see docs/api.md for what's explicitly deferred.
+     * Welcome message, linked-employee status, a permission-count
+     * summary, and (Checkpoint 21) real module summary cards fetched
+     * client-side from /api/v1/dashboard. No real analytics/charts; see
+     * docs/api.md for what's explicitly deferred.
      */
     public function index(Request $request): Response
     {
         $user = $request->user();
 
-        // /dashboard has no permission:{key} middleware (there's nothing
-        // to gate — it's the landing page every authenticated user
-        // reaches), so it's the one authenticated route that doesn't
-        // already fail closed for inactive users/tenants via
-        // hasPermission(). Explicit here instead, same fail-closed rule.
+        // /dashboard has no blanket permission:{key} middleware — it
+        // can't, since dashboard.view is a tenant-scoped permission a
+        // Platform Super Admin could never hold, and they must still
+        // reach this page (with a safe platform-only view, never fake
+        // tenant data). Explicit checks here instead, same fail-closed
+        // rule hasPermission() already enforces everywhere else.
         abort_unless($user->isActive(), 403, 'Your account is not active.');
         abort_unless($user->is_platform_admin || ($user->tenant && $user->tenant->isActive()), 403, 'Your organisation is not currently active.');
+        abort_unless($user->is_platform_admin || $user->hasPermission('dashboard.view'), 403, 'You do not have access to the dashboard.');
 
         $employee = $user->employee;
 

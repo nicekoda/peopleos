@@ -18,6 +18,7 @@ class PermissionSeeder extends Seeder
     public function run(): void
     {
         $tenantPermissions = [
+            'dashboard' => ['view'],
             'tenant' => ['view', 'update', 'settings.view', 'settings.update'],
             'users' => ['view', 'create', 'update', 'deactivate', 'assign_role'],
             'roles' => ['view', 'create', 'update', 'delete'],

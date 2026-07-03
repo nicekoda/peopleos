@@ -625,6 +625,77 @@ and the response's `acknowledgement_method` was checked directly:
 resolved employee really was the caller's own linked record, not just
 that *some* acknowledgement succeeded.
 
+## Dashboard: testing absence is as important as testing presence (Checkpoint 21)
+
+Every prior module UI checkpoint's tests mostly proved *presence*: does
+a permission holder get the page/data? The dashboard inverts the
+emphasis, because its core rule is about what's *absent*: `dashboard.view`
+must never leak a card the viewer hasn't separately earned. `DashboardApiTest`
+reflects this directly —
+`test_dashboard_view_alone_grants_no_module_cards` asserts an empty
+`cards`/`recent_items` array for a `dashboard.view`-only user (even with
+real employee data seeded in the tenant), and
+`test_user_without_employees_view_does_not_receive_employee_count`,
+`test_line_manager_receives_only_team_scoped_leave_summary` (which
+asserts `total_employees` is *entirely absent* from the response, not
+just zero), and `test_employee_user_receives_only_self_service_items`
+(asserts `policies_pending_acknowledgement`, `direct_reports`, and
+`total_employees` are all absent for a plain Employee) all assert
+`assertArrayNotHasKey()` on specific card keys, not just check the
+values of cards that are present. A response shape test that only
+checks "the cards I expect are there" would have silently let an
+over-broad card slip through undetected — the two checks are testing
+different failure modes.
+
+### Extracting a private method into a service: the test suite is the proof, not a fresh manual review
+
+`LeaveVisibilityService` is a verbatim copy of `LeaveRequestController`'s
+previous private `visibleEmployeeIds()` method. Rather than manually
+re-verifying its correctness after the move (easy to do wrong — subtle
+behavior differences in extraction are exactly the kind of thing a human
+review misses), the actual verification was: run the complete
+pre-existing Leave test suite (`LeaveRequestApiTest`,
+`ManagerScopedLeaveApprovalTest`, `LeaveUiTest`, and everything else
+matching `Leave` — 123 tests) immediately after the extraction, before
+writing anything new that depends on the service. All 123 passed
+unchanged, with no test modifications needed — this is the strongest
+available evidence the extraction didn't alter behavior, stronger than
+a manual code-diff review would have been, since it's the same tests
+that were written against the *original* implementation's intended
+behavior.
+
+### A live smoke test that deliberately reused a session cookie across tenants, via a shared CookieJar
+
+Confirming Refinement 1's tenant-isolation requirement for the new
+dashboard endpoint needed the classic Checkpoint 7 attack shape: an
+authenticated session from tenant A's subdomain, replayed against
+tenant B's. The smoke test script achieved this simply by handing the
+*same* Guzzle `CookieJar` instance (populated by logging in on
+`uesl.peopleos.test`) to a second `Client` configured with `base_uri`
+set to `airpeace.peopleos.test` — no manual cookie extraction needed.
+Guzzle's cookie jar automatically matches cookies by domain when
+deciding what to send with a request, and `SESSION_DOMAIN=.peopleos.test`
+(the same wildcard-subdomain cookie scope that made the original
+Checkpoint 7 bug possible) means the session cookie is offered to
+*any* `*.peopleos.test` request the jar is attached to — exactly
+simulating a stolen/reused session cookie without needing to touch
+Guzzle's internals. Both the web `/dashboard` page and
+`GET /api/v1/dashboard` correctly returned `403` for this reused
+session, confirmed live.
+
+### Intentional test-behavior changes need a comment explaining "this used to pass differently, on purpose"
+
+Three pre-existing tests exercised `/dashboard` with a bare
+permission-less user and asserted success — true before this checkpoint
+(no permission gate existed), false after (Checkpoint 21 adds
+`dashboard.view`). Each updated test got a short comment stating this
+explicitly (see `InertiaAuthTest::test_authenticated_user_can_access_dashboard`)
+rather than a silent diff — a future reader diffing test history should
+be able to tell "this assertion changed because the feature changed" from
+"this assertion changed because of a mistake," and only a comment at the
+change site makes that distinguishable later. Same pattern already
+established in Checkpoint 16 when login/logout became content-negotiated.
+
 ## Verifying against the real app, not just the test suite
 
 Because of the SQLite/Postgres split above, checkpoints in this project

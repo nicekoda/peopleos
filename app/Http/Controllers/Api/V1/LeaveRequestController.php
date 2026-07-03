@@ -14,6 +14,7 @@ use App\Models\Tenant;
 use App\Models\User;
 use App\Services\Audit\AuditLogger;
 use App\Services\LeaveBalanceService;
+use App\Services\LeaveVisibilityService;
 use App\Services\ManagerHierarchyService;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
@@ -522,33 +523,16 @@ class LeaveRequestController extends Controller
     }
 
     /**
-     * The set of employee_id values the caller may see, excluding the
-     * leave.view_all (tenant-wide) case, which is checked separately by
-     * callers before reaching here. Always includes the caller's own
-     * linked employee (leave.view's baseline). leave.view_team adds
-     * direct reports only — Refinement 1/Checkpoint 14's explicit
-     * "direct reports only" scope decision, via
-     * ManagerHierarchyService::directReportsOf(), not the full
-     * reporting tree.
+     * Thin delegate to LeaveVisibilityService (Checkpoint 21) — extracted
+     * so the Dashboard summary can reuse the exact same safe scoping
+     * rule rather than duplicating it. Behavior is unchanged from the
+     * original inline implementation.
      *
      * @return list<string>
      */
     protected function visibleEmployeeIds(User $user): array
     {
-        $employee = $user->employee;
-
-        if ($employee === null) {
-            return [];
-        }
-
-        $ids = [$employee->id];
-
-        if ($user->hasPermission('leave.view_team')) {
-            $reportIds = app(ManagerHierarchyService::class)->directReportsOf($employee)->pluck('id')->all();
-            $ids = array_merge($ids, $reportIds);
-        }
-
-        return $ids;
+        return app(LeaveVisibilityService::class)->visibleEmployeeIds($user);
     }
 
     /**

@@ -2495,6 +2495,196 @@ bound page's serialized props.
 - Frontend test tooling (Vitest + React Testing Library), if
   component-level testing becomes valuable.
 
+## Dashboard Foundation
+
+Replaces the Checkpoint 16 placeholder dashboard with real,
+permission-aware module summaries — see
+[`architecture.md`](architecture.md#dashboard-foundation-checkpoint-21)
+for the "aggregate endpoint, not a listing endpoint" design and
+[`api.md`](api.md#dashboard) for the response shape.
+
+### The rule, stated exactly once, that this entire feature exists to satisfy
+
+**`dashboard.view` grants reaching `/dashboard`/`GET /api/v1/dashboard`.
+It grants nothing else.** Every card in the response is independently
+gated by the same module permission its real page/endpoint already
+requires — a user holding `dashboard.view` and nothing else gets a
+`200` with empty `cards`/`recent_items` arrays, never an error and
+never a card it hasn't earned. This is checked twice, on purpose:
+
+1. **Route-level**, for the API: `permission:dashboard.view` middleware
+   on `GET /api/v1/dashboard` — this alone blocks anyone who can't reach
+   the endpoint at all.
+2. **Per-card, inside `DashboardController::summary()`**: each block of
+   cards is wrapped in its own `$user->hasPermission('{module}.{action}')`
+   check before anything module-specific is queried or added to the
+   response — `employees.view` for employee counts, `leave.view` for the
+   leave summary (further refined by `leave.view_all`/`leave.view_team`,
+   see below), `documents.view` for document counts, `policies.view`/
+   `policies.view_acknowledgements`/`policies.acknowledge` for the three
+   distinct policy cards. None of these are new checks — every one
+   reuses the exact permission key its module's real page already
+   requires.
+
+### Leave card: reuses the real visibility rule, doesn't reimplement it
+
+The `pending_leave` card's value and label both depend on which of three
+tiers the caller holds — identical to `LeaveRequestController::index()`'s
+own logic (Checkpoint 14):
+
+| Permission held | Card label | Scope |
+|---|---|---|
+| `leave.view_all` | "Pending Leave Requests" | Every pending request in the tenant |
+| `leave.view_team` (no `view_all`) | "Pending Leave Requests (My Team)" | Own + direct reports' (direct only), via `LeaveVisibilityService` |
+| `leave.view` only | "My Pending Leave Requests" | Own only |
+| `leave.view` held, no linked employee | "My Pending Leave Requests" | `0` — nothing to resolve, not an error |
+
+`LeaveVisibilityService::visibleEmployeeIds()` is a verbatim extraction
+of `LeaveRequestController`'s previously-private method — not a
+reimplementation. Both callers now share one source of truth for "which
+employee_ids can this user see leave for," so a future change to the
+Checkpoint 14 manager-scope rule can't silently apply to one caller and
+not the other. Confirmed behavior-identical: the full pre-existing Leave
+test suite (123 tests across `LeaveRequestApiTest`, `ManagerScopedLeaveApprovalTest`,
+`LeaveUiTest`, etc.) passes unchanged after the extraction — no test
+needed updating, because the observable behavior didn't change, only
+where the code lives.
+
+The `recent_items` leave entries use the same scoping (own/team/all)
+and show only `"Leave request — {status}"` linking to `/leave/{id}` —
+never `reason`, `rejection_reason`, or any other free-text field.
+
+### Document cards: self-scoped by necessity, not just by choice
+
+Unlike leave, there is no `documents.view_all`-equivalent permission —
+`documents.view` doesn't distinguish "see your own employee's documents"
+from "see the whole tenant's." Showing a tenant-wide count to anyone
+holding merely `documents.view` (which the Employee role also holds, for
+their own self-service uploads) would hand a self-service user an
+organization-wide figure — exactly the "dashboard becomes a data-leakage
+shortcut" failure mode you explicitly warned against. So
+`my_documents_expiring_soon`/`my_documents_recent` are **always** scoped
+to `EmployeeDocument::query()->where('employee_id', $viewerEmployee->id)`,
+for every role, including Tenant Admin/HR Manager — both cards are
+simply absent if the viewer has no linked employee record, regardless of
+how much `documents.view` they hold. Sensitive documents
+(`is_sensitive`) are excluded from both counts unless the viewer also
+holds `documents.view_sensitive`, mirroring `EmployeeDocumentController`'s
+existing masking rule exactly (Checkpoint 8) — confirmed directly
+(`test_document_cards_are_self_scoped_and_exclude_sensitive_unless_authorized`,
+`test_document_cards_include_sensitive_documents_when_authorized`). No
+document titles, filenames, or storage paths appear anywhere in the
+response — only integer counts.
+
+### Policy cards: three tiers, each independently gated
+
+- `policies_total` (any `policies.view` holder) — a plain count, no
+  policy content.
+- `policies_pending_acknowledgement` (`policies.view_acknowledgements`
+  only — HR/Admin/Auditor-level) — tenant-wide pending-acknowledgement
+  count. Safe to be tenant-wide here, unlike documents, because this
+  permission already exists specifically to distinguish "admin view of
+  everyone's acknowledgements" from plain `policies.view` (Checkpoint 10).
+- `my_policies_pending_acknowledgement` (`policies.acknowledge`, linked
+  employee required) — the viewer's own pending count only.
+
+No policy `content`/`summary`, no `approved_by`/`published_by`, no raw
+acknowledgement `ip_address`/`user_agent` appear anywhere in the
+response — the dashboard only ever returns integers and the small set
+of safe labels/hrefs described above.
+
+### Platform Super Admin: blocked at the API, safe at the page
+
+`dashboard.view` is a tenant-scoped permission; a platform role can
+never be assigned one — the same permission-assignment scope guard
+(`HasPermissions`) that's protected every other tenant permission since
+Checkpoint 4. This means `permission:dashboard.view` middleware alone
+already returns `403` for any Platform Super Admin hitting
+`GET /api/v1/dashboard`. `DashboardController::summary()` additionally
+opens with `abort_if($user->is_platform_admin, 403, ...)` as defense in
+depth — this isn't redundant paranoia: `BelongsToTenant`'s global scope
+only filters a query when a `Tenant` is bound in the container, and nothing
+is bound for a platform admin. Without this explicit check, a future
+change to the route's middleware (or an as-yet-unbuilt platform
+permission accidentally reusing the `dashboard.view` key) could make
+every `count()` in this controller silently run **unscoped across every
+tenant in the system** — confirmed this doesn't happen
+(`test_platform_super_admin_is_blocked_from_dashboard_api`).
+
+The **web** `/dashboard` page takes a deliberately different shape: no
+blanket `permission:dashboard.view` middleware, because a platform
+admin must still be able to open the page at all (to see a safe
+"platform dashboard not available" message, per your Refinement 7) —
+blocking them entirely would contradict that. `DashboardController`
+(web)'s existing explicit-check style (already used for the pre-existing
+isActive/tenant-active checks, since there's nothing for route-level
+middleware to hang a check on for the one page every user reaches)
+gained one more line: tenant users need `dashboard.view`, platform
+admins are exempt, exactly like the checks already there. The frontend
+never calls `/api/v1/dashboard` when `auth.user.is_platform_admin` is
+true or `tenant` is `null` — it renders the safe message instead,
+without a wasted (and would-be-`403`) request.
+
+### A deliberate, intentional behavior change to three pre-existing tests
+
+Before this checkpoint, `/dashboard` had no permission gate at all — any
+active authenticated user could reach it. Three tests
+(`InertiaAuthTest::test_authenticated_user_can_access_dashboard`,
+`DashboardAndFrontendSecurityTest::test_shared_inertia_props_contain_no_sensitive_fields`,
+`test_shared_props_expose_permission_list_to_frontend`,
+`test_tenant_user_shared_props_reflect_only_their_own_tenant`) exercised
+that with a bare permission-less user and asserted `200`. Now that
+`dashboard.view` is required, these were updated to grant it explicitly
+— the same "convert the test to match an intentionally new contract"
+pattern already used in Checkpoint 16 when login/logout became
+content-negotiated. A new test,
+`test_authenticated_user_without_dashboard_view_cannot_access_dashboard`,
+covers the now-restricted case these tests used to (accidentally) leave
+untested.
+
+### What is not, and cannot be, tested by a JS runner
+
+Same posture as every prior module UI checkpoint — no Jest/Vitest
+configured. Verified via `tsc --noEmit`, `npm run build`, and a live
+HTTPS smoke test: card grid responsiveness, the loading/error states
+while `/api/v1/dashboard` is in flight, and the platform-admin message
+rendering instead of a fetch attempt.
+
+What *is* backend-tested (`DashboardApiTest`, 16 tests): guest/auth
+requirements, `tenant.matches`, `dashboard.view` gating both directions,
+per-card permission presence *and absence* (Refinement 9 — e.g. a user
+without `employees.view` never receives `total_employees`/
+`active_employees`, a Line Manager never receives a tenant-wide employee
+count, an Employee never receives the tenant-wide acknowledgement
+count), role-shaped responses for HR/Admin, Line Manager, and Employee,
+tenant isolation, the Platform Super Admin block, and that no
+sensitive/technical value (leave `reason`, policy `content`, `ip_address`,
+`user_agent`, `storage_path`) ever appears anywhere in the response.
+
+### Current limitations
+
+- No tenant-wide document dashboard cards — see "Document cards" above;
+  blocked on a `documents.view_all`-equivalent permission not existing.
+- No charts, advanced analytics, export reports, or complex reporting.
+- No notifications, calendar widgets, or scheduled-digest emails.
+- No platform-level (cross-tenant) dashboard for Platform Super Admin —
+  they see a plain static message, not real platform metrics.
+- Recent items are capped at 3 per type (leave, employee) — no
+  pagination, no "view all recent activity" page.
+- No JS/TS unit test runner — see above.
+
+### Future
+
+- A tenant-wide document dashboard, once a `documents.view_all`-equivalent
+  permission exists to gate it safely.
+- Charts and richer analytics, once real reporting needs are identified.
+- Export/reporting features building on the same summary data.
+- A genuine platform-level dashboard for Platform Super Admin
+  (cross-tenant health/usage metrics), architecturally separate from
+  this tenant-scoped endpoint.
+- Frontend test tooling (Vitest + React Testing Library), if
+  component-level testing becomes valuable.
+
 ## Local Demo Credentials
 
 **Local development only — these are not real secrets and only work against your own local database.** Password comes from `SEED_USER_PASSWORD` in `.env` (not committed; `.env.example` has an empty placeholder).
@@ -2537,8 +2727,9 @@ other 17 roles per tenant exist as empty placeholders for future modules.
 - **Leave Management still has no notifications or calendar integration** — see [Leave Management](#leave-management) above.
 - **Line Manager can now approve/reject leave, but direct reports only** (Checkpoint 14) — indirect (skip-level) approval is a deliberate future policy decision, not built. See [Manager-Hierarchy-Scoped Leave Approval](#manager-hierarchy-scoped-leave-approval) above.
 - **No org chart, manager self-service dashboard, or performance/probation review usage of the manager hierarchy** — see [Manager Hierarchy](#manager-hierarchy) above for the full list.
-- **Employee Records, Leave Management, (employee-scoped) Document Repository, and Policy Management all have real UIs now (Checkpoints 17/18/19/20); the top-level `/documents` route is still a permission-gated placeholder (no tenant-wide document centre yet — see [Document Repository UI](#document-repository-ui) above), and Settings remains a placeholder too** — see [Employee Records UI](#employee-records-ui), [Leave Management UI](#leave-management-ui), [Document Repository UI](#document-repository-ui), and [Policy Management UI](#policy-management-ui) above.
+- **Employee Records, Leave Management, (employee-scoped) Document Repository, Policy Management, and the Dashboard all have real UIs now (Checkpoints 17/18/19/20/21); the top-level `/documents` route is still a permission-gated placeholder (no tenant-wide document centre yet — see [Document Repository UI](#document-repository-ui) above), and Settings remains a placeholder too** — see [Employee Records UI](#employee-records-ui), [Leave Management UI](#leave-management-ui), [Document Repository UI](#document-repository-ui), [Policy Management UI](#policy-management-ui), and [Dashboard Foundation](#dashboard-foundation) above.
 - **Leave Management UI has no balance/leave-type admin UI, calendar view, or notification integration** — see [Leave Management UI](#leave-management-ui) above.
 - **Document Repository UI has no tenant-wide document centre, approval workflow UI, eSignature, document generation, or file preview** — see [Document Repository UI](#document-repository-ui) above.
 - **Policy Management UI has no campaign automation, reminders/escalations, dashboard/compliance reporting, template library, bulk/department-wide assignment, or admin-recorded-on-behalf-of acknowledgement UI** — see [Policy Management UI](#policy-management-ui) above.
+- **Dashboard has no charts, tenant-wide document cards, platform-level dashboard, or notifications** — see [Dashboard Foundation](#dashboard-foundation) above.
 - **No JS/TS unit test runner configured** — frontend verification relies on `tsc --noEmit`, `vite build`, and backend feature tests asserting Inertia response shape/shared-prop safety.

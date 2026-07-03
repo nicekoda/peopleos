@@ -844,6 +844,84 @@ document, see `docs/security.md`'s Policy Management section) — no
 general/policy-scoped document picker exists yet, so version creation
 stays content-only. Both are documented future work, not silent gaps.
 
+## Dashboard Foundation (Checkpoint 21)
+
+The first checkpoint to aggregate data *across* modules rather than
+building a new module — see
+[`security.md`](security.md#dashboard-foundation) for the permission
+model and [`api.md`](api.md#dashboard) for the response shape.
+
+**A summary endpoint, not a listing endpoint — this distinction is the
+whole design.** `GET /api/v1/dashboard` returns only aggregates (counts,
+a sum, a handful of already-safe labels) computed server-side; it never
+returns raw records the way `/employees` or `/leave-requests` do. This
+matters for the security model: every value is derived from a query the
+backend already decided was safe to run for this specific user, not a
+generic list the frontend then filters — there's no client-side
+filtering step that could be bypassed, because there's no raw data to
+filter in the first place.
+
+**`dashboard.view` is an access permission, not a data permission.** It
+gates whether `/dashboard`/`/api/v1/dashboard` can be reached at all —
+nothing more. Every card inside the response is independently gated by
+the same module permission its real page would require
+(`employees.view` for employee counts, `leave.view` for the leave
+summary, and so on) — holding `dashboard.view` without any module
+permissions produces a `200` with an empty `cards`/`recent_items` array,
+not an error and not a data leak. This two-layer gate (reach the
+endpoint, then earn each card) is a new shape for this app — every
+prior module used a single permission tier per page — and is the direct
+implementation of your explicit "`dashboard.view` alone must not grant
+access to module data" rule.
+
+**`LeaveVisibilityService` — an extraction, not a new design.** The
+dashboard's leave card needs the exact same "which employee_ids can
+this user see" answer `LeaveRequestController::index()` already computes
+(tenant-wide via `leave.view_all`, direct-reports via `leave.view_team`,
+or just the caller's own). Duplicating that logic into the dashboard
+controller would have created a second place for the Checkpoint 14
+manager-scope rule to silently drift out of sync. Instead, the existing
+private `visibleEmployeeIds()` method was extracted verbatim into
+`App\Services\LeaveVisibilityService`, and `LeaveRequestController` now
+calls the same service — a pure refactor, confirmed behavior-identical
+by re-running the full pre-existing Leave test suite (123 tests)
+unchanged after the extraction.
+
+**Document cards stay self-scoped because the permission model doesn't
+yet support anything else safely.** Leave has `leave.view` vs.
+`leave.view_all` vs. `leave.view_team` — three distinct trust tiers.
+Documents have only `documents.view` — no tenant-wide equivalent exists.
+Showing a tenant-wide "documents expiring soon" count to anyone holding
+`documents.view` (which a plain Employee also holds, for their own
+records) would hand a self-service user an organization-wide figure
+they have no reason to see — precisely the "dashboard becomes a
+data-leakage shortcut" failure mode you told me to avoid. So `my_documents_expiring_soon`/
+`my_documents_recent` are always scoped to the viewer's own linked
+employee (`EmployeeDocument::query()->where('employee_id', $employee->id)`),
+for every role including Tenant Admin/HR Manager — even though those
+roles might reasonably want a tenant-wide figure, the permission model
+to gate that safely doesn't exist yet. See "Future" in
+[`security.md`](security.md#dashboard-foundation) for what would need
+to change first (a `documents.view_all`-equivalent permission).
+
+**Platform Super Admin never calls the tenant dashboard API — a
+structural guarantee, not just a frontend choice.** `dashboard.view` is
+a tenant-scoped permission; a platform role can never be assigned one
+(the same permission-scope guard that's protected every other tenant
+permission since Checkpoint 4 — see `HasPermissions`). The route's
+`permission:dashboard.view` middleware alone already blocks a platform
+admin from `GET /api/v1/dashboard`. `DashboardController::summary()`
+adds an explicit `abort_if($user->is_platform_admin, 403, ...)` as
+defense in depth anyway, because `BelongsToTenant`'s global scope only
+filters queries when a `Tenant` is bound in the container (see
+`app/Models/Concerns/BelongsToTenant.php`) — a platform admin reaching
+this method with nothing bound would otherwise make every `count()`
+below silently run **unscoped across every tenant**. The web `/dashboard`
+page, by contrast, deliberately does *not* get blanket
+`permission:dashboard.view` middleware — a platform admin must still be
+able to open the page (to see the safe "platform dashboard not
+available" message), just without it ever calling the tenant-scoped API.
+
 ## Internal IDs vs. Public-Facing References
 
 Internal database IDs may remain bigint (see

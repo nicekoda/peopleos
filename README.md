@@ -173,6 +173,19 @@ current-version content or let HR pick which draft to publish. Policy
 version content is always rendered as plain text, never
 `dangerouslySetInnerHTML`. See `docs/security.md`.
 
+**Dashboard Foundation** (Checkpoint 21) — `/dashboard` now shows real,
+permission-aware summary cards fetched from a new `GET /api/v1/dashboard`
+endpoint, replacing the Checkpoint 16 placeholder. A new `dashboard.view`
+permission only grants reaching the endpoint at all — every card is
+still independently gated by its own module permission (`employees.view`,
+`leave.view`, `documents.view`, `policies.view`, etc.), so `dashboard.view`
+alone can never surface any module's data. Document cards are
+deliberately scoped to the viewer's own linked employee only (no
+`documents.view_all`-equivalent permission exists yet to safely gate a
+tenant-wide count). Platform Super Admins never call the dashboard API
+at all — they see a plain, safe "platform dashboard not available yet"
+message instead. See `docs/security.md`.
+
 See `docs/architecture.md`/`docs/security.md`/`docs/api.md` for the full
 design, what's shared with the frontend (and what never is), and the
 future module rollout plan.

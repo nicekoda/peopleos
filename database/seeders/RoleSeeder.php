@@ -76,6 +76,10 @@ class RoleSeeder extends Seeder
         $this->grantByKeys($roles['Tenant Admin'], Permission::query()->where('is_platform_permission', false)->pluck('key')->all());
 
         $this->grantByKeys($roles['HR Manager'], [
+            // Checkpoint 21: dashboard.view only grants access to the
+            // /dashboard page/endpoint itself — every card is still
+            // independently gated by its own module permission below.
+            'dashboard.view',
             'employees.view', 'employees.create', 'employees.update', 'employees.view_sensitive', 'employees.export',
             'documents.view', 'documents.upload', 'documents.download', 'documents.approve',
             // Checkpoint 19: read-only reference data needed to upload
@@ -113,6 +117,7 @@ class RoleSeeder extends Seeder
         ]);
 
         $this->grantByKeys($roles['Employee'], [
+            'dashboard.view',
             'employees.view',
             'documents.view', 'documents.upload',
             // Checkpoint 19: same read-only reference-data reasoning as
@@ -138,6 +143,7 @@ class RoleSeeder extends Seeder
         // HR Officer and Auditor get their first real permission grants
         // here (previously empty placeholders from Checkpoint 4).
         $this->grantByKeys($roles['HR Officer'], [
+            'dashboard.view',
             'policies.view', 'policies.create', 'policies.update',
             'policies.assign', 'policies.view_acknowledgements',
             'leave_types.view', 'leave.view', 'leave.view_all', 'leave.approve', 'leave.reject',
@@ -155,6 +161,7 @@ class RoleSeeder extends Seeder
         ]);
 
         $this->grantByKeys($roles['Auditor'], [
+            'dashboard.view',
             'policies.view', 'policies.view_acknowledgements',
             'leave.view', 'leave.view_all',
             'employees.view_team',
@@ -174,6 +181,7 @@ class RoleSeeder extends Seeder
         // (not requested this checkpoint — a Line Manager managing
         // their own leave is a separate decision). See docs/security.md.
         $this->grantByKeys($roles['Line Manager'], [
+            'dashboard.view',
             'employees.view_team',
             'leave.view', 'leave.view_team', 'leave.approve', 'leave.reject',
         ]);

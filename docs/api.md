@@ -57,6 +57,52 @@ speculative build-ahead of a real external-consumer need.
 8. **Validation** — tenant-scoped uniqueness/FK checks in the FormRequest.
 9. **Audit logging** — create/update/delete all write to `audit_logs`.
 
+## Dashboard
+
+| Method | Path | Permission | Notes |
+|---|---|---|---|
+| `GET` | `/api/v1/dashboard` | `dashboard.view` | Aggregate summary only — never a raw record listing. See `docs/security.md#dashboard-foundation` |
+
+`dashboard.view` (Checkpoint 21) only grants reaching this endpoint —
+every card in the response is independently gated by its own module
+permission, checked again inside the controller. A user holding only
+`dashboard.view` gets `200` with empty `cards`/`recent_items` arrays,
+never an error.
+
+### Response shape
+
+```json
+{
+  "cards": [
+    { "key": "total_employees", "label": "Total Employees", "value": 42, "href": "/employees", "permission": "employees.view" },
+    { "key": "pending_leave", "label": "Pending Leave Requests", "value": 3, "href": "/leave", "permission": "leave.view" }
+  ],
+  "quick_links": [
+    { "label": "Request leave", "href": "/leave/create" }
+  ],
+  "recent_items": [
+    { "type": "leave", "label": "Leave request — pending", "href": "/leave/01h..." }
+  ]
+}
+```
+
+### Cards, by permission
+
+| Card key | Requires | Scope |
+|---|---|---|
+| `total_employees` / `active_employees` | `employees.view` | Tenant-wide |
+| `direct_reports` | `employees.view_team` + linked employee | Direct reports only |
+| `pending_leave` | `leave.view` | Tenant-wide (`leave.view_all`), team (`leave.view_team`), or own only — see `docs/security.md#dashboard-foundation` for the exact label/scope table |
+| `my_leave_balance` | `leave.view` + linked employee | Own only — current year, summed across leave types |
+| `my_documents_expiring_soon` / `my_documents_recent` | `documents.view` + linked employee | **Own employee's documents only, never tenant-wide** — see `docs/security.md` for why; sensitive documents excluded unless `documents.view_sensitive` |
+| `policies_total` | `policies.view` | Tenant-wide |
+| `policies_pending_acknowledgement` | `policies.view_acknowledgements` | Tenant-wide |
+| `my_policies_pending_acknowledgement` | `policies.acknowledge` + linked employee | Own only |
+
+Platform Super Admins always get `403` from this endpoint —
+`dashboard.view` is a tenant-scoped permission they can never hold. See
+`docs/architecture.md#dashboard-foundation-checkpoint-21`.
+
 ## Employees
 
 | Method | Path | Permission | Notes |
@@ -219,7 +265,7 @@ served through the `web` middleware group, session-based auth same as
 | `GET` | `/login` | `guest` | Renders `Auth/Login`; redirects to `/dashboard` if already authenticated |
 | `POST` | `/login` | `guest` | Content-negotiated — JSON for `Accept: application/json`, redirect otherwise. See `docs/security.md` |
 | `POST` | `/logout` | `auth` | Same content negotiation |
-| `GET` | `/dashboard` | `auth`, `tenant.matches` | Explicit active-user/active-tenant check (no `permission:` middleware exists to gate it otherwise) |
+| `GET` | `/dashboard` | `auth`, `tenant.matches` | Real UI (Checkpoint 21) — explicit active-user/active-tenant/`dashboard.view` checks in the controller (no blanket `permission:` middleware, since Platform Super Admin must still reach this page safely — see `docs/security.md#dashboard-foundation`); fetches summary cards client-side from `/api/v1/dashboard`, skipped entirely for platform admins |
 | `GET` | `/employees` | `auth`, `tenant.matches`, `permission:employees.view` | Real UI (Checkpoint 17) — list, fetched client-side from `/api/v1/employees` |
 | `GET` | `/employees/create` | `auth`, `tenant.matches`, `permission:employees.create` | Create form |
 | `GET` | `/employees/{employee}` | `auth`, `tenant.matches`, `permission:employees.view` | Detail — passes only `employeeId` as a prop, never employee data (see `docs/architecture.md`) |
@@ -266,6 +312,13 @@ every form — no safe `/api/v1/users` lookup or general document picker
 exists yet. Acknowledgement is self-scoped only (no `employee_id` ever
 sent by this UI); see `docs/security.md#policy-management-ui` for the
 full design.
+
+**Dashboard Foundation (Checkpoint 21)** replaces the Checkpoint 16
+placeholder with real cards fetched from the new `GET /api/v1/dashboard`
+(documented above). `dashboard.view` only grants reaching the page/endpoint;
+every card is independently gated by its own module permission. Platform
+Super Admins see a safe static message and never call the dashboard API
+at all. See `docs/security.md#dashboard-foundation`.
 
 ### Shared props (every Inertia response)
 

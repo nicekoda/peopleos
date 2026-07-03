@@ -2,6 +2,8 @@
 
 namespace Tests\Feature\Auth;
 
+use App\Models\Permission;
+use App\Models\Role;
 use App\Models\Tenant;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -20,6 +22,24 @@ class InertiaAuthTest extends TestCase
     protected function url(Tenant $tenant, string $path): string
     {
         return 'http://'.$tenant->subdomain.'.'.config('tenancy.base_domain').'/'.$path;
+    }
+
+    protected function userWithPermissions(Tenant $tenant, string ...$permissionKeys): User
+    {
+        $user = User::factory()->create(['tenant_id' => $tenant->id]);
+        $role = Role::factory()->create(['tenant_id' => $tenant->id]);
+
+        foreach ($permissionKeys as $key) {
+            $permission = Permission::query()->firstOrCreate(
+                ['key' => $key],
+                ['category' => explode('.', $key)[0], 'is_platform_permission' => false],
+            );
+            $role->givePermissionTo($permission);
+        }
+
+        $user->assignRole($role);
+
+        return $user;
     }
 
     public function test_login_page_loads(): void
@@ -121,15 +141,34 @@ class InertiaAuthTest extends TestCase
         $response->assertRedirect(route('login'));
     }
 
+    /**
+     * Checkpoint 21: /dashboard now requires dashboard.view for tenant
+     * users (Platform Super Admins are exempt — see
+     * test_platform_super_admin_does_not_receive_tenant_context in
+     * DashboardAndFrontendSecurityTest). A bare permission-less user is
+     * intentionally no longer sufficient — this is a deliberate
+     * behavior change this checkpoint, not a regression; see
+     * docs/security.md.
+     */
     public function test_authenticated_user_can_access_dashboard(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $user = $this->userWithPermissions($tenant, 'dashboard.view');
+
+        $response = $this->actingAs($user)->get($this->url($tenant, 'dashboard'));
+
+        $response->assertOk();
+        $response->assertInertia(fn ($page) => $page->component('Dashboard'));
+    }
+
+    public function test_authenticated_user_without_dashboard_view_cannot_access_dashboard(): void
     {
         $tenant = Tenant::factory()->create();
         $user = User::factory()->create(['tenant_id' => $tenant->id]);
 
         $response = $this->actingAs($user)->get($this->url($tenant, 'dashboard'));
 
-        $response->assertOk();
-        $response->assertInertia(fn ($page) => $page->component('Dashboard'));
+        $response->assertForbidden();
     }
 
     public function test_inactive_user_cannot_access_dashboard(): void

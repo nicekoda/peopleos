@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\Api\V1\DashboardController;
 use App\Http\Controllers\Api\V1\DocumentCategoryController;
 use App\Http\Controllers\Api\V1\EmployeeController;
 use App\Http\Controllers\Api\V1\EmployeeDocumentController;
@@ -36,6 +37,13 @@ use Illuminate\Support\Facades\Route;
 */
 
 Route::middleware(['auth', 'tenant.matches'])->prefix('api/v1')->group(function () {
+    // Checkpoint 21 — dashboard.view is a tenant-scoped permission, so a
+    // Platform Super Admin can never hold it (permission-assignment
+    // scope guards, see HasPermissions) — this middleware alone already
+    // blocks them from this endpoint; DashboardController::summary()
+    // adds an explicit is_platform_admin check too, as defense in depth.
+    Route::get('dashboard', [DashboardController::class, 'summary'])->middleware('permission:dashboard.view');
+
     Route::get('employees', [EmployeeController::class, 'index'])->middleware('permission:employees.view');
     Route::post('employees', [EmployeeController::class, 'store'])->middleware('permission:employees.create');
     Route::get('employees/{employee}', [EmployeeController::class, 'show'])->middleware('permission:employees.view');

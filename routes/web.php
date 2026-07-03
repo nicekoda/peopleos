@@ -4,6 +4,7 @@ use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\EmployeeDocumentUiController;
 use App\Http\Controllers\EmployeeUiController;
 use App\Http\Controllers\LeaveUiController;
+use App\Http\Controllers\PolicyUiController;
 use Illuminate\Support\Facades\Route;
 use Inertia\Inertia;
 
@@ -69,8 +70,29 @@ Route::middleware(['auth', 'tenant.matches'])->group(function () {
         ->middleware('permission:leave.view')->name('leave.show');
     Route::get('documents', fn () => Inertia::render('Documents/Index'))
         ->middleware('permission:documents.view')->name('documents.index');
-    Route::get('policies', fn () => Inertia::render('Policies/Index'))
+
+    // Policy Management UI (Checkpoint 20) — same thin-page-route pattern
+    // as every other module: policy/version/acknowledgement data is
+    // fetched client-side from the existing /api/v1/policies endpoints,
+    // never passed through as an Inertia prop. 'policies/create' must be
+    // registered before 'policies/{policy}' so Laravel doesn't treat
+    // "create" as a route parameter.
+    Route::get('policies', [PolicyUiController::class, 'index'])
         ->middleware('permission:policies.view')->name('policies.index');
+    Route::get('policies/create', [PolicyUiController::class, 'create'])
+        ->middleware('permission:policies.create')->name('policies.create');
+    Route::get('policies/{policy}', [PolicyUiController::class, 'show'])
+        ->middleware('permission:policies.view')->name('policies.show');
+    Route::get('policies/{policy}/edit', [PolicyUiController::class, 'edit'])
+        ->middleware('permission:policies.update')->name('policies.edit');
+    // Version creation shares policies.update, same as the API endpoint
+    // it drives (POST /api/v1/policies/{policy}/versions).
+    Route::get('policies/{policy}/versions/create', [PolicyUiController::class, 'createVersion'])
+        ->middleware('permission:policies.update')->name('policies.versions.create');
+    Route::get('policies/{policy}/assign', [PolicyUiController::class, 'assign'])
+        ->middleware('permission:policies.assign')->name('policies.assign');
+    Route::get('policies/{policy}/acknowledgements', [PolicyUiController::class, 'acknowledgements'])
+        ->middleware('permission:policies.view_acknowledgements')->name('policies.acknowledgements');
     // No dedicated "settings.view" permission exists yet — employees.update
     // is used as a reasonable stand-in signal of "this user has some
     // administrative capability." Revisit if/when Settings grows real

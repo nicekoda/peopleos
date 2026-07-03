@@ -226,6 +226,62 @@ class PolicyApiTest extends TestCase
         $this->assertDatabaseHas('policy_versions', ['policy_id' => $policy->id, 'version_number' => 1]);
     }
 
+    // Checkpoint 20 — the new read-only GET policies/{policy}/versions endpoint.
+    public function test_user_with_permission_can_list_policy_versions(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $user = $this->userWithPermissions($tenant, 'policies.view');
+        $policy = Policy::factory()->create(['tenant_id' => $tenant->id]);
+        PolicyVersion::factory()->create(['tenant_id' => $tenant->id, 'policy_id' => $policy->id, 'version_number' => 1]);
+        PolicyVersion::factory()->create(['tenant_id' => $tenant->id, 'policy_id' => $policy->id, 'version_number' => 2]);
+
+        $response = $this->actingAs($user)->getJson($this->url($tenant, "policies/{$policy->id}/versions"));
+
+        $response->assertOk();
+        $this->assertCount(2, $response->json('data'));
+    }
+
+    public function test_user_without_view_permission_cannot_list_policy_versions(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $user = User::factory()->create(['tenant_id' => $tenant->id]);
+        $policy = Policy::factory()->create(['tenant_id' => $tenant->id]);
+
+        $this->actingAs($user)->getJson($this->url($tenant, "policies/{$policy->id}/versions"))->assertForbidden();
+    }
+
+    public function test_tenant_a_cannot_list_tenant_b_policy_versions(): void
+    {
+        $tenantA = Tenant::factory()->create();
+        $tenantB = Tenant::factory()->create();
+        $userA = $this->userWithPermissions($tenantA, 'policies.view');
+        $policyB = Policy::factory()->create(['tenant_id' => $tenantB->id]);
+        PolicyVersion::factory()->create(['tenant_id' => $tenantB->id, 'policy_id' => $policyB->id]);
+
+        $this->actingAs($userA)->getJson($this->url($tenantA, "policies/{$policyB->id}/versions"))->assertNotFound();
+    }
+
+    /**
+     * Refinement 1: the query is scoped through $policy->versions(), not a
+     * free query by policy_id — a version belonging to a *different*
+     * policy in the *same* tenant must never appear in this policy's list.
+     */
+    public function test_versions_endpoint_only_returns_versions_for_the_requested_policy(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $user = $this->userWithPermissions($tenant, 'policies.view');
+        $policyA = Policy::factory()->create(['tenant_id' => $tenant->id]);
+        $policyB = Policy::factory()->create(['tenant_id' => $tenant->id]);
+        PolicyVersion::factory()->create(['tenant_id' => $tenant->id, 'policy_id' => $policyA->id, 'version_number' => 1]);
+        $versionB = PolicyVersion::factory()->create(['tenant_id' => $tenant->id, 'policy_id' => $policyB->id, 'version_number' => 1]);
+
+        $response = $this->actingAs($user)->getJson($this->url($tenant, "policies/{$policyA->id}/versions"));
+
+        $response->assertOk();
+        $ids = collect($response->json('data'))->pluck('id');
+        $this->assertNotContains($versionB->id, $ids);
+    }
+
     public function test_policy_version_cannot_attach_document_from_another_tenant(): void
     {
         Storage::fake('local');

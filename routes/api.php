@@ -63,6 +63,11 @@ Route::middleware(['auth', 'tenant.matches'])->prefix('api/v1')->group(function 
     Route::get('policies/{policy}', [PolicyController::class, 'show'])->middleware('permission:policies.view');
     Route::patch('policies/{policy}', [PolicyController::class, 'update'])->middleware('permission:policies.update');
     Route::post('policies/{policy}/versions', [PolicyController::class, 'storeVersion'])->middleware('permission:policies.update');
+    // Read-only (Checkpoint 20) — gated by policies.view, same trust level
+    // as viewing the policy itself; no new write path, no new permission.
+    // Needed so the UI can show current-version content and let the user
+    // pick which draft to publish without guessing a version ID.
+    Route::get('policies/{policy}/versions', [PolicyController::class, 'versions'])->middleware('permission:policies.view');
     Route::post('policies/{policy}/publish', [PolicyController::class, 'publish'])->middleware('permission:policies.publish');
     Route::post('policies/{policy}/assign', [PolicyController::class, 'assign'])->middleware('permission:policies.assign');
     Route::get('policies/{policy}/acknowledgements', [PolicyController::class, 'acknowledgements'])->middleware('permission:policies.view_acknowledgements');

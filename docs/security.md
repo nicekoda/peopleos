@@ -2304,6 +2304,197 @@ the list and detail pages carry only IDs.
 - Frontend test tooling (Vitest + React Testing Library), if
   component-level testing becomes valuable.
 
+## Policy Management UI
+
+The fourth real module screen, built on the same Checkpoint 16
+foundation — see
+[`architecture.md`](architecture.md#policy-management-ui-checkpoint-20)
+for the missing-versions-endpoint gap this checkpoint closed and
+[`api.md`](api.md#policy-management) for the route reference.
+
+### The rule restated a fourth time
+
+Every `{policy}`-bound route (`/policies/{id}`, `/edit`,
+`/versions/create`, `/assign`, `/acknowledgements`) carries the same
+`permission:{key}` middleware its `/api/v1` counterpart already
+requires. `PermissionGate`/`useCan()` only decide whether Create
+version/Publish/Assign/Acknowledge/View acknowledgements *render* — the
+backend (`PolicyController`'s permission checks, the self-approval-style
+acknowledgement resolution, the draft-only `policy_version_id` scoping
+on publish, the tenant/policy-ownership checks) remains the sole
+authority, completely unchanged from Checkpoint 10.
+
+### The new `GET /api/v1/policies/{policy}/versions` endpoint
+
+Approved before implementation (see the checkpoint transcript) as a
+narrow, read-only exception to "use existing endpoints only" — the UI
+could not show current-version content or offer a safe draft-version
+picker for publishing without it. Design constraints, all satisfied:
+
+- **Gated by `policies.view`** — no new permission; the same trust level
+  as viewing the policy itself, since this is read-only reference data
+  a viewer of the policy should already be able to see.
+- **Scoped through `$policy->versions()`, not a free query by
+  `policy_id`** — a version belonging to a *different* policy, even in
+  the same tenant, structurally cannot appear in this endpoint's
+  response. Tested directly
+  (`PolicyApiTest::test_versions_endpoint_only_returns_versions_for_the_requested_policy`).
+- **Tenant-scoped the same way every other Policy endpoint is** —
+  `ensureBelongsToCurrentTenant()` first; `PolicyVersion` already uses
+  `BelongsToTenant`. Tested directly
+  (`test_tenant_a_cannot_list_tenant_b_policy_versions`).
+- **No new write path** — `GET` only; `POST .../versions` (create) and
+  `POST .../publish` are completely unchanged.
+- Full `auth`/`tenant.matches`/active-user/active-tenant enforcement is
+  identical to every other Policy route (same middleware group, same
+  `hasPermission()` fail-closed behavior) — nothing new to add here,
+  since it's registered inside the same `Route::middleware([...])->group()`
+  as the rest of `/api/v1/policies/*`.
+
+### Publish: never a guessed or empty version ID (Refinements 2/3)
+
+`Policies/Show.tsx` fetches the versions list and filters to
+`status: draft` client-side. With zero drafts, no publish control is
+shown at all beyond a plain "No draft versions available to publish"
+message — there is no code path in this UI that could submit `POST
+.../publish` with a missing or fabricated `policy_version_id`. With one
+or more drafts, the user explicitly selects one from a `<select>``
+populated only with IDs the versions endpoint actually returned for
+*this* policy. Publishing itself: confirmation prompt, disabled button
+while processing, no optimistic status update, and both the policy and
+versions list are refetched only after the backend confirms success. A
+`422` from `PublishPolicyRequest` (e.g. selecting a version with no
+content) surfaces its specific field message rather than a generic one.
+
+### Assignment: allowlisted, and blocked client-side before it would even 422 (Refinement 4)
+
+`Policies/Assign.tsx` sends exactly `employee_ids` (an array built from
+checkbox selections against the fetched `/api/v1/employees` list — never
+free text) and an optional `due_date`. No `tenant_id`, `policy_id` (it's
+a route parameter, never a form field), `policy_version_id` (not
+required by `AssignPolicyRequest` — assignment always targets the
+policy's own `current_version_id` automatically), `assigned_by`,
+`assigned_at`, or `acknowledgement_status` are ever fields on this form.
+If the policy has no `current_version_id`, the assign form isn't
+rendered at all — a plain message explains why — mirroring
+`PolicyController::assign()`'s own `abort_unless($policy->current_version_id, 422, ...)`
+rule as a UI convenience, not a replacement for it.
+
+### Acknowledgement: self-scoped only, by omission (Refinement 5)
+
+The Acknowledge button calls `POST /policies/{policy}/acknowledge` with
+an **empty body** — `employee_id` is never a field anywhere in this
+checkpoint's UI. This means the frontend only ever exercises
+`PolicyController::acknowledge()`'s self-acknowledgement branch (employee
+resolved from the caller's own linked employee, Checkpoint 11); the
+admin-recorded-on-behalf-of-someone-else branch still exists and remains
+tested at the API layer, it simply has no UI entry point built this
+checkpoint. Confirmed live: `employee@uesl.peopleos.test` acknowledging
+their own assigned policy recorded `acknowledgement_method: "web"` (the
+self-service method), not `admin_recorded`.
+
+### Acknowledgement list: no raw IDs, no technical metadata (Refinement 6)
+
+`Policies/Acknowledgements.tsx` reuses `formatEmployeeRef()`
+(Checkpoint 18) for the employee column — `PolicyAcknowledgementResource`
+has no employee name field, so this renders "You" for the viewer's own
+record or a truncated, visibly provisional placeholder otherwise, same
+reasoning as Leave/Documents. `ip_address`, `user_agent`, `assigned_by`,
+and every other raw internal-actor field the API happens to return are
+deliberately never rendered on this page — not because they're masked
+server-side (they aren't; `PolicyAcknowledgementResource` returns them
+plainly, same as always), but because this screen has no legitimate use
+for them and displaying them would be unnecessary technical/personal
+data exposure beyond what the spec asked this screen to show.
+
+### No content-injection risk from policy version text (Refinement 9)
+
+`content`/`summary` are rendered via plain JSX text interpolation
+(`{content}`), never `dangerouslySetInnerHTML` — React escapes text
+children automatically, so this is safe by construction regardless of
+what a version's content contains. No rich-text editor, WYSIWYG toolbar,
+or Markdown renderer was added this checkpoint — content-only,
+plain-text versions, per your explicit instruction.
+
+### `owner_user_id` and `employee_document_id`: backend-safe, UI-omitted
+
+Both fields are validated safely server-side
+(`owner_user_id` via a tenant-scoped `Rule::exists('users', ...)`;
+`employee_document_id` via a tenant-scoped `Rule::exists('employee_documents', ...)`)
+but neither appears on the Create/Edit/Version-create forms:
+`owner_user_id` has no safe lookup UI to build on (no `/api/v1/users`
+listing endpoint exists at all this checkpoint), and
+`employee_document_id` has no safe general/policy-scoped document picker
+(only employee-scoped documents exist, Checkpoint 8/19 — attaching one
+to a tenant-wide policy is the same semantic mismatch flagged in
+Checkpoint 10's Policy Management section). Omitted rather than built
+as an unsafe raw-ID text input, per your explicit instruction.
+
+### A pre-existing note worth flagging, not fixed this checkpoint
+
+`UpdatePolicyRequest` technically accepts a `status` field beyond just
+`archived` (only the `archived` transition is additionally gated by
+`policies.archive` inside the controller) — meaning `PATCH
+/policies/{policy}` could in principle set `status: published` directly,
+bypassing `publish()`'s own invariants (a version must exist, have
+content, be a draft). This is a pre-existing characteristic of the
+Checkpoint 10 API, not something introduced or changed this checkpoint.
+The Edit form (`Policies/Edit.tsx`) deliberately never includes a
+`status` field at all, so this UI cannot trigger that path — but the
+API endpoint itself remains as permissive as it always was. Flagged here
+for future attention rather than silently worked around or silently
+ignored.
+
+### What is not, and cannot be, tested by a JS runner
+
+Same posture as every prior module UI checkpoint — no Jest/Vitest
+configured. Verified via `tsc --noEmit`, `npm run build`, and a live
+HTTPS smoke test:
+
+- Create/Edit/Publish/Assign/Acknowledge/View-acknowledgements button
+  visibility based on `useCan()`.
+- The draft-version `<select>` and its "no drafts available" fallback.
+- The publish confirmation prompt.
+- The employee multi-select checkboxes on the Assign page.
+- The Acknowledge button's success/error message rendering.
+
+What *is* backend-tested (`PolicyUiTest`, 18 tests, plus 4 new tests in
+`PolicyApiTest` for the versions endpoint): guest redirects on all 7
+routes, permission gating both directions on every route, cross-tenant
+`404` on every `{policy}`-bound route, and that shared Inertia props
+carry only `policyId` — confirmed directly with a real policy title
+("Confidential Disciplinary Procedure") asserted absent from every
+bound page's serialized props.
+
+### Current limitations
+
+- No policy campaign automation, email reminders, or escalations for
+  overdue acknowledgements.
+- No policy dashboard or compliance reporting.
+- No policy template library.
+- No bulk or department/location-wide assignment — the assign form's
+  employee selector shows only the first page of `/api/v1/employees`
+  (no search/pagination in the selector this checkpoint).
+- No admin-recorded-on-behalf-of-employee acknowledgement UI — the API
+  path exists and is tested, this checkpoint's UI only calls the
+  self-acknowledgement path.
+- No `owner_user_id` or `employee_document_id` picker — see above.
+- No rich text editor — plain text content only.
+- No JS/TS unit test runner — see above.
+
+### Future
+
+- A policy dashboard and compliance/acknowledgement reporting.
+- Email reminders and escalations for overdue acknowledgements.
+- Policy campaign automation (scheduled assignment on a cadence).
+- Document integration UI, once a safe general/policy-scoped document
+  picker exists (reusing `policy_versions.employee_document_id`).
+- A user picker for `owner_user_id`, once a safe `/api/v1/users` listing
+  endpoint exists.
+- An admin-recorded-on-behalf-of-employee acknowledgement UI.
+- Frontend test tooling (Vitest + React Testing Library), if
+  component-level testing becomes valuable.
+
 ## Local Demo Credentials
 
 **Local development only — these are not real secrets and only work against your own local database.** Password comes from `SEED_USER_PASSWORD` in `.env` (not committed; `.env.example` has an empty placeholder).
@@ -2346,7 +2537,8 @@ other 17 roles per tenant exist as empty placeholders for future modules.
 - **Leave Management still has no notifications or calendar integration** — see [Leave Management](#leave-management) above.
 - **Line Manager can now approve/reject leave, but direct reports only** (Checkpoint 14) — indirect (skip-level) approval is a deliberate future policy decision, not built. See [Manager-Hierarchy-Scoped Leave Approval](#manager-hierarchy-scoped-leave-approval) above.
 - **No org chart, manager self-service dashboard, or performance/probation review usage of the manager hierarchy** — see [Manager Hierarchy](#manager-hierarchy) above for the full list.
-- **Employee Records, Leave Management, and (employee-scoped) Document Repository all have real UIs now (Checkpoints 17/18/19); the top-level `/documents` route is still a permission-gated placeholder (no tenant-wide document centre yet — see [Document Repository UI](#document-repository-ui) above), and Policies/Settings remain placeholders too** — see [Employee Records UI](#employee-records-ui), [Leave Management UI](#leave-management-ui), and [Document Repository UI](#document-repository-ui) above.
+- **Employee Records, Leave Management, (employee-scoped) Document Repository, and Policy Management all have real UIs now (Checkpoints 17/18/19/20); the top-level `/documents` route is still a permission-gated placeholder (no tenant-wide document centre yet — see [Document Repository UI](#document-repository-ui) above), and Settings remains a placeholder too** — see [Employee Records UI](#employee-records-ui), [Leave Management UI](#leave-management-ui), [Document Repository UI](#document-repository-ui), and [Policy Management UI](#policy-management-ui) above.
 - **Leave Management UI has no balance/leave-type admin UI, calendar view, or notification integration** — see [Leave Management UI](#leave-management-ui) above.
 - **Document Repository UI has no tenant-wide document centre, approval workflow UI, eSignature, document generation, or file preview** — see [Document Repository UI](#document-repository-ui) above.
+- **Policy Management UI has no campaign automation, reminders/escalations, dashboard/compliance reporting, template library, bulk/department-wide assignment, or admin-recorded-on-behalf-of acknowledgement UI** — see [Policy Management UI](#policy-management-ui) above.
 - **No JS/TS unit test runner configured** — frontend verification relies on `tsc --noEmit`, `vite build`, and backend feature tests asserting Inertia response shape/shared-prop safety.

@@ -576,6 +576,55 @@ directly (`hasPermission()` in `tinker`, or just re-reading
 the "HR Manager: all document permissions" assumption would have been
 wrong here.
 
+## Policy Management UI: testing a backend gap fix separately from the UI that needed it (Checkpoint 20)
+
+This checkpoint added one real backend endpoint mid-flow — `GET
+/api/v1/policies/{policy}/versions` — after flagging it as a genuine
+blocker and getting explicit approval (see
+`docs/architecture.md#policy-management-ui-checkpoint-20`). It was
+tested in two separate places, deliberately: `PolicyApiTest` gained 4
+new tests covering the endpoint itself (permission gating, tenant
+isolation, and — the one worth calling out —
+`test_versions_endpoint_only_returns_versions_for_the_requested_policy`,
+which creates two policies in the *same* tenant, each with its own
+version, and asserts policy A's version list never contains policy B's
+version ID). `PolicyUiTest` then only needed to prove the *page routes*
+around this new data source behave correctly (permission gating, guest
+redirects, cross-tenant 404, IDs-only props) — it does not re-test the
+versions endpoint's own scoping logic, since that's already proven at
+the API layer. This mirrors the general rule from Checkpoint 17's
+testing notes: don't re-test a lower layer's correctness at a higher
+layer just because a new page exists — test that the new *page* does
+its part, and trust the API test suite for the data it's built on.
+
+### Multi-page cross-tenant and props-only-IDs assertions, written as loops (Checkpoint 20)
+
+Unlike every prior module (which has a single detail page), Policy
+Management has *five* `{policy}`-bound routes (`show`, `edit`,
+`versions/create`, `assign`, `acknowledgements`). Rather than writing
+five near-identical cross-tenant tests and five near-identical
+props-assertion tests,
+`test_cross_tenant_policy_id_returns_404_on_every_bound_route` and
+`test_bound_pages_props_contain_only_policy_id` each loop over all five
+paths within one test. This is a deliberate divergence from the
+per-route test shape every earlier module UI test file used — worth
+following for any future module that grows this many bound routes
+per resource, rather than mechanically copy-pasting five separate test
+methods that would all fail (or pass) for the same underlying reason.
+
+### The live smoke test's self-acknowledgement check needed a real assigned-employee round trip, not just a `200`
+
+Confirming Refinement 5 (acknowledgement stays self-scoped) needed more
+than checking the acknowledge call returns `200` — a `200` alone
+wouldn't distinguish "acknowledged as myself" from "accidentally
+acknowledged as someone else because a stray `employee_id` leaked into
+the request." The smoke test's `POST .../acknowledge` was sent with an
+explicitly empty JSON body (`[]` in the PHP script, serializing to `{}`)
+and the response's `acknowledgement_method` was checked directly:
+`"web"` (self-service) rather than `"admin_recorded"`, confirming the
+resolved employee really was the caller's own linked record, not just
+that *some* acknowledgement succeeded.
+
 ## Verifying against the real app, not just the test suite
 
 Because of the SQLite/Postgres split above, checkpoints in this project

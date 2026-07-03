@@ -231,7 +231,13 @@ served through the `web` middleware group, session-based auth same as
 | `GET` | `/employees/{employee}/documents/upload` | `auth`, `tenant.matches`, `permission:documents.upload` | Upload form — registered before `/employees/{employee}/documents/{document}` to avoid route-param collision |
 | `GET` | `/employees/{employee}/documents/{document}` | `auth`, `tenant.matches`, `permission:documents.view` | Detail — passes only `employeeId`/`documentId` as props, never document data (see `docs/architecture.md`); `404` if the employee belongs to another tenant, or the document doesn't belong to this employee |
 | `GET` | `/documents` | `auth`, `tenant.matches`, `permission:documents.view` | Placeholder — a tenant-wide document centre, distinct from the employee-scoped UI above; not built yet (see `docs/architecture.md`) |
-| `GET` | `/policies` | `auth`, `tenant.matches`, `permission:policies.view` | Placeholder |
+| `GET` | `/policies` | `auth`, `tenant.matches`, `permission:policies.view` | Real UI (Checkpoint 20) — list, fetched client-side from `/api/v1/policies` |
+| `GET` | `/policies/create` | `auth`, `tenant.matches`, `permission:policies.create` | Create form — registered before `/policies/{policy}` to avoid route-param collision |
+| `GET` | `/policies/{policy}` | `auth`, `tenant.matches`, `permission:policies.view` | Detail — passes only `policyId` as a prop, never policy data (see `docs/architecture.md`); `404` if the policy belongs to another tenant |
+| `GET` | `/policies/{policy}/edit` | `auth`, `tenant.matches`, `permission:policies.update` | Edit form |
+| `GET` | `/policies/{policy}/versions/create` | `auth`, `tenant.matches`, `permission:policies.update` | Version create form — same permission as `POST .../versions` |
+| `GET` | `/policies/{policy}/assign` | `auth`, `tenant.matches`, `permission:policies.assign` | Assignment form — employee multi-select from `/api/v1/employees` |
+| `GET` | `/policies/{policy}/acknowledgements` | `auth`, `tenant.matches`, `permission:policies.view_acknowledgements` | Acknowledgement records list |
 | `GET` | `/settings` | `auth`, `tenant.matches`, `permission:employees.update` | Placeholder — no dedicated `settings.*` permission exists yet, `employees.update` used as a stand-in admin-capability signal |
 
 **Leave Management UI (Checkpoint 18)** reuses `resources/js/lib/api.ts`
@@ -251,6 +257,15 @@ helper for authenticated blob downloads (`api` with `responseType:
 was newly granted to HR Manager and Employee (previously Tenant-Admin-only)
 so the upload form's category dropdown works for the roles that
 actually upload documents — see `docs/security.md#document-repository-ui`.
+
+**Policy Management UI (Checkpoint 20)** reuses the existing
+`/api/v1/policies` endpoints (Checkpoint 10) plus the new read-only `GET
+/api/v1/policies/{policy}/versions` documented above. `owner_user_id`
+and `employee_document_id` are accepted by the backend but omitted from
+every form — no safe `/api/v1/users` lookup or general document picker
+exists yet. Acknowledgement is self-scoped only (no `employee_id` ever
+sent by this UI); see `docs/security.md#policy-management-ui` for the
+full design.
 
 ### Shared props (every Inertia response)
 
@@ -457,6 +472,7 @@ completely unaffected.
 | `GET` | `/api/v1/policies/{policy}` | `policies.view` | |
 | `PATCH` | `/api/v1/policies/{policy}` | `policies.update` | Setting `status` to `archived` additionally requires `policies.archive` |
 | `POST` | `/api/v1/policies/{policy}/versions` | `policies.update` | Creates a new draft version; `version_number` is auto-computed |
+| `GET` | `/api/v1/policies/{policy}/versions` | `policies.view` | **New in Checkpoint 20** — paginated, scoped through `$policy->versions()` (never a free query by `policy_id`); added so the frontend can show current-version content and let the user pick a draft to publish — see `docs/security.md#policy-management-ui` |
 | `POST` | `/api/v1/policies/{policy}/publish` | `policies.publish` | Body: `{"policy_version_id": "..."}` — must be a draft version of this policy with content or an attached document |
 | `POST` | `/api/v1/policies/{policy}/assign` | `policies.assign` | Body: `{"employee_ids": [...], "due_date": "..."}` — policy must already be published |
 | `GET` | `/api/v1/policies/{policy}/acknowledgements` | `policies.view_acknowledgements` | Paginated list of acknowledgement records |

@@ -162,6 +162,17 @@ raw browser navigation to the API URL, which could otherwise offer a
 403/404 JSON error body up as if it were the downloaded file). See
 `docs/security.md`.
 
+**Policy Management UI** (Checkpoint 20) — `/policies`, `/policies/create`,
+`/policies/{id}`, `/policies/{id}/edit`, `/policies/{id}/versions/create`,
+`/policies/{id}/assign`, `/policies/{id}/acknowledgements`. Same
+client-side-fetching pattern, reusing the existing `/api/v1/policies`
+endpoints plus one new small read-only addition this checkpoint,
+`GET /api/v1/policies/{policy}/versions` (gated `policies.view`, scoped
+through `$policy->versions()`) — without it, the UI had no way to show
+current-version content or let HR pick which draft to publish. Policy
+version content is always rendered as plain text, never
+`dangerouslySetInnerHTML`. See `docs/security.md`.
+
 See `docs/architecture.md`/`docs/security.md`/`docs/api.md` for the full
 design, what's shared with the frontend (and what never is), and the
 future module rollout plan.

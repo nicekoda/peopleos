@@ -767,6 +767,83 @@ or (worse) the raw error blob being silently offered to the browser as
 if it were the requested file. See `docs/security.md` for why this
 also rules out a plain `window.location = downloadUrl` navigation.
 
+## Policy Management UI (Checkpoint 20)
+
+The fourth real module screen, and the first that required a small,
+approved backend addition rather than working entirely within the
+existing API surface — see
+[`security.md`](security.md#policy-management-ui) for the security model
+and [`api.md`](api.md#policy-management) for the route reference.
+
+**The missing-versions-list gap, and why it was a real blocker, not a
+nicety.** `PolicyResource` exposes only `current_version_id` — a bare
+ID, no title/summary/content behind it — and before this checkpoint the
+only version-related endpoint was `POST .../versions` (create). Two of
+the required goals were structurally impossible without more: showing
+"current version content" on the detail page (nothing to fetch it with),
+and letting the user pick which draft to publish (`PublishPolicyRequest`
+requires a specific `policy_version_id`, and there was no way to
+discover one except remembering it from the moment a version was just
+created in the same browser session — a normal "create a draft today,
+publish next week" workflow would have had no way to find it again).
+Flagged and approved before implementation, per your standing "stop and
+flag backend gaps" instruction — see the approved plan in the checkpoint
+transcript.
+
+**The fix stayed deliberately narrow**: one new controller method,
+`PolicyController::versions()`, one new route, no new permission (reuses
+`policies.view` — the same trust level as viewing the policy itself),
+no new write path. Scoped through `$policy->versions()->orderByDesc('version_number')->paginate()`,
+never a free query filtered by a request-supplied `policy_id` — this is
+what makes "a version from a different policy in the same tenant can
+never leak into this policy's list" a property of the query itself,
+not something a controller-level check has to remember to enforce
+separately (tested directly:
+`PolicyApiTest::test_versions_endpoint_only_returns_versions_for_the_requested_policy`).
+
+**Two flows that only make sense once a version exists, handled as
+"nothing to do" rather than broken UI.** The Publish control on
+`Policies/Show.tsx` fetches the versions list and filters to
+`status: draft`; with zero drafts, it renders "No draft versions
+available to publish" instead of a dropdown with nothing in it or (worse)
+a button that would submit a guessed/empty version ID. The Assign page
+checks `policy.current_version_id` before rendering its form at all —
+a policy with no published version shows "Publish a version first to
+enable assignment" instead of a form that would just 422 on submit. Both
+mirror `AssignPolicyRequest`'s own `current_version_id` requirement and
+`PublishPolicyRequest`'s draft-only `policy_version_id` scoping — UI
+conveniences layered on top of rules the backend enforces regardless.
+
+**Acknowledgement stays deliberately one-directional.** The Acknowledge
+button on the detail page calls `POST /policies/{policy}/acknowledge`
+with an empty body — never `employee_id`. This is not an oversight;
+building an "acknowledge on behalf of someone else" UI was explicitly
+out of scope this checkpoint, so the frontend only ever exercises
+`PolicyController::acknowledge()`'s self-acknowledgement path (resolved
+from the caller's own linked employee, Checkpoint 11). The
+admin-recorded-on-behalf-of path still exists at the API layer and
+remains fully tested (`PolicyApiTest`), just with no UI entry point yet.
+
+**Policy version content renders as plain, escaped text — no rich text
+editor, no `dangerouslySetInnerHTML`.** `content` is a free-text field
+(`PolicyVersion.content`); rendering it via JSX text interpolation
+(`{content}`) is inherently safe (React escapes text children), and
+deliberately not upgraded to a rich-text/HTML editor or renderer this
+checkpoint, per your explicit "simple and safe, no rich text editor"
+instruction.
+
+**`owner_user_id` and `employee_document_id` are both accepted by the
+backend but omitted from every form.** `owner_user_id` is validated
+safely server-side (a tenant-scoped `Rule::exists('users', ...)`), but
+there is no `/api/v1/users` listing endpoint at all — no safe lookup UI
+could be built without inventing one, so the field is simply never
+offered. `employee_document_id` has existed on `policy_versions` since
+Checkpoint 10 specifically as a known semantic mismatch (an
+employee-owned document is a poor fit for a tenant-wide policy
+document, see `docs/security.md`'s Policy Management section) — no
+general/policy-scoped document picker exists yet, so version creation
+stays content-only. Both are documented future work, not silent gaps.
+
 ## Internal IDs vs. Public-Facing References
 
 Internal database IDs may remain bigint (see

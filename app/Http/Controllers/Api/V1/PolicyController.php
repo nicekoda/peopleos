@@ -143,6 +143,21 @@ class PolicyController extends Controller
         return (new PolicyVersionResource($version))->response()->setStatusCode(201);
     }
 
+    /**
+     * Read-only (Checkpoint 20) — gated by policies.view. Scoped through
+     * the $policy->versions() relation, not a free query filtered by a
+     * request-supplied policy_id, so a version belonging to a different
+     * policy (even in the same tenant) can never be returned here.
+     */
+    public function versions(Request $request, Policy $policy): AnonymousResourceCollection
+    {
+        $this->ensureBelongsToCurrentTenant($policy);
+
+        $versions = $policy->versions()->orderByDesc('version_number')->paginate();
+
+        return PolicyVersionResource::collection($versions);
+    }
+
     public function publish(PublishPolicyRequest $request, Policy $policy): PolicyResource
     {
         $this->ensureBelongsToCurrentTenant($policy);

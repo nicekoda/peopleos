@@ -1959,6 +1959,166 @@ pages render).
 - Department/location/position pickers, once a listing API exists.
 - Frontend test tooling (Vitest + React Testing Library), if component-level testing becomes valuable.
 
+## Leave Management UI
+
+The second real module screen, built on the same Checkpoint 16
+foundation and following the same pattern as
+[Employee Records UI](#employee-records-ui) above — see
+[`architecture.md`](architecture.md#leave-management-ui-checkpoint-18)
+for the client-side-fetching design and
+[`api.md`](api.md#frontend-routes-inertia) for the route reference.
+
+### The rule restated, again, because it matters just as much here
+
+`/leave` requires `permission:leave.view`, `/leave/create` requires
+`permission:leave.request`, `/leave/{id}` requires `permission:leave.view`
+— identical to their `/api/v1` counterparts. `PermissionGate`/`useCan()`
+only decide whether Submit/Cancel/Approve/Reject *render*; the backend
+(`leave.approve`/`leave.reject`, `ensureNotOwnRequestForApprovalAction()`,
+`resolveApprovalScope()`, `LeaveBalanceService`, `LeaveRequestStatus::
+canTransitionTo()`) remains the sole authority on whether an action is
+actually allowed. Confirmed directly in the live smoke test: a Line
+Manager's Approve button rendered identically for a direct report's
+request and an unrelated employee's request — the backend, not the UI,
+was what correctly allowed one (`200`) and rejected the other (`403`).
+
+### The frontend cannot know `ManagerHierarchyService`'s scope — a limitation, not a bug
+
+Unlike every other permission check in this app (which the frontend can
+mirror exactly, because `permissionKeys()` gives it the same yes/no
+answer the backend would), Approve/Reject visibility genuinely **cannot**
+be computed correctly client-side: `resolveApprovalScope()` depends on
+`ManagerHierarchyService::directlyManages()`, which needs the full
+manager-hierarchy chain — data that isn't (and shouldn't be) shipped to
+the browser wholesale. `Show.tsx` renders both buttons whenever the
+viewer holds the relevant permission and the request is `pending`,
+accepting that some renders will lead to a backend `403`. This is
+deliberate, not an oversight: shipping enough hierarchy data to predict
+the answer client-side would mean exposing tenant-wide manager/employee
+relationship data to every leave-approving user, a materially larger
+disclosure than the leave request itself. A resulting `403` is handled
+exactly like any other permission failure (generic safe message, no
+special-casing) — see `lib/api.ts`'s error contract below.
+
+### Balances are read-only, on purpose (Refinement 2)
+
+`Index.tsx` renders `/me/leave-balances` fields (entitlement, used,
+pending, carried forward, adjustment, available) as plain text — no
+input, no edit affordance, no admin adjustment UI anywhere in this
+checkpoint. `LeaveBalanceService`'s enforcement (`reservePending()`/
+`consumePending()`/`releasePending()`, `lockForUpdate()`) is entirely
+backend-side and untouched; the frontend only ever displays the result
+of a `GET`, never attempts to influence it.
+
+### Rejection reason: required client-side, masked same as everywhere else (Refinement 5)
+
+`RejectReasonPrompt` won't call `onConfirm()` without non-empty text, and
+the reject request body contains **only** `rejection_reason` — no other
+field is sent alongside a reject action. This is a client-side
+convenience (avoids a round-trip for an empty reason the backend would
+reject anyway via `RejectLeaveRequestRequest`'s validation) — the actual
+requirement is enforced by that same backend validation, unchanged since
+Checkpoint 12. The reason text is never rendered anywhere in the UI
+outside the reject flow itself (no audit/history view surfaces it), and
+a `422` from a failed reject shows the field-level message only — never
+a raw backend trace.
+
+### Employee-ID display: subtle by design, not a finished HR-facing pattern (Refinement 1)
+
+`LeaveRequestResource` has no employee *name* field, only `employee_id`.
+`resources/js/lib/format.ts`'s `formatEmployeeRef()` renders `"You"` for
+the viewer's own request, or `` `Employee record (ID ending •••1234)` ``
+otherwise — deliberately truncated and labeled so it reads as a
+provisional placeholder, not a finished design decision. This is the
+same problem Checkpoint 17 solved by *omitting* department/location
+fields entirely; here the ID is too useful (the only way to distinguish
+rows in a multi-employee list) to omit, so it's shown, but shown
+unobtrusively. See [`architecture.md`](architecture.md#leave-management-ui-checkpoint-18)
+for the full rationale — this goes away once a real employee-name
+lookup exists on the leave API.
+
+### Safe status-action handling (Refinement 4)
+
+Every Submit/Cancel/Approve/Reject action in `Show.tsx` goes through one
+`runAction()` helper: button disabled while `processing`, no optimistic
+status update before the backend confirms success, a full `load()`
+refetch after success, and specific handling for `403` (generic
+message), `409` ("This request can no longer be changed." — the
+tightened default in `lib/api.ts`, see below), and `422` (field
+errors) — never a raw error body rendered to the user.
+
+### `lib/api.ts`'s error contract — unchanged from Checkpoint 17 except one message
+
+| Backend response | Frontend behavior |
+|---|---|
+| `401` | Full-page redirect to `/login` |
+| `403` | "You don't have permission to do this." |
+| `404` | "Not found." |
+| `409` | Backend's own message if present, else "This request can no longer be changed." (tightened this checkpoint — was the more generic "This action conflicts with the current state." in Checkpoint 17; leave status-transition conflicts are common enough in normal use, via double-submission or a stale tab, to warrant a more specific default) |
+| `422` | Field-level errors + "Please fix the errors below." |
+| anything else | Generic "Something went wrong. Please try again." |
+
+### Web route tenant isolation for `show` (same pattern as Checkpoint 17's Refinement 1)
+
+`{leaveRequest}` route-model-binding is already scoped by
+`BelongsToTenant`; `LeaveUiController::show()` additionally calls
+`ensureBelongsToCurrentTenant()` as defense in depth, same reasoning as
+`EmployeeUiController`. Confirmed directly in the live smoke test and in
+`LeaveUiTest::test_show_page_returns_404_for_cross_tenant_leave_request`
+— a cross-tenant leave request ID returns `404`, not `403` (the same
+route-model-binding-resolves-before-`tenant.matches` nuance documented
+under Checkpoint 13).
+
+### What is not, and cannot be, tested by a JS runner (Refinement 7)
+
+Same posture as Checkpoint 17 — no Jest/Vitest configured. Verified via
+`tsc --noEmit`, `npm run build`, and a live HTTPS smoke test, not
+automated unit tests:
+
+- Submit/Cancel/Approve/Reject button visibility based on `useCan()`
+  and request status.
+- The reject-reason prompt's required-field behavior.
+- Client-side `422`/`403`/`409` error banners actually appearing in the DOM.
+- The inline balance cards' read-only rendering.
+
+**The manager-scope approval flow specifically was live-tested, not just
+documented as backend-covered** (Refinement 7 asked for this "if
+practical" — it was practical): a Line Manager viewing/approving a direct
+report's request succeeded end-to-end through the real UI, and the same
+Line Manager was correctly blocked (`404` on view, `403` on approve) from
+an unrelated employee's request. The full manager-hierarchy authorization
+*logic* itself (cycle detection, chain depth, cross-tenant/inactive
+managers) remains covered by `ManagerHierarchyServiceTest`/
+`ManagerScopedLeaveApprovalTest` from Checkpoints 13/14 — this
+checkpoint didn't re-test that logic, only that the UI correctly reaches
+it.
+
+What *is* backend-tested (`LeaveUiTest`): permission-gating on all 3
+routes, guest redirects, cross-tenant `404` on `show`, the correct
+`leaveRequestId` prop, and that shared Inertia props carry only the ID —
+confirmed directly with a real confidential `reason` string absent from
+the serialized props.
+
+### Current limitations
+
+- No leave balance admin UI — creation/adjustment of `leave_balances`
+  rows remains API/tinker-only, per Refinement 2.
+- No leave type admin UI — `leave_types` management remains API-only.
+- No calendar view, team-leave overview, or notification integration.
+- No accrual-engine UI — matches the backend, which has none yet either
+  (see [Leave Balances Foundation](#leave-balances-foundation)).
+- No workflow builder or configurable approval chains — manager-scope
+  approval is the fixed, built-in rule from Checkpoint 14.
+- No JS/TS unit test runner — see above.
+
+### Future
+
+- Leave balance and leave type admin UIs, once those become a real need.
+- A team/manager leave calendar view, reusing `leave.view_team`.
+- Notification integration (email/in-app) on submit/approve/reject.
+- Frontend test tooling (Vitest + React Testing Library), if
+  component-level testing becomes valuable.
+
 ## Local Demo Credentials
 
 **Local development only — these are not real secrets and only work against your own local database.** Password comes from `SEED_USER_PASSWORD` in `.env` (not committed; `.env.example` has an empty placeholder).
@@ -2001,5 +2161,6 @@ other 17 roles per tenant exist as empty placeholders for future modules.
 - **Leave Management still has no notifications or calendar integration** — see [Leave Management](#leave-management) above.
 - **Line Manager can now approve/reject leave, but direct reports only** (Checkpoint 14) — indirect (skip-level) approval is a deliberate future policy decision, not built. See [Manager-Hierarchy-Scoped Leave Approval](#manager-hierarchy-scoped-leave-approval) above.
 - **No org chart, manager self-service dashboard, or performance/probation review usage of the manager hierarchy** — see [Manager Hierarchy](#manager-hierarchy) above for the full list.
-- **Employee Records has a real UI now (Checkpoint 17); Leave/Documents/Policies/Settings are still permission-gated placeholders** — see [Employee Records UI](#employee-records-ui) above.
+- **Employee Records and Leave Management both have real UIs now (Checkpoints 17/18); Documents/Policies/Settings are still permission-gated placeholders** — see [Employee Records UI](#employee-records-ui) and [Leave Management UI](#leave-management-ui) above.
+- **Leave Management UI has no balance/leave-type admin UI, calendar view, or notification integration** — see [Leave Management UI](#leave-management-ui) above.
 - **No JS/TS unit test runner configured** — frontend verification relies on `tsc --noEmit`, `vite build`, and backend feature tests asserting Inertia response shape/shared-prop safety.

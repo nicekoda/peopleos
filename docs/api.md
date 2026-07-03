@@ -224,10 +224,21 @@ served through the `web` middleware group, session-based auth same as
 | `GET` | `/employees/create` | `auth`, `tenant.matches`, `permission:employees.create` | Create form |
 | `GET` | `/employees/{employee}` | `auth`, `tenant.matches`, `permission:employees.view` | Detail — passes only `employeeId` as a prop, never employee data (see `docs/architecture.md`) |
 | `GET` | `/employees/{employee}/edit` | `auth`, `tenant.matches`, `permission:employees.update` | Edit form |
-| `GET` | `/leave` | `auth`, `tenant.matches`, `permission:leave.view` | Placeholder |
+| `GET` | `/leave` | `auth`, `tenant.matches`, `permission:leave.view` | Real UI (Checkpoint 18) — list + inline balances, fetched client-side from `/api/v1/leave-requests`, `/api/v1/leave-types`, `/api/v1/me/leave-balances` |
+| `GET` | `/leave/create` | `auth`, `tenant.matches`, `permission:leave.request` | Create form — registered before `/leave/{id}` to avoid route-param collision |
+| `GET` | `/leave/{leaveRequest}` | `auth`, `tenant.matches`, `permission:leave.view` | Detail — passes only `leaveRequestId` as a prop, never leave-request data (see `docs/architecture.md`); `404` if the request belongs to another tenant |
 | `GET` | `/documents` | `auth`, `tenant.matches`, `permission:documents.view` | Placeholder |
 | `GET` | `/policies` | `auth`, `tenant.matches`, `permission:policies.view` | Placeholder |
 | `GET` | `/settings` | `auth`, `tenant.matches`, `permission:employees.update` | Placeholder — no dedicated `settings.*` permission exists yet, `employees.update` used as a stand-in admin-capability signal |
+
+**Leave Management UI (Checkpoint 18)** reuses `resources/js/lib/api.ts`
+unchanged apart from a tightened `409` default message ("This request
+can no longer be changed." — previously the more generic "This action
+conflicts with the current state." from Checkpoint 17). See
+`docs/security.md#leave-management-ui` for the full design, including
+why Approve/Reject buttons cannot predict `resolveApprovalScope()`'s
+manager-hierarchy result and simply let a resulting `403` surface like
+any other.
 
 ### Shared props (every Inertia response)
 

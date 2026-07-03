@@ -49,7 +49,7 @@ export function toApiError(error: unknown): ApiError {
             case 404:
                 return { status, message: 'Not found.' };
             case 409:
-                return { status, message: axiosError.response?.data?.message ?? 'This action conflicts with the current state.' };
+                return { status, message: axiosError.response?.data?.message ?? 'This request can no longer be changed.' };
             case 422:
                 return {
                     status,

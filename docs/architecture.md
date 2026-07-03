@@ -653,6 +653,60 @@ since Checkpoint 6), so there's no safe way to let a user pick a real
 value. A future checkpoint adding that listing API is a prerequisite
 for surfacing these fields in the UI at all.
 
+## Leave Management UI (Checkpoint 18)
+
+The second real module screen, following the exact same architecture
+Checkpoint 17 established — see
+[`security.md`](security.md#leave-management-ui) for the security model
+and [`api.md`](api.md#frontend-routes-inertia) for the route reference.
+
+**`LeaveUiController` is a near-copy of `EmployeeUiController`** — three
+thin methods, `show()` passing only `leaveRequestId`. This consistency
+is deliberate: a developer who understands one module's web-controller
+shape already understands the other's. Any future module UI should
+follow the same three-method shape unless there's a specific reason not
+to.
+
+**Three independent client-side fetches on `/leave`, not one
+combined endpoint** — leave requests (`/leave-requests`), leave types
+(`/leave-types`, for the name lookup), and the viewer's own balances
+(`/me/leave-balances`) are fetched separately, each with its own
+loading/error state. A failure in one (e.g. the balances call) doesn't
+block the other two from rendering. This is a deliberate tradeoff
+(three round trips instead of one) in favor of resilience and reusing
+existing single-purpose endpoints rather than inventing an aggregate
+"leave dashboard" endpoint that don't exist in the API — matches "do
+not build... advanced dashboard" from your scope.
+
+**Two identifier-display problems solved the same way, one new
+technique.** Checkpoint 17 solved "no name lookup available at all" by
+omitting the field entirely (department/location/position). Checkpoint
+18 hits a *different* shape of the same problem: `LeaveRequestResource`
+returns `employee_id` (a real, useful identifier for HR/Manager views —
+unlike department IDs, it's the only way to tell rows apart in a multi-
+employee list) but no employee *name*. Omitting it entirely would make
+a tenant-wide/team leave list unusable; showing the raw ULID
+prominently would look like an unfinished design. `resources/js/lib/format.ts`'s
+`formatEmployeeRef()` threads this: "You" for the viewer's own request
+(comparing against the already-shared `auth.user.employee_id`), a
+visibly provisional, truncated placeholder otherwise
+(`Employee record (ID ending •••1234)`). Future work: a real employee
+name/summary field on the leave API, at which point this function goes
+away entirely rather than needing a redesign — it was written to be
+disposable.
+
+**The frontend cannot know `ManagerHierarchyService`'s scope, and
+doesn't pretend to.** Approve/Reject render whenever the viewer holds
+`leave.approve`/`leave.reject` and the request is `pending` — full
+stop, no attempt to predict whether the backend will actually accept a
+specific request based on manager-hierarchy scope. A `403` from a
+button that *looked* available is treated as a completely normal,
+expected outcome (same generic safe message as any other `403`), not a
+bug to route around. Confirmed live: a Line Manager successfully
+approved their direct report's request and was correctly `403`'d
+approving an unrelated employee's — from the UI's perspective, both
+buttons were equally "available."
+
 ## Internal IDs vs. Public-Facing References
 
 Internal database IDs may remain bigint (see

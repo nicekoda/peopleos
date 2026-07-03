@@ -142,6 +142,15 @@ not via server-rendered Inertia props — see `docs/architecture.md` for
 why, and reuse this same pattern (`api.ts` + `toApiError()`) for any
 future module UI rather than inventing a new one per module.
 
+**Leave Management UI** (Checkpoint 18) — `/leave` (list + inline
+balances), `/leave/create`, `/leave/{id}` (detail, with submit/cancel/
+approve/reject actions). Same client-side-fetching pattern; reuses
+`lib/api.ts` unchanged apart from a tightened `409` default message.
+The frontend cannot know the full manager-hierarchy approval scope
+(`ManagerHierarchyService::directlyManages()`) — Approve/Reject buttons
+render based on permission and status alone, and a resulting `403` is
+handled the same safe way as any other. See `docs/security.md`.
+
 See `docs/architecture.md`/`docs/security.md`/`docs/api.md` for the full
 design, what's shared with the frontend (and what never is), and the
 future module rollout plan.

@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\EmployeeUiController;
+use App\Http\Controllers\LeaveUiController;
 use Illuminate\Support\Facades\Route;
 use Inertia\Inertia;
 
@@ -40,8 +41,18 @@ Route::middleware(['auth', 'tenant.matches'])->group(function () {
     Route::get('employees/{employee}/edit', [EmployeeUiController::class, 'edit'])
         ->middleware('permission:employees.update')->name('employees.edit');
 
-    Route::get('leave', fn () => Inertia::render('Leave/Index'))
+    // Leave Management UI (Checkpoint 18) — same thin-page-route pattern
+    // as Employee Records (Checkpoint 17): the actual leave request/
+    // type/balance data is fetched client-side from the existing
+    // /api/v1 endpoints, never passed through as an Inertia prop.
+    // 'leave/create' must be registered before 'leave/{leaveRequest}' so
+    // Laravel doesn't treat "create" as a route parameter.
+    Route::get('leave', [LeaveUiController::class, 'index'])
         ->middleware('permission:leave.view')->name('leave.index');
+    Route::get('leave/create', [LeaveUiController::class, 'create'])
+        ->middleware('permission:leave.request')->name('leave.create');
+    Route::get('leave/{leaveRequest}', [LeaveUiController::class, 'show'])
+        ->middleware('permission:leave.view')->name('leave.show');
     Route::get('documents', fn () => Inertia::render('Documents/Index'))
         ->middleware('permission:documents.view')->name('documents.index');
     Route::get('policies', fn () => Inertia::render('Policies/Index'))

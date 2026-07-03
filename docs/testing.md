@@ -487,6 +487,42 @@ don't blur them:
   automated test coverage. If a future checkpoint adds Vitest + React
   Testing Library, these are exactly the cases to backfill first.
 
+## Leave Management UI: same client-side-fetching test shape, one new wrinkle (Checkpoint 18)
+
+`LeaveUiTest` mirrors `EmployeeUiTest` exactly (guest redirects,
+permission gating per route, cross-tenant `404`, the
+`leaveRequestId`-only prop assertion) — see "Testing a client-side-
+fetching Inertia page" above, the same reasoning applies unchanged. The
+one new wrinkle: `test_show_page_props_contain_only_leave_request_id_not_leave_data`
+seeds the leave request with a genuinely sensitive `reason` value
+("Confidential medical procedure.") and asserts it's absent from the
+serialized props — a slightly stronger version of Checkpoint 17's
+generic "no employee data" assertion, chosen because `reason` is exactly
+the kind of value that would be easy to accidentally leak if a future
+edit ever changed `LeaveUiController::show()` to pass more than just the
+ID "for convenience."
+
+### The manager-scope approval flow was live-tested this checkpoint, not left as backend-only (Refinement 7)
+
+Checkpoint 14 already proved the *authorization logic*
+(`ManagerHierarchyServiceTest`, `ManagerScopedLeaveApprovalTest`) at the
+API layer. What hadn't been exercised was whether the **UI** correctly
+reaches that logic end-to-end. This checkpoint's live smoke test added a
+Line Manager user linked to an employee record, made another employee
+their direct report, and drove the full flow through real HTTPS pages:
+login as the manager → `/leave/{report's-request-id}` (`200`, Approve
+button reachable) → approve (`200`, status updates) → `/leave/{unrelated-
+employee's-request-id}` (`404`, cross-tenant-style "don't reveal
+existence" — actually same-tenant-but-out-of-scope, see "Visibility
+scope" in `docs/api.md`) → attempting to approve that same unrelated
+request directly via its API endpoint (`403`). Both outcomes matched
+expectations exactly on the first run. This is the kind of case worth
+live-testing specifically *when practical*, per your Refinement 7 — the
+backend test suite proves the rule is correct in isolation; the smoke
+test proves the UI doesn't accidentally create a path around it (e.g. a
+stale cached button, a client-side scope guess that turns out wrong in
+the *permissive* direction).
+
 ## Verifying against the real app, not just the test suite
 
 Because of the SQLite/Postgres split above, checkpoints in this project

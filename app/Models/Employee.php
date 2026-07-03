@@ -54,6 +54,14 @@ class Employee extends Model
         // Checkpoint 10).
         'created_by',
         'updated_by',
+        // Set only by EmployeeUserLinkController, never by
+        // StoreEmployeeRequest/UpdateEmployeeRequest — linking is a
+        // distinct, permission-gated action (employees.link_user /
+        // employees.unlink_user), not a field editable via the general
+        // employee update endpoint.
+        'user_id',
+        'linked_at',
+        'linked_by',
     ];
 
     protected function casts(): array
@@ -100,6 +108,16 @@ class Employee extends Model
     public function policyAcknowledgements(): HasMany
     {
         return $this->hasMany(PolicyAcknowledgement::class);
+    }
+
+    public function user(): BelongsTo
+    {
+        return $this->belongsTo(User::class);
+    }
+
+    public function linkedBy(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'linked_by');
     }
 
     public function createdBy(): BelongsTo

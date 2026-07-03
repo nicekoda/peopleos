@@ -9,12 +9,18 @@ use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Attributes\Hidden;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use RuntimeException;
 
-#[Fillable(['name', 'email', 'password', 'tenant_id', 'status', 'is_platform_admin'])]
+// email_verified_at added in Checkpoint 11 — found missing during the
+// required $fillable quality review. Never accepted from request input
+// (no FormRequest validates it), but UserSeeder's mass-assignment call
+// silently dropped it, same bug class as Employee/DocumentCategory's
+// created_by/updated_by in Checkpoint 10.
+#[Fillable(['name', 'email', 'password', 'tenant_id', 'status', 'is_platform_admin', 'email_verified_at'])]
 #[Hidden(['password', 'remember_token'])]
 class User extends Authenticatable
 {
@@ -63,5 +69,21 @@ class User extends Authenticatable
     public function isActive(): bool
     {
         return $this->status === self::STATUS_ACTIVE;
+    }
+
+    /**
+     * The employee record this user account is linked to, if any. See
+     * app/Http/Controllers/Api/V1/EmployeeUserLinkController.php for how
+     * the link is created — never automatic, always an explicit,
+     * permission-gated, audited action.
+     */
+    public function employee(): HasOne
+    {
+        return $this->hasOne(Employee::class);
+    }
+
+    public function hasLinkedEmployee(): bool
+    {
+        return $this->employee()->exists();
     }
 }

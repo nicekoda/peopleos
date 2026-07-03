@@ -183,6 +183,9 @@ needed a separate table, and no emergency-contact fields were specified).
 | `manager_employee_id` | ulid, nullable, FK → `employees.id` `SET NULL` | Self-referencing — see migration note below |
 | `start_date` / `probation_end_date` / `confirmation_date` | date, nullable | `probation_end_date` must be ≥ `start_date` when both provided |
 | `created_by` / `updated_by` | bigint, nullable, FK → `users.id` `SET NULL` | Set from the authenticated user, never request input |
+| `user_id` | bigint, nullable, **unique**, FK → `users.id` `SET NULL` | Checkpoint 11 — links this employee to an authentication account. Unique constraint enforces the 1:1 relationship from both directions at the schema level: Postgres itself rejects a second employee claiming a `user_id` already in use. Set only by `EmployeeUserLinkController`, never by the general update endpoint — see `security.md` |
+| `linked_at` | timestamp, nullable | Set when `user_id` is linked, cleared on unlink |
+| `linked_by` | bigint, nullable, FK → `users.id` `SET NULL` | The admin/HR user who performed the link, for audit purposes beyond the `audit_logs` entry itself |
 | `deleted_at` | timestamp, nullable | Soft delete — the `DELETE` endpoint soft-deletes, never hard-deletes |
 
 **Migration note — self-referencing FK:** `manager_employee_id` can't have
@@ -299,7 +302,7 @@ in a separate `add_current_version_fk_to_policies_table` migration once
 | `due_date` | date, nullable | |
 | `acknowledged_at` | timestamp, nullable | |
 | `acknowledgement_status` | string, default `pending` | `App\Enums\AcknowledgementStatus`: `pending` \| `acknowledged` \| `overdue` \| `waived` |
-| `acknowledgement_method` | string, nullable | `App\Enums\AcknowledgementMethod`: `web` \| `admin_recorded` — every row created this checkpoint is `admin_recorded`, see `security.md` |
+| `acknowledgement_method` | string, nullable | `App\Enums\AcknowledgementMethod`: `web` \| `admin_recorded` — meaningfully distinguished as of Checkpoint 11: `web` for genuine self-acknowledgement via the caller's own linked employee, `admin_recorded` when recorded on behalf of a different employee (requires `policies.assign`), see `security.md` |
 | `ip_address` / `user_agent` | string(45)/text, nullable | |
 
 **No soft deletes on this table** — not in the original field list, and
@@ -325,3 +328,15 @@ columns to `$fillable` on `Employee`, `DocumentCategory`, `Policy`, and
 present in any FormRequest's validated rules), only from the controller's
 own explicit assignment, which is the actual security boundary that
 matters.
+
+### Checkpoint 11 `$fillable` review — one more real gap found
+
+The audit above was scoped to models with a `created_by`/`updated_by`
+pattern. This checkpoint's required broader review (9 named models)
+found one more: `User`'s `#[Fillable(...)]` attribute was missing
+`email_verified_at`, confirmed the same way — an isolated `create()`
+reproduction that persisted `NULL` despite the value being passed
+explicitly. See [`architecture.md`](architecture.md#required-fillable-quality-review--one-real-bug-found)
+and [`security.md`](security.md#user--employee-linking) for the full
+writeup. `Department`, `Location`, `Position`, `EmployeeDocument` were
+also checked and found correct.

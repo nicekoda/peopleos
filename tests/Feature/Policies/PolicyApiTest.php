@@ -382,7 +382,13 @@ class PolicyApiTest extends TestCase
     public function test_user_cannot_acknowledge_unassigned_policy(): void
     {
         $tenant = Tenant::factory()->create();
-        $user = $this->userWithPermissions($tenant, 'policies.acknowledge');
+        // policies.assign needed here specifically to reach the "not
+        // found" check via the admin-recorded path — without it, a
+        // request for someone else's employee_id is correctly rejected
+        // one step earlier (403, authorization), which is a different
+        // scenario covered by test_user_without_acknowledge_permission_cannot_acknowledge
+        // and the new Checkpoint 11 linking tests.
+        $user = $this->userWithPermissions($tenant, 'policies.acknowledge', 'policies.assign');
         $policy = $this->publishedPolicy($tenant, $user);
         $employee = Employee::factory()->create(['tenant_id' => $tenant->id]);
 

@@ -244,7 +244,7 @@ completely unaffected.
 | `POST` | `/api/v1/policies/{policy}/publish` | `policies.publish` | Body: `{"policy_version_id": "..."}` — must be a draft version of this policy with content or an attached document |
 | `POST` | `/api/v1/policies/{policy}/assign` | `policies.assign` | Body: `{"employee_ids": [...], "due_date": "..."}` — policy must already be published |
 | `GET` | `/api/v1/policies/{policy}/acknowledgements` | `policies.view_acknowledgements` | Paginated list of acknowledgement records |
-| `POST` | `/api/v1/policies/{policy}/acknowledge` | `policies.acknowledge` | Body: `{"employee_id": "..."}` — **admin/HR-recorded only**, see `docs/security.md` |
+| `POST` | `/api/v1/policies/{policy}/acknowledge` | `policies.acknowledge` | Body: `{"employee_id": "..."}` — **`employee_id` is optional as of Checkpoint 11**, see below |
 
 **`tenant_id` is never accepted as request input**, same rule as every
 other module.
@@ -258,19 +258,28 @@ other module.
   published version for the same policy to `archived` — never deleted.
 - Assignment always targets the policy's **current** version.
 
-### Acknowledgement — read this before assuming self-service works
+### Acknowledgement — self-service by default, admin-recorded on request
 
-`POST /policies/{policy}/acknowledge` requires an explicit `employee_id`
-in the request body. It is **not** derived from the authenticated
-session — there is no verified link between a `User` account and an
-`Employee` record (see `docs/security.md`). Every acknowledgement is
-recorded with `acknowledgement_method: "admin_recorded"`. This means:
-`policies.acknowledge` should only be granted to roles trusted to record
-acknowledgements *on behalf of* employees (HR staff), not to the general
-Employee role — which is exactly how the seeded roles are configured.
+**Updated in Checkpoint 11.** `employee_id` in the request body is now
+optional:
+
+- **Omitted** (or explicitly equal to the caller's own linked employee,
+  via `GET /api/v1/me/employee`) — genuine self-acknowledgement. Requires
+  only `policies.acknowledge`. Recorded as
+  `acknowledgement_method: "web"`.
+- **Explicitly a different employee** — treated as recording on behalf of
+  someone else. Requires `policies.acknowledge` **and** `policies.assign`.
+  Recorded as `acknowledgement_method: "admin_recorded"`.
+
+A caller with no linked employee and no explicit `employee_id` gets a
+`422` ("You have no linked employee record..."). See
+`docs/security.md#the-acknowledgement-redesign-two-paths-one-endpoint`
+for the full design and why this is safe to grant to the Employee role.
 
 Acknowledging fails with:
-- `404` if the employee has no `pending` acknowledgement for this policy.
+- `422` if there's no employee to resolve to (see above).
+- `403` if acting on behalf of another employee without `policies.assign`.
+- `404` if the resolved employee has no `pending` acknowledgement for this policy.
 - `409` if the policy has been republished since the employee was
   assigned (their pending row points at a superseded version — no
   auto-reassignment exists yet).
@@ -300,12 +309,56 @@ Acknowledging fails with:
 }
 ```
 
+## User ↔ Employee Linking
+
+| Method | Path | Permission | Notes |
+|---|---|---|---|
+| `POST` | `/api/v1/employees/{employee}/link-user` | `employees.link_user` | Body: `{"user_id": "..."}` — both employee and user must belong to the current tenant; neither may already be linked to someone else |
+| `DELETE` | `/api/v1/employees/{employee}/unlink-user` | `employees.unlink_user` | Clears `user_id`/`linked_at`/`linked_by`; `404` if the employee had no link |
+
+See `docs/security.md#user--employee-linking` for the full design,
+including why linking is HR/admin-only rather than self-service.
+
+### Response shapes
+
+```json
+// POST /employees/{employee}/link-user
+{ "message": "User linked." }
+
+// DELETE /employees/{employee}/unlink-user
+{ "message": "User unlinked." }
+```
+
+### Validation rules
+
+| Field | Rules |
+|---|---|
+| `user_id` | required, integer, must exist and belong to the current tenant, must be `is_platform_admin = false` and `status = active`, must not already be linked to a different employee |
+
+## Me
+
+Self-scoped endpoints — resolve entirely from the authenticated session,
+no route parameter, no permission middleware required.
+
+| Method | Path | Notes |
+|---|---|---|
+| `GET` | `/api/v1/me/employee` | Returns the caller's own linked employee record, or `404` if unlinked |
+
+```json
+// GET /me/employee (linked)
+{ "data": { "id": "01h...", "employee_number": "EMP-0001", ... } }
+
+// GET /me/employee (unlinked)
+// 404 { "message": "..." }
+```
+
 ## Current limitations
 
 - No export endpoint (`employees.export` permission is seeded but unused — explicitly out of scope this checkpoint).
 - No bulk actions.
 - No `departments`/`locations`/`positions` CRUD endpoints — they exist only to support employee FK validation (unlike `document_categories`, which now has one).
-- No genuine self-service policy acknowledgement — admin-recorded only, see above.
+- No self-linking / invitation-token flow — linking a user to an employee is HR/admin-only, see `docs/security.md`.
+- No employee profile self-update endpoint — `/me/employee` is read-only.
 - No policy campaign automation, reminders, or escalations.
 - No acknowledgement export/report endpoint (`policies.export_acknowledgements` seeded, unused).
 - No document approval workflow endpoint — `documents.approve` permission and `approved_by`/`approved_at` columns are reserved, unused.
@@ -323,7 +376,9 @@ Acknowledging fails with:
 - Cloud storage (S3 or similar) — local private disk only for now; the storage layer is already abstracted behind `storage_disk`/`storage_path` on the model, so this is a lower-effort future change than it might otherwise be.
 - Onboarding documents / compliance document tracking (expiring work permits, certifications) — `document_categories.requires_expiry_date` and `employee_documents.expiry_date` already exist and are enforced at upload time; a dedicated "documents expiring soon" report/notification is future work, not built yet.
 - Candidate documents (`applies_to` includes `candidate`) — no candidate/recruitment module exists yet to attach documents to.
-- Genuine self-service policy acknowledgement (`acknowledgement_method: "web"`) — needs real user-to-employee linking first (see `docs/security.md`).
+- Self-linking / invitation-token flow for User ↔ Employee linking (currently HR/admin-only).
+- Employee profile self-update — `/me/employee` is read-only; no endpoint lets an employee edit their own record.
+- Manager approval workflows — not built for linking or anything else yet; will matter once Leave Management exists.
 - Policy campaigns (bulk-assign a policy to a whole department/location, scheduled/recurring re-acknowledgement cycles).
 - Email/notification reminders and escalations for overdue acknowledgements.
 - Auto-reassignment when a policy is republished (currently: stale assignments are correctly rejected at acknowledge time, but nothing proactively creates a new pending row).

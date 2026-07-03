@@ -221,6 +221,81 @@ controller-set values. Worth a deliberate audit of every model's
 `$fillable` list against its controller's actual `create()`/`update()`
 calls before the next checkpoint introduces more.
 
+## User ↔ Employee Linking
+
+Closes the identity gap flagged in Policy Management (previous
+checkpoint): `employees.user_id` (nullable, unique, FK → `users.id`
+`SET NULL`) is the single link between an authentication account and an
+HR employee record — see [`database.md`](database.md#employees) for the
+column reference and [`security.md`](security.md#user--employee-linking)
+for the full linking/permission design.
+
+**One column, one unique constraint, both directions covered.** A nullable
+*unique* FK on the "many" side of what is really a 1:1 relationship means
+Postgres itself rejects a second employee claiming a `user_id` already in
+use, and the app-layer validation additionally rejects linking a user who
+already owns a different employee — both directions checked, but only one
+constraint needed at the schema level.
+
+**Linking is a distinct, permission-gated action** (`employees.link_user`
+/ `employees.unlink_user`), not a field on the general employee update
+endpoint — deliberately kept off `UpdateEmployeeRequest`, the same
+reasoning already applied to `created_by`/`updated_by` in the previous
+checkpoint's `$fillable` fix: a column can be mass-assignable for one
+trusted, narrow controller action without being reachable through a
+broader endpoint's request input.
+
+**`GET /api/v1/me/employee` is the first genuinely self-scoped endpoint**
+in the app — no route parameter, no permission middleware, because "am I
+allowed to see my own linked employee record" isn't a permission question
+at all, it's inherent to being authenticated. Resolves entirely from
+`$request->user()->employee` (a new `User::employee(): HasOne`).
+
+**This is what finally makes safe self-service possible.**
+`PolicyController::acknowledge()` now resolves the target employee from
+the caller's own verified link by default (`acknowledgement_method: web`)
+and only allows acting on someone else's behalf if the caller separately
+holds `policies.assign` (`acknowledgement_method: admin_recorded`) — see
+[`security.md`](security.md#the-acknowledgement-redesign-two-paths-one-endpoint)
+for the full reasoning. This is why `policies.acknowledge` can now be
+granted to the Employee role, which was explicitly withheld from it in
+the previous checkpoint for exactly this reason.
+
+### Required `$fillable` quality review — one real bug found
+
+Per your instruction, every model's `$fillable` array was reviewed against
+its controllers' actual `create()`/`update()` calls before this checkpoint
+added more fields to the pattern. Nine models checked: `Employee`, `User`,
+`Department`, `Location`, `Position`, `DocumentCategory`,
+`EmployeeDocument`, `Policy`, `PolicyVersion`. One real bug found:
+`User`'s `#[Fillable(...)]` attribute was missing `email_verified_at` —
+confirmed via an isolated `User::create([..., 'email_verified_at' =>
+now()])` reproduction, which persisted `NULL`. No controller in the app
+currently sets this field via `create()`/`update()` (no
+email-verification or admin-creates-user flow exists yet), so this was a
+latent gap, not an active data-loss bug like the `created_by`/`updated_by`
+one found last checkpoint — but the exact same bug *class*: a column
+excluded from `$fillable` silently drops any future trusted assignment,
+whether or not something happens to call it yet. Fixed by adding it to
+the attribute. The other eight models' `$fillable` arrays were confirmed
+correct against their controllers' current usage.
+
+### CLI/tinker gotcha, not a production bug
+
+`tenant_id` is deliberately excluded from every tenant-owned model's
+`$fillable` (it's auto-filled by `BelongsToTenant` from the
+container-bound `Tenant`, never accepted as request input — see
+`architecture.md`'s Multi-Tenancy section). This means `Employee::create([
+'tenant_id' => $t->id, ...])` from `tinker` or a one-off CLI script
+**silently drops** `tenant_id` too, the same mass-assignment behavior as
+everywhere else, and fails on the table's `NOT NULL` constraint. Outside
+a real HTTP request, nothing binds `Tenant::class` into the container, so
+there's no automatic fill to fall back on either. Not a bug — real
+requests always go through `ResolveTenant` first — but worth knowing
+before reaching for `tinker` to seed one-off tenant-owned records: set
+`$model->tenant_id` directly (bypassing mass assignment), then `fill()`
+the rest.
+
 ## Internal IDs vs. Public-Facing References
 
 Internal database IDs may remain bigint (see

@@ -252,19 +252,49 @@ class PolicyController extends Controller
     }
 
     /**
-     * Admin/HR-recorded acknowledgement only — see
-     * AcknowledgePolicyRequest and docs/security.md for why employee_id
-     * is explicit request input rather than derived from the session.
+     * Two paths, both safe (Checkpoint 11):
+     *
+     * 1. Self-acknowledgement: employee_id omitted (or explicitly equals
+     *    the caller's own linked employee). Always allowed with just
+     *    policies.acknowledge — this is what makes it safe to grant that
+     *    permission to the Employee role now.
+     * 2. Admin-recorded on behalf of another employee: employee_id
+     *    explicitly differs from the caller's own link (or the caller has
+     *    no link at all). Requires policies.assign in addition — reusing
+     *    the existing "trusted with assignments" permission rather than
+     *    inventing a new one. Employee-role users never hold
+     *    policies.assign, so they can never resolve to anyone but
+     *    themselves, regardless of what employee_id they submit.
+     *
+     * See docs/security.md for the full reasoning.
      */
     public function acknowledge(AcknowledgePolicyRequest $request, Policy $policy): JsonResponse
     {
         $this->ensureBelongsToCurrentTenant($policy);
 
-        $employeeId = $request->validated('employee_id');
+        $user = $request->user();
+        $ownEmployeeId = $user->employee?->id;
+        $requestedEmployeeId = $request->validated('employee_id') ?? $ownEmployeeId;
+
+        abort_if(
+            $requestedEmployeeId === null,
+            422,
+            'You have no linked employee record. Specify employee_id to record on behalf of someone else (requires policies.assign).',
+        );
+
+        $isSelfAcknowledgement = $requestedEmployeeId === $ownEmployeeId;
+
+        if (! $isSelfAcknowledgement) {
+            abort_unless(
+                $user->hasPermission('policies.assign'),
+                403,
+                'You are not authorized to record acknowledgement on behalf of another employee.',
+            );
+        }
 
         $acknowledgement = PolicyAcknowledgement::query()
             ->where('policy_id', $policy->id)
-            ->where('employee_id', $employeeId)
+            ->where('employee_id', $requestedEmployeeId)
             ->where('acknowledgement_status', AcknowledgementStatus::Pending)
             ->first();
 
@@ -278,23 +308,25 @@ class PolicyController extends Controller
             'This assignment refers to an outdated policy version. Reassignment is required.',
         );
 
+        $method = $isSelfAcknowledgement ? AcknowledgementMethod::Web : AcknowledgementMethod::AdminRecorded;
+
         $acknowledgement->update([
             'acknowledged_at' => now(),
             'acknowledgement_status' => AcknowledgementStatus::Acknowledged,
-            'acknowledgement_method' => AcknowledgementMethod::AdminRecorded,
+            'acknowledgement_method' => $method,
             'ip_address' => $request->ip(),
             'user_agent' => $request->userAgent(),
         ]);
 
         AuditLogger::logFor(
-            actor: $request->user(),
+            actor: $user,
             action: 'policy.acknowledged',
             module: 'policies',
             tenantId: $policy->tenant_id,
             auditableType: PolicyAcknowledgement::class,
             auditableId: $acknowledgement->id,
-            description: "Policy '{$policy->title}' acknowledged for employee #{$employeeId}.",
-            metadata: ['policy_id' => $policy->id, 'employee_id' => $employeeId, 'method' => AcknowledgementMethod::AdminRecorded->value],
+            description: "Policy '{$policy->title}' acknowledged for employee #{$requestedEmployeeId}.",
+            metadata: ['policy_id' => $policy->id, 'employee_id' => $requestedEmployeeId, 'method' => $method->value],
             ipAddress: $request->ip(),
             userAgent: $request->userAgent(),
         );

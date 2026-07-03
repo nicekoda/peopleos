@@ -625,35 +625,43 @@ authentication accounts and HR employee records are entirely separate.
 This directly affects who can "acknowledge" a policy: there's no way to
 derive "which employee is the currently logged-in user."
 
-**Decision: `POST /policies/{policy}/acknowledge` is admin/HR-recorded
-only this checkpoint.** It requires an explicit `employee_id` in the
+**Decision (this checkpoint): `POST /policies/{policy}/acknowledge` is
+admin/HR-recorded only.** It requires an explicit `employee_id` in the
 request body — there's no session-derived alternative. Every
 acknowledgement created this checkpoint has
 `acknowledgement_method = admin_recorded` (never `web`, which is reserved
 for a future genuine self-service flow once real user-to-employee linking
 exists).
 
+> **Resolved in Checkpoint 11** — see
+> [User ↔ Employee Linking](#user--employee-linking) below. The
+> `employee_id` requirement became optional (resolved from the caller's
+> own verified link by default), and `policies.acknowledge` is now safe
+> to grant to the Employee role. The deviation explained below was a
+> deliberate, temporary posture, not a permanent design decision — it
+> held only as long as no verified identity link existed.
+
 **Consequence for the role mapping — a deliberate deviation from the
 spec's suggestion, documented as instructed:** the suggested mapping gave
-Employee `policies.acknowledge`. I did **not** grant it. Here's why: if a
-rank-and-file Employee-role user could call `/acknowledge` with an
-arbitrary `employee_id`, they could record an acknowledgement on behalf
-of *any* employee in the tenant (already enumerable via the existing
-`employees.view` permission most Employee-role users also hold) — not
-just themselves. That's exactly the "insecure shortcut" instruction I was
-told not to take. `policies.acknowledge` stays with HR-trusted roles
-(Tenant Admin, HR Manager) until real self-service — requiring actual
-identity verification — exists in a future checkpoint.
+Employee `policies.acknowledge`. I did **not** grant it, at the time.
+Here's why: if a rank-and-file Employee-role user could call
+`/acknowledge` with an arbitrary `employee_id`, they could record an
+acknowledgement on behalf of *any* employee in the tenant (already
+enumerable via the existing `employees.view` permission most Employee-role
+users also hold) — not just themselves. That's exactly the "insecure
+shortcut" instruction I was told not to take. `policies.acknowledge`
+stayed with HR-trusted roles (Tenant Admin, HR Manager) only, until real
+self-service — requiring actual identity verification — existed.
 
-### Role mapping (as seeded in `RoleSeeder`)
+### Role mapping (as seeded in `RoleSeeder`, updated in Checkpoint 11)
 
 | Role | Permissions |
 |---|---|
-| Tenant Admin | All 9 (automatic — granted every current tenant permission dynamically at seed time) |
+| Tenant Admin | All (automatic — granted every current tenant permission dynamically at seed time) |
 | HR Manager | view, create, update, publish, assign, acknowledge, view_acknowledgements — **not** archive/export (per the spec's own suggested carve-out) |
-| HR Officer | view, create, update, assign, view_acknowledgements — matches the spec exactly. First real permission grant for this role (a placeholder since Checkpoint 4) |
-| Employee | **view only** — see the deviation above |
-| Auditor | view, view_acknowledgements — matches the spec exactly. Also this role's first real grant |
+| HR Officer | view, create, update, assign, view_acknowledgements — matches the spec exactly |
+| Employee | view, **acknowledge** — safe as of Checkpoint 11, see below |
+| Auditor | view, view_acknowledgements |
 
 ### The acknowledgement flow, precisely
 
@@ -713,6 +721,127 @@ See [`database.md`](database.md#a-real-bug-found-and-fixed-in-this-checkpoint-af
 excluded from `$fillable`. Fixed for those two models plus the two new
 ones (`Policy`, `PolicyVersion`) introduced this checkpoint.
 
+## User ↔ Employee Linking
+
+Closes the identity gap flagged throughout Policy Management above — see
+[`api.md`](api.md#user--employee-linking) for the endpoint reference and
+[`database.md`](database.md#employees) for the column design.
+
+### Design
+
+`employees.user_id` — nullable, **unique**, FK → `users.id` `SET NULL`,
+plus `linked_at`/`linked_by` for provenance. A single unique constraint
+enforces the 1:1 relationship in both directions: an employee can have at
+most one linked user (obviously — one FK column), and a user can be
+linked to at most one employee (enforced by the *unique* constraint on
+that FK, not by a second column anywhere). Both are checked again at the
+app layer in `LinkEmployeeUserRequest::withValidator()` for a clean 422
+instead of a raw constraint-violation error.
+
+### Linking rules (all enforced, not just documented)
+
+1. Only `employees.link_user` can create a link, `employees.unlink_user`
+   to remove one — dedicated permissions, not reused from
+   `employees.update` (linking an identity is a materially different,
+   higher-trust action than editing a name field).
+2. Both the target employee (route parameter) and the target user
+   (`user_id` in the request body) must belong to the **current** tenant
+   — the employee via the usual `ensureBelongsToCurrentTenant()` (404 if
+   not), the user via `Rule::exists('users', 'id')` scoped to
+   `tenant_id` in `LinkEmployeeUserRequest` (422 if not — a validation
+   failure, not a 404, since the employee side of the request did resolve
+   correctly; only the referenced `user_id` is invalid).
+3. The target user must be `is_platform_admin = false` and
+   `status = active` — a platform admin or inactive user cannot be
+   linked at all, checked in the same validation rule.
+4. An already-linked employee cannot be re-linked to a different user
+   without unlinking first (422) — same for an already-linked user.
+5. Linking and unlinking both write to `audit_logs`
+   (`employee.user_linked` / `employee.user_unlinked`), including
+   `target_user_id` for the linked/unlinked user.
+6. `GET /api/v1/me/employee` requires **no dedicated permission** — it's
+   inherently self-scoped (resolves `$request->user()->employee`), the
+   same posture as a "whoami" endpoint. Returns `404` if the caller has
+   no linked employee — a safe, unambiguous response, not an empty `200`
+   that a client might mistake for "employee exists but is empty."
+
+### Why linking itself stays HR/admin-only, not self-service
+
+The spec's own suggested design (nullable `user_id`, admin-performed
+linking) was followed as given — an employee cannot link *themselves* to
+a user account via any endpoint. This is deliberate: self-linking would
+require its own identity-proofing story (how does the system know
+`employee #482` really is the person logged in as `user #17`?) that
+doesn't exist yet — an invitation-token flow is the natural future
+answer, explicitly out of scope this checkpoint (see "Do not build" in
+the checkpoint spec). HR/admin performing the link, based on
+out-of-band identity verification they're already trusted to do, is the
+safe interim posture.
+
+### The acknowledgement redesign: two paths, one endpoint
+
+`PolicyController::acknowledge()` now resolves which employee the
+acknowledgement is *for* in one of two ways:
+
+1. **Self-acknowledgement** — `employee_id` omitted from the request
+   body (or explicitly equal to the caller's own linked employee).
+   Resolved via `$request->user()->employee?->id`. Requires only
+   `policies.acknowledge`. Recorded as `acknowledgement_method: web`.
+2. **Admin-recorded, on behalf of someone else** — `employee_id`
+   explicitly provided and it differs from the caller's own link (or the
+   caller has no link at all). Requires `policies.acknowledge` **and**
+   `policies.assign` — reusing the existing "trusted to manage
+   assignments" permission rather than inventing a new one for this.
+   Recorded as `acknowledgement_method: admin_recorded`.
+
+**Why this is safe to grant Employee-role users `policies.acknowledge`
+now, when it wasn't safe last checkpoint:** an Employee-role user never
+holds `policies.assign` (see the role mapping table above). Whatever
+`employee_id` they submit, if it doesn't resolve to their own link, the
+`policies.assign` check rejects the request with `403` — they cannot
+acknowledge on behalf of anyone but themselves, regardless of what value
+they put in the request body. This is the same principle as every other
+"don't trust client-declared identity" rule in this app
+(`tenant_id`/`created_by`/`updated_by` never accepted from request
+input) applied to a new field.
+
+A user with **no** linked employee and no explicit `employee_id` gets a
+clear `422` ("You have no linked employee record...") rather than a
+confusing `404` — distinguishing "you have nothing to acknowledge with"
+from "no pending acknowledgement exists for that employee."
+
+### Permission mapping
+
+| Permission | Grants |
+|---|---|
+| `employees.link_user` | Link a user account to an employee record |
+| `employees.unlink_user` | Remove an existing link |
+
+Granted to Tenant Admin (automatic) and HR Manager — HR Manager is
+already trusted with `employees.create`/`employees.update`, and linking
+a user account is a natural extension of that trust. **Not** granted to
+HR Officer or any other role this checkpoint — no spec instruction to do
+so, and narrower is the safer default until a real need is demonstrated.
+
+### Audit events
+
+`employee.user_linked`, `employee.user_unlinked` — both include
+`target_user_id` (the linked/unlinked user), `auditable_type` = `Employee`,
+`auditable_id` = the employee's id.
+
+### Known limitations
+
+- **No self-linking / invitation flow** — see above. HR/admin performs
+  every link.
+- **No employee profile self-update** — linking gives read access to
+  `/me/employee`; it does not add any new write capability. An employee
+  still cannot edit their own record via any endpoint.
+- **No manager-approval workflow** for linking — explicitly out of scope
+  this checkpoint (per the "do not build" list), consistent with no
+  Leave Management dependency existing yet either.
+- **Re-linking after unlink requires a fresh HR/admin action** — no
+  "pending re-link request" or self-service re-link exists.
+
 ## Local Demo Credentials
 
 **Local development only — these are not real secrets and only work against your own local database.** Password comes from `SEED_USER_PASSWORD` in `.env` (not committed; `.env.example` has an empty placeholder).
@@ -745,8 +874,9 @@ other 17 roles per tenant exist as empty placeholders for future modules.
 - `/api/v1` routes use the same session-based `web` auth as the rest of the app (no Sanctum/token guard yet) — see `docs/api.md` for the full future plan and what a token layer must support before it's added.
 - `tenant.matches` is applied per-route, not globally — every new authenticated tenant-scoped route must remember to include it (alongside `auth`), the same way `permission:` is remembered per-route. Nothing currently enforces this at a higher level (e.g. a lint rule or test asserting every `web`-registered route under an authenticated prefix has it).
 - No test exists proving `tenant.matches` behavior for a *platform admin who becomes a tenant user* or vice versa (role/type changes mid-session) — an edge case not currently possible via any existing code path (nothing changes `is_platform_admin` after creation), but worth a test if that ever becomes possible.
-- No genuine self-service policy acknowledgement — see "Policy Management" above. Requires real user-to-employee linking, not built yet.
 - No auto-reassignment when a policy is republished — employees already assigned to a superseded version keep their (now-stale) pending acknowledgement, which is correctly rejected if they try to confirm it, but nothing proactively creates a new pending row against the new version.
 - No policy campaign automation, email reminders, escalations, or department-wide auto-assignment — explicitly out of scope this checkpoint.
 - No acknowledgement export/report endpoint — `policies.export_acknowledgements` permission is seeded but unused.
 - `employee_document_id` on `policy_versions` requires an existing employee-owned document — see "Policy Management" above for the schema mismatch this carries.
+- **No self-linking / invitation-token flow, no employee profile self-update, no manager-approval linking workflow** — see [User ↔ Employee Linking](#user--employee-linking) above for the full list of what Checkpoint 11 deliberately left out.
+- No Leave Management, Payroll, Performance, or Onboarding modules yet — User ↔ Employee Linking is foundational for these (an employee's own leave requests, for example, will need the same "resolve from the caller's own link" pattern used for policy acknowledgement), but none of them are built yet.

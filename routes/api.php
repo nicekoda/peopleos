@@ -3,6 +3,8 @@
 use App\Http\Controllers\Api\V1\DocumentCategoryController;
 use App\Http\Controllers\Api\V1\EmployeeController;
 use App\Http\Controllers\Api\V1\EmployeeDocumentController;
+use App\Http\Controllers\Api\V1\EmployeeUserLinkController;
+use App\Http\Controllers\Api\V1\MeController;
 use App\Http\Controllers\Api\V1\PolicyController;
 use Illuminate\Support\Facades\Route;
 
@@ -60,4 +62,11 @@ Route::middleware(['auth', 'tenant.matches'])->prefix('api/v1')->group(function 
     Route::post('policies/{policy}/assign', [PolicyController::class, 'assign'])->middleware('permission:policies.assign');
     Route::get('policies/{policy}/acknowledgements', [PolicyController::class, 'acknowledgements'])->middleware('permission:policies.view_acknowledgements');
     Route::post('policies/{policy}/acknowledge', [PolicyController::class, 'acknowledge'])->middleware('permission:policies.acknowledge');
+
+    Route::post('employees/{employee}/link-user', [EmployeeUserLinkController::class, 'store'])->middleware('permission:employees.link_user');
+    Route::delete('employees/{employee}/unlink-user', [EmployeeUserLinkController::class, 'destroy'])->middleware('permission:employees.unlink_user');
+
+    // No specific permission — inherently self-scoped (the caller's own
+    // link, resolved server-side), same as a "whoami" endpoint.
+    Route::get('me/employee', [MeController::class, 'employee']);
 });

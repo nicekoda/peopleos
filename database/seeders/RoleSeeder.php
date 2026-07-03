@@ -85,6 +85,11 @@ class RoleSeeder extends Seeder
             // Admin, per the master spec's own suggested carve-out.
             'policies.view', 'policies.create', 'policies.update', 'policies.publish',
             'policies.assign', 'policies.acknowledge', 'policies.view_acknowledgements',
+            // Link/unlink — HR Manager already trusted with
+            // employees.create/update; linking user accounts to employee
+            // records is a natural extension of that trust. See
+            // docs/security.md for the full role-mapping rationale.
+            'employees.link_user', 'employees.unlink_user',
         ]);
 
         $this->grantByKeys($roles['Employee'], [
@@ -92,14 +97,13 @@ class RoleSeeder extends Seeder
             'documents.view', 'documents.upload',
             'leave.view', 'leave.request',
             'announcements.view',
-            // policies.acknowledge is deliberately NOT granted here — see
-            // docs/security.md. No verified user-to-employee link exists
-            // yet, so granting self-acknowledge would let any
-            // Employee-role user record an acknowledgement on behalf of
-            // *any* employee_id in the tenant, not just their own. View
-            // only until real self-service (with identity verification)
-            // exists.
-            'policies.view',
+            // Now safe as of Checkpoint 11: acknowledge() resolves the
+            // target employee from the caller's own verified link by
+            // default, and rejects any attempt to acknowledge on behalf
+            // of a different employee unless the caller also holds
+            // policies.assign (which Employee-role users never do). See
+            // docs/security.md.
+            'policies.view', 'policies.acknowledge',
         ]);
 
         // HR Officer and Auditor get their first real permission grants

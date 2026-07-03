@@ -113,6 +113,11 @@ under another (`/employees/{employee}/documents/{document}`):
   present on every document route — this catches "someone added a new
   route and forgot the middleware" even if no test happens to exercise
   the specific cross-tenant scenario that middleware protects against.
+  Same pattern reused in `EmployeeUserLinkTest::test_all_new_routes_include_tenant_matches_middleware`
+  for the three Checkpoint 11 routes (`link-user`, `unlink-user`,
+  `me/employee`) — including `me/employee`, which has no `permission:`
+  middleware at all, making the `tenant.matches` check the *only*
+  structural guard on that route and worth asserting explicitly.
 
 ## Testing "safe soft-delete" claims directly, not just that the row disappears
 
@@ -160,6 +165,27 @@ that it's `assertNotSoftDeleted` — either assertion alone would pass for
 the wrong reason (e.g. a bug that hard-deletes the row would still leave
 `status` unqueried-but-gone).
 
+## Testing self-service vs. admin-recorded dual-path actions
+
+`EmployeeUserLinkTest` (Checkpoint 11) tests
+`PolicyController::acknowledge()`'s two resolution paths as genuinely
+different scenarios, not variations of the same test:
+
+- Self-acknowledgement: caller has a linked employee, submits no
+  `employee_id` (or their own) — succeeds with just `policies.acknowledge`.
+- On-behalf-of: caller submits a *different* employee's id — must be
+  rejected (`403`) for a caller who only holds `policies.acknowledge`,
+  and succeeds only when they additionally hold `policies.assign`.
+- No link at all: caller has neither a linked employee nor an explicit
+  `employee_id` — `422`, distinct from the `403`/`404` cases above.
+
+Whenever an endpoint resolves "who this action is for" from either a
+verified session link *or* an explicit request field, test all three
+branches (self via link, explicit-and-authorized, explicit-and-
+unauthorized) plus the "neither is available" edge case — collapsing
+them into fewer tests risks missing exactly the branch that matters for
+security.
+
 ## Verifying against the real app, not just the test suite
 
 Because of the SQLite/Postgres split above, checkpoints in this project
@@ -169,6 +195,38 @@ test suite: `curl` against `https://{subdomain}.peopleos.test` (use
 mkcert cert's revocation check, which real browsers don't do), and direct
 `psql` queries to confirm seeded/written data. Keep doing this for new
 checkpoints — it's caught real bugs the test suite alone didn't.
+
+### A real CSRF round-trip against the live app, done correctly (Checkpoint 11)
+
+Hand-rolling the cookie → header CSRF round-trip in bash `curl` is
+error-prone: the `XSRF-TOKEN` cookie value must be **percent-decoded but
+not further transformed** before being sent back as the `X-XSRF-TOKEN`
+header (Laravel decrypts the raw cookie value server-side — the header
+must carry the same encrypted blob the cookie held, just URL-unescaped).
+A generic bash "urldecode" helper that also converts `+` to space (the
+`application/x-www-form-urlencoded` rule, not the general percent-encoding
+rule) silently corrupts the token, since the base64-ish encrypted value
+legitimately contains literal `+` characters — this produced a `419` that
+looked identical to a genuinely missing/invalid token.
+
+**More reliable: drive the round-trip through Laravel's own HTTP client
+inside `tinker`**, piped via stdin (`cat script.php | ./artisan.bat
+tinker`) rather than passed as a one-line `--execute` string (multi-line
+`--execute` strings get mangled by the shell). A `GuzzleHttp\Client` with
+a `CookieJar` handles cookie-domain matching and re-sending correctly;
+read `XSRF-TOKEN` from the jar, `urldecode()` it (PHP's, not a hand-rolled
+bash version), and set it as `X-XSRF-TOKEN` on the next request. This
+verified the full `login → link-user → me/employee → unlink-user` flow
+end-to-end over real HTTPS with genuine CSRF enforcement, plus a
+cross-tenant session-reuse check (an admin's session cookie sent to a
+*different* tenant's subdomain, confirming `tenant.matches` still
+rejects it with `403` over real HTTP, not just in the test client).
+
+**Tenant-owned records created via `tinker` for smoke-test fixtures**
+must set `tenant_id` directly on the model instance (not via
+`create(['tenant_id' => ...])`, which silently drops it — see
+`docs/architecture.md`'s CLI/tinker gotcha note) since no `Tenant` is
+bound in the container outside a real HTTP request.
 
 ## Known limitations
 

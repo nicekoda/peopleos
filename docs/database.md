@@ -185,7 +185,7 @@ needed a separate table, and no emergency-contact fields were specified).
 | `status` | string, default `draft` | `App\Enums\EmployeeStatus`: `draft` \| `active` \| `inactive` \| `terminated` |
 | `employment_type` | string, required | `App\Enums\EmploymentType`: `full_time` \| `part_time` \| `contractor` \| `intern` \| `consultant` |
 | `department_id` / `location_id` / `position_id` | ulid, nullable, FK `SET NULL` | Must belong to the same tenant — validated in the FormRequest, not just a DB constraint |
-| `manager_employee_id` | ulid, nullable, FK → `employees.id` `SET NULL` | Self-referencing — see migration note below |
+| `manager_employee_id` | ulid, nullable, FK → `employees.id` `SET NULL` | Self-referencing — see migration note below. **Only writable via `PATCH`/`DELETE /employees/{employee}/manager`** as of Checkpoint 13 — removed from `StoreEmployeeRequest`/`UpdateEmployeeRequest` entirely, see `security.md` |
 | `start_date` / `probation_end_date` / `confirmation_date` | date, nullable | `probation_end_date` must be ≥ `start_date` when both provided |
 | `created_by` / `updated_by` | bigint, nullable, FK → `users.id` `SET NULL` | Set from the authenticated user, never request input |
 | `user_id` | bigint, nullable, **unique**, FK → `users.id` `SET NULL` | Checkpoint 11 — links this employee to an authentication account. Unique constraint enforces the 1:1 relationship from both directions at the schema level: Postgres itself rejects a second employee claiming a `user_id` already in use. Set only by `EmployeeUserLinkController`, never by the general update endpoint — see `security.md` |
@@ -413,3 +413,17 @@ found after the fact:
    `$fillable` from the start, with the same "trusted controller
    assignment, never accepted from request input" comment pattern used
    everywhere else.
+
+### Checkpoint 13 — no schema change, existing field reused as-is
+
+`manager_employee_id` (added in Checkpoint 6) needed no migration this
+checkpoint — the column, its `SET NULL` FK, and the self-referencing FK
+migration workaround were already correct. What was missing was
+entirely at the validation/service layer: no cycle detection, no
+active-status check, and a raw `Rule::exists()` on the general update
+endpoint that didn't exclude soft-deleted managers (the same bug class
+as `document_category_id`/`leave_type_id` before it). See
+`security.md#manager-hierarchy` for the full fix — `AssignManagerRequest`
++ `ManagerHierarchyService`, with the general update endpoint's
+`manager_employee_id` field removed entirely rather than patched in
+place.

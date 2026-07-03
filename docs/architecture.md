@@ -358,6 +358,79 @@ come up — worth watching for a third time as a signal that "permission
 implies role" mappings in future spec documents should be treated as
 starting points, not given.
 
+## Manager Hierarchy
+
+Reuses `employees.manager_employee_id` (present since Checkpoint 6, no
+schema change this checkpoint) but adds everything that was missing
+around it: cycle prevention, active/tenant/soft-delete validation, a
+dedicated write path, and a reusable query service. See
+[`api.md`](api.md#manager-hierarchy) and
+[`security.md`](security.md#manager-hierarchy) for the full design.
+
+**`App\Services\ManagerHierarchyService` is the single place "who
+manages whom" logic lives**, deliberately factored out of any one
+controller so future modules (leave approval scoping, performance/
+probation reviews, onboarding tasks, team dashboards, org chart — all
+explicitly named as this checkpoint's rationale) can reuse
+`isManagerOf()`/`directReportsOf()` rather than each re-deriving the
+chain walk independently. `Employee::manages()`/`directlyManages()` are
+thin convenience wrappers over the service, not a second
+implementation.
+
+**A write path is closed off structurally, the same pattern used
+repeatedly since Checkpoint 11.** `manager_employee_id` is no longer a
+validated field on `StoreEmployeeRequest` or `UpdateEmployeeRequest` —
+removed entirely, not just left with weaker validation. Every manager
+assignment/removal goes through `PATCH`/`DELETE
+/employees/{employee}/manager`, the only code path that runs the full
+check (tenant match, active status, soft-delete exclusion, cycle
+detection). This mirrors exactly how `employees.user_id` was closed off
+from the general update endpoint in Checkpoint 11 — a recurring,
+now-established pattern: *when an existing field needs materially
+stronger validation than a general CRUD endpoint can reasonably carry,
+remove it from that endpoint rather than trying to bolt the stronger
+check on in place.*
+
+**Fail-closed cycle detection, not just cycle-when-detected.**
+`ManagerHierarchyService::wouldCreateCycle()` doesn't only return `true`
+for an actual cycle — it also returns `true` (block the assignment) if
+the chain above the prospective manager turns out to be untrustworthy
+for any reason: a repeated employee ID (already cyclic), a chain deeper
+than a safety cap, a cross-tenant link, a soft-deleted employee, or a
+non-`active` employee anywhere in the chain. The walk deliberately uses
+`Employee::withoutGlobalScopes()` so a cross-tenant or soft-deleted
+employee in the chain is actually *seen and rejected*, rather than
+silently vanishing from a normally-scoped query and truncating the walk
+early into a false "no cycle found." See
+[`security.md`](security.md#fail-closed-cycle-detection-refinement-2)
+for the full reasoning.
+
+**Two different depth caps, for two different reasons — not the same
+constant reused.** `ManagerHierarchyService::MAX_CHAIN_WALK` (100) is a
+corruption/infinite-loop safety net for the *write-path* cycle check —
+a real org should never get anywhere near it. `EmployeeHierarchyController::
+DEFAULT_REPORTING_TREE_DEPTH` (5) is a *display*-endpoint response-size
+cap for `reporting-tree` — a real org can legitimately be deeper than 5
+levels, and hitting the cap just means the response reports
+`reports_truncated: true` rather than fetching without limit. Conflating
+these would have been wrong in both directions: a corruption-detection
+threshold that low would reject legitimate deep orgs, and a display cap
+that high would make the tree endpoint's response size effectively
+unbounded.
+
+**A third instance of the same "unscoped blast radius" pattern flagged
+in Checkpoints 10 and 12.** This checkpoint deliberately does *not*
+grant Line Manager `leave.approve`/`leave.reject` — those still require
+`LeaveRequestController`'s approve/reject actions to be scoped by
+`ManagerHierarchyService::isManagerOf()`, which is a **future**
+checkpoint's work, not this one's. Line Manager receives
+`employees.view_team` only. See
+[`security.md`](security.md#manager-hierarchy) for the full reasoning,
+and the note in `RoleSeeder` — worth treating this recurring shape
+("a suggested permission grant would create tenant-wide reach without
+the scoping feature that makes it safe") as a standing checklist item
+for every future role-mapping decision, not a one-off exception.
+
 ## Internal IDs vs. Public-Facing References
 
 Internal database IDs may remain bigint (see

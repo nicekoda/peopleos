@@ -68,24 +68,21 @@ class UpdateEmployeeRequest extends FormRequest
                 'nullable', 'string',
                 Rule::exists('positions', 'id')->where(fn ($q) => $q->where('tenant_id', $tenantId)),
             ],
-            'manager_employee_id' => [
-                'nullable', 'string', 'different:id',
-                Rule::exists('employees', 'id')->where(fn ($q) => $q->where('tenant_id', $tenantId)),
-            ],
+            // manager_employee_id is deliberately not a validated field
+            // here (Checkpoint 13) — this endpoint's old, weaker
+            // validation (no cycle check, no active-status check, and a
+            // raw Rule::exists() that didn't exclude soft-deleted
+            // managers) is structurally closed off, not just
+            // superseded. Every manager change must go through
+            // PATCH/DELETE /employees/{employee}/manager, which runs
+            // the full check (AssignManagerRequest +
+            // ManagerHierarchyService). A stray manager_employee_id in
+            // this endpoint's request body is silently ignored, the
+            // same "not a validated field" pattern already used for
+            // tenant_id/user_id elsewhere. See docs/security.md.
             'start_date' => ['nullable', 'date'],
             'probation_end_date' => ['nullable', 'date', 'after_or_equal:start_date'],
             'confirmation_date' => ['nullable', 'date'],
         ];
-    }
-
-    /**
-     * @return array<string, mixed>
-     */
-    public function validationData(): array
-    {
-        /** @var Employee $employee */
-        $employee = $this->route('employee');
-
-        return array_merge($this->all(), ['id' => $employee->id]);
     }
 }

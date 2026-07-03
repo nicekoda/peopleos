@@ -60,10 +60,14 @@ class StoreEmployeeRequest extends FormRequest
                 'nullable', 'string',
                 Rule::exists('positions', 'id')->where(fn ($q) => $q->where('tenant_id', $tenantId)),
             ],
-            'manager_employee_id' => [
-                'nullable', 'string',
-                Rule::exists('employees', 'id')->where(fn ($q) => $q->where('tenant_id', $tenantId)),
-            ],
+            // manager_employee_id is deliberately not a validated field
+            // here (Checkpoint 13) — even at creation time, a manager can
+            // only be assigned through the dedicated
+            // PATCH /employees/{employee}/manager endpoint, which runs
+            // the full tenant/status/cycle validation this endpoint
+            // never did. A new employee always starts with no manager;
+            // assigning one is a deliberate follow-up call. See
+            // docs/security.md.
             'start_date' => ['nullable', 'date'],
             'probation_end_date' => ['nullable', 'date', 'after_or_equal:start_date'],
             'confirmation_date' => ['nullable', 'date'],

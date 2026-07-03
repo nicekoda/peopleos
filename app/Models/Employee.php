@@ -5,6 +5,7 @@ namespace App\Models;
 use App\Enums\EmployeeStatus;
 use App\Enums\EmploymentType;
 use App\Models\Concerns\BelongsToTenant;
+use App\Services\ManagerHierarchyService;
 use Illuminate\Database\Eloquent\Concerns\HasUlids;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
@@ -133,5 +134,21 @@ class Employee extends Model
     public function fullName(): string
     {
         return trim("{$this->first_name} {$this->last_name}");
+    }
+
+    /**
+     * Convenience wrappers over ManagerHierarchyService — see
+     * docs/architecture.md for why the actual logic lives in the
+     * service (reusable outside a model instance context) rather than
+     * here directly.
+     */
+    public function manages(self $employee): bool
+    {
+        return app(ManagerHierarchyService::class)->isManagerOf($this, $employee);
+    }
+
+    public function directlyManages(self $employee): bool
+    {
+        return app(ManagerHierarchyService::class)->directlyManages($this, $employee);
     }
 }

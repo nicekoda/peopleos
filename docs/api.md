@@ -74,6 +74,11 @@ controller always sets it from `app(Tenant::class)->id` (the
 subdomain-resolved tenant). Same for `created_by`/`updated_by`, always
 set from the authenticated user.
 
+**`manager_employee_id` is also never accepted here, as of Checkpoint
+13.** Neither `StoreEmployeeRequest` nor `UpdateEmployeeRequest` validate
+it — a value in the request body is silently ignored. Manager assignment
+is exclusively handled by the dedicated endpoints below.
+
 ### Response shape
 
 `EmployeeResource` — `personal_email` and `phone` are `null` in the
@@ -129,6 +134,70 @@ all). Every other field is always present when known.
 Validation errors return Laravel's standard 422 shape
 (`{"message": ..., "errors": {"field": ["message"]}}`) — no stack traces,
 no internal detail, regardless of `APP_DEBUG`.
+
+## Manager Hierarchy
+
+| Method | Path | Permission | Notes |
+|---|---|---|---|
+| `PATCH` | `/api/v1/employees/{employee}/manager` | `employees.update_manager` | Body: `{"manager_employee_id": "..."}` — assign or change. Rejects self-assignment, cross-tenant, soft-deleted/non-active managers, and cycles (`422`) |
+| `DELETE` | `/api/v1/employees/{employee}/manager` | `employees.update_manager` | Removes the manager; `404` if the employee had none |
+| `GET` | `/api/v1/employees/{employee}/direct-reports` | `employees.view_team` | One level only, not recursive |
+| `GET` | `/api/v1/employees/{employee}/reporting-tree` | `employees.view_team` | Recursive, depth-capped at 5 levels — see `docs/security.md` |
+| `GET` | `/api/v1/me/direct-reports` | *(none — self-service)* | Scoped to the caller's own linked employee only |
+
+See `docs/security.md#manager-hierarchy` for the full validation chain
+and the fail-closed cycle-detection design.
+
+### Validation rules
+
+| Field | Rules |
+|---|---|
+| `manager_employee_id` | required, must exist, belong to the current tenant, be `status: active`, and not be soft-deleted; must not equal the target employee's own id; must not create a circular reporting relationship |
+
+### `/me/direct-reports` — safe response when unlinked
+
+Unlike `/me/employee` (a single resource, `404` when unlinked),
+`/me/direct-reports` is a list endpoint: a caller with no linked
+employee gets an **empty list with `200`**, not an error — see
+`docs/security.md` for why this differs from `/me/employee`'s posture.
+
+### `reporting-tree` response shape
+
+```json
+{
+  "data": {
+    "id": "01h...",
+    "employee_number": "EMP-0001",
+    "full_name": "Ada Lovelace",
+    "...": "...(same fields as EmployeeResource)",
+    "direct_reports": [
+      {
+        "id": "01h...",
+        "full_name": "Grace Hopper",
+        "direct_reports": [],
+        "reports_truncated": false
+      }
+    ],
+    "reports_truncated": false
+  }
+}
+```
+
+`reports_truncated: true` on a node means that employee has direct
+reports which exist but weren't fetched because the response reached
+the depth cap — not that they have no reports at all.
+
+### A status-code nuance worth knowing when testing cross-tenant access
+
+Routes with a bound `{employee}` parameter (all of the above except
+`/me/direct-reports`) return `404` for a cross-tenant *session* (an
+authenticated tenant-A user hitting tenant-B's subdomain with a
+tenant-A employee ID), not `403` — route-model-binding's tenant scope
+resolves first. `/me/direct-reports` (no route parameter) correctly
+returns `403` via `tenant.matches` for the same scenario. See
+`docs/security.md` for the full explanation — this is pre-existing,
+consistent behavior across every `{model}`-bound route in the app, not
+specific to this module.
 
 ## Employee Documents
 
@@ -444,6 +513,8 @@ second `approve` call, etc.) returns `409`.
 - No self-linking / invitation-token flow — linking a user to an employee is HR/admin-only, see `docs/security.md`.
 - No employee profile self-update endpoint — `/me/employee` is read-only.
 - No leave balances/accrual, no manager-hierarchy-scoped approval, no notifications, no calendar integration — see `docs/security.md#leave-management`.
+- `reporting-tree` is depth-capped at 5 levels — no pagination/lazy-loading beyond it, no org chart UI.
+- Line Manager still cannot approve/reject leave — the hierarchy foundation exists (Checkpoint 13) but `LeaveRequestController` isn't wired to use it yet.
 - No policy campaign automation, reminders, or escalations.
 - No acknowledgement export/report endpoint (`policies.export_acknowledgements` seeded, unused).
 - No document approval workflow endpoint — `documents.approve` permission and `approved_by`/`approved_at` columns are reserved, unused.
@@ -463,7 +534,8 @@ second `approve` call, etc.) returns `409`.
 - Candidate documents (`applies_to` includes `candidate`) — no candidate/recruitment module exists yet to attach documents to.
 - Self-linking / invitation-token flow for User ↔ Employee linking (currently HR/admin-only).
 - Employee profile self-update — `/me/employee` is read-only; no endpoint lets an employee edit their own record.
-- Manager-hierarchy-scoped approval — `Employee.manager_employee_id` exists, but nothing validates "is this approver this employee's manager" yet; Line Manager deliberately holds no leave permissions until this exists (see `docs/security.md`).
+- Manager-hierarchy-scoped leave approval — `ManagerHierarchyService::isManagerOf()` now exists (Checkpoint 13); wiring `LeaveRequestController::approve()`/`reject()` to use it, and granting Line Manager `leave.approve`/`leave.reject`, is the explicit next step (see `docs/security.md`).
+- Org chart UI, manager self-service dashboard, performance/probation review usage of the manager hierarchy — `ManagerHierarchyService` is built to be reusable for these, none exist yet.
 - Leave balances / accrual engine, business-day calculation, weekend/holiday exclusion, half-day leave — `leave_types.max_days_per_year` already reserved.
 - Leave notifications, email approval, and calendar integration.
 - Policy campaigns (bulk-assign a policy to a whole department/location, scheduled/recurring re-acknowledgement cycles).

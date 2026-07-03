@@ -96,6 +96,9 @@ class RoleSeeder extends Seeder
             // records is a natural extension of that trust. See
             // docs/security.md for the full role-mapping rationale.
             'employees.link_user', 'employees.unlink_user',
+            // Manager hierarchy (Checkpoint 13) — both, per your
+            // explicit suggested mapping.
+            'employees.view_team', 'employees.update_manager',
         ]);
 
         $this->grantByKeys($roles['Employee'], [
@@ -122,25 +125,36 @@ class RoleSeeder extends Seeder
             'policies.view', 'policies.create', 'policies.update',
             'policies.assign', 'policies.view_acknowledgements',
             'leave_types.view', 'leave.view', 'leave.view_all', 'leave.approve', 'leave.reject',
+            // view_team only, per your accepted plan — NOT
+            // update_manager. Narrower default until a real need is
+            // shown, same reasoning already applied to withholding
+            // employees.link_user from HR Officer in Checkpoint 11.
+            'employees.view_team',
         ]);
 
         $this->grantByKeys($roles['Auditor'], [
             'policies.view', 'policies.view_acknowledgements',
             'leave.view', 'leave.view_all',
+            'employees.view_team',
         ]);
 
-        // Line Manager deliberately receives NO leave permissions this
-        // checkpoint, despite your suggested mapping listing
-        // leave.approve/leave.reject "if manager approval is supported."
-        // It isn't — there's no manager-hierarchy enforcement yet
-        // (Employee.manager_employee_id exists but nothing validates
-        // "is this approver actually this employee's manager"). Granting
-        // leave.approve/leave.reject now would let any Line Manager
-        // approve any employee's leave tenant-wide, since this
-        // checkpoint's approve()/reject() have no hierarchy scoping —
-        // the same category of insecure shortcut avoided for Employee/
-        // policies.acknowledge in Checkpoint 10. Revisit once manager-
-        // hierarchy-scoped approval is built. See docs/security.md.
+        // Line Manager receives employees.view_team ONLY this checkpoint
+        // — no employees.update_manager (manager assignment stays
+        // HR/admin-only), and still NO leave.approve/leave.reject. This
+        // checkpoint builds the hierarchy *foundation*
+        // (ManagerHierarchyService, direct-reports/reporting-tree
+        // visibility) — it deliberately does not yet change who can
+        // approve leave. Line Manager will receive
+        // leave.approve/leave.reject in a future checkpoint once
+        // LeaveRequestController's approve()/reject() are updated to
+        // scope by ManagerHierarchyService::isManagerOf() rather than
+        // being tenant-wide for any holder of the permission. Granting
+        // either now would repeat the exact "unscoped blast radius"
+        // mistake flagged and avoided in Checkpoint 12. See
+        // docs/security.md.
+        $this->grantByKeys($roles['Line Manager'], [
+            'employees.view_team',
+        ]);
 
         // Remaining roles (HR Director, Department Head, etc.) are
         // intentionally left as placeholders with no permissions

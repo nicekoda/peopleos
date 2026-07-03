@@ -359,6 +359,8 @@ The first real tenant-owned business module — see
 | `employees.delete` | Soft-delete employee records |
 | `employees.view_sensitive` | See `personal_email`/`phone` in API responses, on top of `employees.view` |
 | `employees.export` | Reserved, not implemented this checkpoint |
+| `employees.view_team` | View direct reports (own via `/me/direct-reports`, or another employee's via the admin endpoint) — Checkpoint 13 |
+| `employees.update_manager` | Assign/change/remove an employee's manager — Checkpoint 13 |
 
 ### `personal_email` / `phone` are sensitive — a decision, not a given
 
@@ -1078,6 +1080,203 @@ your quality-review instruction — see `database.md`).
   for policy acknowledgement), if a real need for HR-initiated
   cancellation emerges.
 
+## Manager Hierarchy
+
+Foundation for every future manager-scoped capability (leave approval,
+performance/probation reviews, onboarding tasks, team dashboards, org
+chart) — see [`api.md`](api.md#manager-hierarchy) and
+[`database.md`](database.md#employees) for the endpoint/schema
+reference. Reuses `employees.manager_employee_id` (Checkpoint 6); no
+schema change this checkpoint.
+
+### Permission mapping (as seeded in `RoleSeeder`)
+
+| Role | Permissions |
+|---|---|
+| Tenant Admin | Both (automatic) |
+| HR Manager | Both — `employees.view_team`, `employees.update_manager` |
+| HR Officer | `employees.view_team` only — **not** `employees.update_manager`, narrower default until a real need is shown, same reasoning already applied to withholding `employees.link_user` from HR Officer in Checkpoint 11 |
+| Line Manager | `employees.view_team` only — see below |
+| Employee | None |
+| Auditor | `employees.view_team` |
+
+### Manager assignment is a structurally closed-off write path
+
+`manager_employee_id` is no longer a validated field on
+`StoreEmployeeRequest` or `UpdateEmployeeRequest` — removed entirely,
+not patched in place. Every manager assignment/removal goes through
+`PATCH`/`DELETE /employees/{employee}/manager`
+(`EmployeeManagerController`), gated by `employees.update_manager`,
+which runs the full check via `AssignManagerRequest` +
+`ManagerHierarchyService`:
+
+1. Tenant match (the prospective manager must belong to the same
+   tenant) — `Rule::exists()` scoped to `tenant_id`.
+2. **Only `active`-status employees may be assigned as manager** —
+   excludes `draft`/`inactive`/`terminated`. The strictest safe default;
+   matches the existing "terminated employee cannot be linked" rule from
+   `LinkEmployeeUserRequest` (Checkpoint 11).
+3. Soft-deleted employees excluded — explicit
+   `where('status','active')->whereNull('deleted_at')` closure on the
+   `Rule::exists()` check, the same fix already required for
+   `document_category_id` (Checkpoint 9) and `leave_type_id`
+   (Checkpoint 12); a raw `Rule::exists()` bypasses `SoftDeletes`
+   entirely.
+4. Self-assignment rejected with a specific error message.
+5. Cycle detection (direct and indirect) via
+   `ManagerHierarchyService::wouldCreateCycle()`.
+
+Confirmed directly: `PATCH /employees/{employee}` (the general update
+endpoint) with `manager_employee_id` in the body returns `200` but
+leaves the employee's actual manager unchanged — the field is silently
+ignored, not honored and not rejected, the same "not a validated field"
+posture used for `tenant_id`/`user_id` elsewhere in this app.
+
+### Fail-closed cycle detection (Refinement 2)
+
+`wouldCreateCycle()` doesn't only return `true` for an actual cycle —
+it fails closed (also returns `true`, blocking the assignment) if the
+chain above the prospective manager is untrustworthy for *any* reason:
+
+- A chain deeper than `MAX_CHAIN_WALK` (100 hops) — a real org should
+  never approach this; hitting it means the existing chain is already
+  corrupted.
+- A repeated employee ID anywhere in the walk — the chain is already
+  cyclic before this assignment even happens.
+- A manager belonging to a **different tenant** — shouldn't be
+  reachable through normal use (every assignment is tenant-checked at
+  write time), but the walk verifies it directly rather than assuming
+  it structurally can't happen.
+- A **soft-deleted** employee anywhere in the chain.
+- A **non-`active`** employee anywhere in the chain.
+
+The walk uses `Employee::withoutGlobalScopes()` deliberately — a normal
+(scoped) query would silently exclude a cross-tenant or soft-deleted
+employee from the result, making the chain walk terminate early and
+incorrectly conclude "no cycle, no problem" instead of surfacing the
+untrustworthy state. Bypassing the scopes for this internal safety check
+is what makes the fail-closed guarantee real rather than theoretical.
+
+### Two different depth caps — not the same number, for different reasons
+
+- `ManagerHierarchyService::MAX_CHAIN_WALK` (100) — corruption/infinite-
+  loop safety net for the cycle-detection *write path*.
+- `EmployeeHierarchyController::DEFAULT_REPORTING_TREE_DEPTH` (5) — a
+  named constant (not a magic number), response-size cap for the
+  `reporting-tree` **display** endpoint. A real org can legitimately be
+  deeper than 5 levels; hitting the cap sets `reports_truncated: true`
+  on that node rather than silently dropping data with no indication.
+
+### Why Line Manager still doesn't get leave approval this checkpoint (Refinement 6)
+
+**This checkpoint does not change leave approval permissions.** Line
+Manager receives `employees.view_team` only — no `leave.approve`, no
+`leave.reject`. `LeaveRequestController::approve()`/`reject()`
+(Checkpoint 12) are still tenant-wide for any holder of those
+permissions, with no manager-hierarchy scoping. Granting them to Line
+Manager now, even with `ManagerHierarchyService` available, would still
+let any Line Manager approve any employee's leave company-wide, because
+nothing in `LeaveRequestController` calls `isManagerOf()` yet. That
+wiring — scoping `approve()`/`reject()` by
+`ManagerHierarchyService::isManagerOf($actingManager, $requestOwner)` —
+is explicitly a **future checkpoint's** work, not this one's. This is
+the third occurrence of the same shape of decision (Checkpoint 10:
+Employee/`policies.acknowledge`; Checkpoint 12: Line Manager/
+`leave.approve`; now this checkpoint declining to change that decision
+even though the hierarchy foundation now technically exists) — see
+`architecture.md` for why this is worth treating as a standing pattern.
+
+### Direct reports and reporting tree
+
+- `GET /me/direct-reports` — **no permission required**, self-service.
+  Scoped exclusively to `$request->user()->employee`'s own direct
+  reports; there is no way to pass another employee's ID through this
+  endpoint. A caller with no linked employee gets an **empty list**
+  (`200`), not a `404` — a list endpoint's natural "nothing here" state,
+  consistent with `LeaveRequestController::index()`'s precedent from
+  Checkpoint 12 (unlike the single-resource `/me/employee`, which `404`s
+  when unlinked).
+- `GET /employees/{employee}/direct-reports` — admin/HR view, requires
+  `employees.view_team`, one level only (not recursive).
+- `GET /employees/{employee}/reporting-tree` — also requires
+  `employees.view_team` (Refinement 5). Recursive, depth-capped at
+  `EmployeeHierarchyController::DEFAULT_REPORTING_TREE_DEPTH` (5
+  levels), eager-loaded one level at a time to avoid an unbounded N+1
+  query pattern.
+- Both list-shaped endpoints reuse `EmployeeResource`, so sensitive-field
+  masking (`personal_email`/`phone` gated by `employees.view_sensitive`)
+  applies automatically — no separate masking logic needed.
+
+### Manager assignment audit events (Refinement 4)
+
+`employee.manager_assigned` (first-time assignment, old value was
+`null`), `employee.manager_changed` (had a manager, now a different
+one), `employee.manager_removed`. Metadata is deliberately narrow —
+**IDs only**, no names/emails/phone numbers:
+
+```json
+{
+  "employee_id": "01h...",
+  "old_manager_employee_id": "01h...",
+  "new_manager_employee_id": "01h...",
+  "tenant_id": "01h..."
+}
+```
+
+`actor_user_id` is recorded via the standard `AuditLogger::logFor()`
+actor parameter, not duplicated into `metadata`. Tested directly,
+including an explicit assertion that neither employee's name appears
+anywhere in the logged metadata.
+
+### A pre-existing status-code nuance, not a Checkpoint 13 regression
+
+Confirmed directly while smoke-testing: a route with a bound
+`{employee}` route parameter (e.g. `GET /employees/{employee}/direct-
+reports`) returns `404`, not `403`, when an authenticated session from
+tenant A hits tenant B's subdomain with a valid tenant-A employee ID in
+the URL. This is because Laravel's implicit route-model-binding
+(`SubstituteBindings`, prioritized to run early in the middleware
+pipeline) resolves `{employee}` through `BelongsToTenant`'s global scope
+*before* `tenant.matches` gets a chance to run its own `403` check — the
+model simply isn't found under the wrong resolved tenant, so binding
+itself throws first. Confirmed this already held for the pre-existing
+`GET /employees/{employee}` route (Checkpoint 6), so this is long-
+standing, consistent behavior across every `{model}`-bound route in the
+app, not something introduced here. Routes *without* a bound tenant-
+scoped model in the URL (`/me/employee`, `/me/direct-reports`, list/
+index endpoints) correctly return `403` via `tenant.matches` itself —
+see `TenantMatchingMiddlewareTest` for the covered case. Either way the
+request is blocked; only the status code differs by route shape. Worth
+knowing when writing new tests: assert `404` for `{model}`-bound routes,
+`403` for parameter-free ones, when testing cross-tenant session reuse.
+
+### Current limitations
+
+- **`reporting-tree` is depth-capped at 5 levels** — a real org deeper
+  than that gets `reports_truncated: true` at the cap, not full data. No
+  pagination/lazy-loading of the remainder exists yet.
+- **No org chart UI** — API-only, same as every module so far.
+- **Leave approval is not yet manager-hierarchy-scoped** — see above;
+  `LeaveRequestController` is unchanged this checkpoint.
+- **No manager self-service dashboard** — `/me/direct-reports` and
+  `/employees/{employee}/reporting-tree` are the only manager-facing
+  reads; no aggregate dashboard/summary view exists.
+- **No performance/probation review usage yet** — `ManagerHierarchyService`
+  is built to be reusable for these, but no such module exists yet.
+
+### Future
+
+- Manager-hierarchy-scoped leave approval (`LeaveRequestController::approve()`/
+  `reject()` calling `ManagerHierarchyService::isManagerOf()`) — the
+  explicit next step this checkpoint sets up but doesn't build.
+- Org chart (frontend + possibly a wider/paginated reporting-tree API).
+- Manager self-service dashboard (team summary, pending approvals across
+  modules once they exist).
+- Performance review and probation review usage of
+  `ManagerHierarchyService::isManagerOf()`/`directReportsOf()`.
+- Onboarding task assignment scoped to a new hire's manager.
+- Pagination/lazy-loading for `reporting-tree` beyond the depth cap.
+
 ## Local Demo Credentials
 
 **Local development only — these are not real secrets and only work against your own local database.** Password comes from `SEED_USER_PASSWORD` in `.env` (not committed; `.env.example` has an empty placeholder).
@@ -1117,3 +1316,5 @@ other 17 roles per tenant exist as empty placeholders for future modules.
 - **No self-linking / invitation-token flow, no employee profile self-update, no manager-approval linking workflow** — see [User ↔ Employee Linking](#user--employee-linking) above for the full list of what Checkpoint 11 deliberately left out.
 - No Payroll, Performance, or Onboarding modules yet.
 - **Leave Management has no balances/accrual, no manager-hierarchy-scoped approval, no notifications, no calendar integration** — see [Leave Management](#leave-management) above for the full list.
+- **Line Manager still cannot approve/reject leave** — the hierarchy foundation now exists (Checkpoint 13), but `LeaveRequestController` hasn't been updated to use it yet. See [Manager Hierarchy](#manager-hierarchy) above.
+- **No org chart, manager self-service dashboard, or performance/probation review usage of the manager hierarchy** — see [Manager Hierarchy](#manager-hierarchy) above for the full list.

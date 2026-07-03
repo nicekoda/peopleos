@@ -228,7 +228,15 @@ class EmployeeApiTest extends TestCase
             ->assertStatus(422)->assertJsonValidationErrors('position_id');
     }
 
-    public function test_invalid_manager_from_another_tenant_is_rejected(): void
+    /**
+     * manager_employee_id is deliberately not a validated field on
+     * create as of Checkpoint 13 — a stray value in the request body is
+     * silently ignored, not honored and not rejected. Manager
+     * assignment (including cross-tenant rejection) is now exclusively
+     * handled by PATCH /employees/{employee}/manager — see
+     * ManagerHierarchyTest and docs/security.md.
+     */
+    public function test_manager_employee_id_in_create_request_body_is_ignored(): void
     {
         $tenant = Tenant::factory()->create();
         $otherTenant = Tenant::factory()->create();
@@ -240,7 +248,8 @@ class EmployeeApiTest extends TestCase
             $this->validEmployeePayload(['manager_employee_id' => $foreignManager->id]),
         );
 
-        $response->assertStatus(422)->assertJsonValidationErrors('manager_employee_id');
+        $response->assertCreated();
+        $this->assertNull($response->json('data.manager_employee_id'));
     }
 
     public function test_create_action_writes_audit_log(): void

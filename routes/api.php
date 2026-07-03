@@ -3,6 +3,8 @@
 use App\Http\Controllers\Api\V1\DocumentCategoryController;
 use App\Http\Controllers\Api\V1\EmployeeController;
 use App\Http\Controllers\Api\V1\EmployeeDocumentController;
+use App\Http\Controllers\Api\V1\EmployeeHierarchyController;
+use App\Http\Controllers\Api\V1\EmployeeManagerController;
 use App\Http\Controllers\Api\V1\EmployeeUserLinkController;
 use App\Http\Controllers\Api\V1\LeaveRequestController;
 use App\Http\Controllers\Api\V1\LeaveTypeController;
@@ -71,6 +73,15 @@ Route::middleware(['auth', 'tenant.matches'])->prefix('api/v1')->group(function 
     // No specific permission — inherently self-scoped (the caller's own
     // link, resolved server-side), same as a "whoami" endpoint.
     Route::get('me/employee', [MeController::class, 'employee']);
+    // Also no specific permission — scoped only to the caller's own
+    // linked employee's direct reports, never anyone else's. See
+    // docs/security.md.
+    Route::get('me/direct-reports', [MeController::class, 'directReports']);
+
+    Route::patch('employees/{employee}/manager', [EmployeeManagerController::class, 'update'])->middleware('permission:employees.update_manager');
+    Route::delete('employees/{employee}/manager', [EmployeeManagerController::class, 'destroy'])->middleware('permission:employees.update_manager');
+    Route::get('employees/{employee}/direct-reports', [EmployeeHierarchyController::class, 'directReports'])->middleware('permission:employees.view_team');
+    Route::get('employees/{employee}/reporting-tree', [EmployeeHierarchyController::class, 'reportingTree'])->middleware('permission:employees.view_team');
 
     Route::get('leave-types', [LeaveTypeController::class, 'index'])->middleware('permission:leave_types.view');
     Route::post('leave-types', [LeaveTypeController::class, 'store'])->middleware('permission:leave_types.create');

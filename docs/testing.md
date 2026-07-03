@@ -232,6 +232,41 @@ belt-and-braces check. `assertDatabaseHas('audit_logs', [...])` alone
 would not catch a masking regression — a row can exist with the raw
 secret value still inside it and that assertion would still pass.
 
+## Testing fail-closed logic — assert it fails closed on inputs beyond the obvious case
+
+`ManagerHierarchyTest` covers cycle rejection for both a direct cycle (A
+↔ B) and an indirect one (A → B → C → A) as separate tests, not just
+the direct case — a cycle-detection implementation that only walks one
+hop would pass a "direct cycle" test while still being broken for
+anything deeper. When a piece of logic is described as "fail closed,"
+write at least one test for the *obvious* failure mode and one for a
+less-obvious one (here: an indirect chain) that a shallow implementation
+could still pass. `wouldCreateCycle()`'s deeper fail-closed conditions
+(cross-tenant/soft-deleted/inactive employee found mid-chain, corrupted-
+chain depth cap) are exercised indirectly through the assignment-time
+checks that already reject those states before a chain could be built —
+see `AssignManagerRequest`; there's no code path in this app that could
+construct such a chain to test the walk's defense-in-depth directly, so
+those branches are currently unit-untested even though they exist. Worth
+a direct unit test on `ManagerHierarchyService` itself if a future
+change makes constructing such a chain possible (e.g. a data-migration
+tool, or removing one of the assignment-time checks).
+
+## Testing that a structurally-closed write path stays closed (Refinement 3)
+
+`test_general_employee_update_endpoint_cannot_set_manager` sends
+`manager_employee_id` through `PATCH /employees/{employee}` (not the
+dedicated manager endpoint) and asserts the field is unchanged —
+`200`, not a validation error, since the field is silently ignored
+rather than rejected (the same "not a validated field" pattern as
+`tenant_id`). This is the regression test that makes the "old path is
+structurally closed" claim in `docs/security.md` actually verified, not
+just asserted in a comment. Whenever a future checkpoint moves a field's
+write path from a general endpoint to a dedicated one (the same pattern
+used for `employees.user_id` in Checkpoint 11), add this exact shape of
+test: prove the *old* endpoint no longer works, not just that the *new*
+one does.
+
 ## Verifying against the real app, not just the test suite
 
 Because of the SQLite/Postgres split above, checkpoints in this project
@@ -241,6 +276,25 @@ test suite: `curl` against `https://{subdomain}.peopleos.test` (use
 mkcert cert's revocation check, which real browsers don't do), and direct
 `psql` queries to confirm seeded/written data. Keep doing this for new
 checkpoints — it's caught real bugs the test suite alone didn't.
+
+### A status-code nuance found via live smoke testing, not the test suite (Checkpoint 13)
+
+A live cross-tenant-session smoke test against
+`GET /employees/{employee}/direct-reports` returned `404`, where the
+same scenario against a parameter-free route (`/me/direct-reports`,
+`GET /leave-requests`) returns `403` via `tenant.matches`. Traced to
+route-model-binding (`SubstituteBindings`) resolving `{employee}`
+through `BelongsToTenant`'s tenant scope *before* `tenant.matches` runs
+— the model simply isn't found under the wrong resolved tenant, so
+binding throws first. Confirmed via a second live check that this
+already held for the pre-existing `GET /employees/{employee}` route
+(Checkpoint 6) — not a regression, a pre-existing and consistent
+behavior across every `{model}`-bound route that the test suite never
+had a reason to exercise (`TenantMatchingMiddlewareTest`'s cross-tenant-
+session coverage only uses parameter-free routes). Worth checking for
+directly the next time a checkpoint adds a `{model}`-bound route: don't
+assume `tenant.matches`'s `403` is what a cross-tenant-session test
+against it will see — verify empirically, the same way this was found.
 
 ### A real CSRF round-trip against the live app, done correctly (Checkpoint 11)
 

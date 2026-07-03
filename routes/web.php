@@ -5,6 +5,7 @@ use App\Http\Controllers\EmployeeDocumentUiController;
 use App\Http\Controllers\EmployeeUiController;
 use App\Http\Controllers\LeaveUiController;
 use App\Http\Controllers\PolicyUiController;
+use App\Http\Controllers\SettingsController;
 use Illuminate\Support\Facades\Route;
 use Inertia\Inertia;
 
@@ -93,12 +94,33 @@ Route::middleware(['auth', 'tenant.matches'])->group(function () {
         ->middleware('permission:policies.assign')->name('policies.assign');
     Route::get('policies/{policy}/acknowledgements', [PolicyUiController::class, 'acknowledgements'])
         ->middleware('permission:policies.view_acknowledgements')->name('policies.acknowledgements');
-    // No dedicated "settings.view" permission exists yet — employees.update
-    // is used as a reasonable stand-in signal of "this user has some
-    // administrative capability." Revisit if/when Settings grows real
-    // content with its own permission needs.
-    Route::get('settings', fn () => Inertia::render('Settings/Index'))
-        ->middleware('permission:employees.update')->name('settings.index');
+    // Settings Foundation (Checkpoint 22) — same "access, not data"
+    // two-layer design as the Dashboard (Checkpoint 21):
+    // tenant.settings.view grants reaching /settings; each section
+    // below is separately gated by its own module permission, checked
+    // again wherever that section's real data lives. No blanket
+    // middleware on the landing page itself — see SettingsController.
+    Route::get('settings', [SettingsController::class, 'index'])->name('settings.index');
+    Route::get('settings/company', [SettingsController::class, 'company'])
+        ->middleware('permission:tenant.view')->name('settings.company');
+
+    // Safe "coming later" placeholders — same pattern originally used
+    // for Documents/Policies in Checkpoint 16, each gated by the
+    // existing permission closest to that section's real future data,
+    // not a new permission invented for a page with zero content yet.
+    Route::get('settings/access', fn () => Inertia::render('Settings/Access'))
+        ->middleware('permission:users.view')->name('settings.access');
+    Route::get('settings/document-categories', fn () => Inertia::render('Settings/DocumentCategories'))
+        ->middleware('permission:document_categories.view')->name('settings.document-categories');
+    Route::get('settings/leave-types', fn () => Inertia::render('Settings/LeaveTypes'))
+        ->middleware('permission:leave_types.view')->name('settings.leave-types');
+    Route::get('settings/security', fn () => Inertia::render('Settings/Security'))
+        ->middleware('permission:audit.view')->name('settings.security');
+    // No dedicated "integrations.*" permission exists, and none is
+    // invented for a page with no real content — falls back to the
+    // same umbrella check as the landing page itself.
+    Route::get('settings/integrations', fn () => Inertia::render('Settings/Integrations'))
+        ->middleware('permission:tenant.settings.view')->name('settings.integrations');
 });
 
 require __DIR__.'/auth.php';

@@ -103,6 +103,48 @@ Platform Super Admins always get `403` from this endpoint —
 `dashboard.view` is a tenant-scoped permission they can never hold. See
 `docs/architecture.md#dashboard-foundation-checkpoint-21`.
 
+## Tenant
+
+Singleton endpoint (Checkpoint 22) — no `{tenant}` route parameter.
+Both actions always operate on the caller's own resolved tenant
+(`app(Tenant::class)`); there is no way to reference a different
+tenant's record through this endpoint at all.
+
+| Method | Path | Permission | Notes |
+|---|---|---|---|
+| `GET` | `/api/v1/tenant` | `tenant.view` | Returns the current tenant's profile |
+| `PATCH` | `/api/v1/tenant` | `tenant.update` | Body: `{"name": "..."}` — **only** `name` is accepted; see below |
+
+### Response shape
+
+```json
+// GET /api/v1/tenant
+{
+  "data": {
+    "id": "01h...",
+    "name": "Acme Corp",
+    "subdomain": "acme",
+    "status": "active",
+    "created_at": "2026-01-01T00:00:00+00:00",
+    "updated_at": "2026-01-01T00:00:00+00:00"
+  }
+}
+```
+
+### Allowlisted update — only `name`
+
+`UpdateTenantRequest` defines a validation rule for exactly one field.
+`subdomain`, `status`, `tenant_id`, `created_at`, `updated_at`,
+`deleted_at`, and any billing/security/system-flag field are
+structurally absent from the rules — sending any of them in the same
+request body has no effect; only `name` is ever applied. A `tenant.updated`
+audit log is written only when `name` actually changes, with safe
+metadata only (`old_name`, `new_name`, `tenant_id`, `actor_user_id`).
+
+Platform Super Admins always get `403` from this endpoint —
+`tenant.view`/`tenant.update` are tenant-scoped permissions they can
+never hold. See `docs/architecture.md#settings-foundation-checkpoint-22`.
+
 ## Employees
 
 | Method | Path | Permission | Notes |
@@ -284,7 +326,13 @@ served through the `web` middleware group, session-based auth same as
 | `GET` | `/policies/{policy}/versions/create` | `auth`, `tenant.matches`, `permission:policies.update` | Version create form — same permission as `POST .../versions` |
 | `GET` | `/policies/{policy}/assign` | `auth`, `tenant.matches`, `permission:policies.assign` | Assignment form — employee multi-select from `/api/v1/employees` |
 | `GET` | `/policies/{policy}/acknowledgements` | `auth`, `tenant.matches`, `permission:policies.view_acknowledgements` | Acknowledgement records list |
-| `GET` | `/settings` | `auth`, `tenant.matches`, `permission:employees.update` | Placeholder — no dedicated `settings.*` permission exists yet, `employees.update` used as a stand-in admin-capability signal |
+| `GET` | `/settings` | `auth`, `tenant.matches` | Real UI (Checkpoint 22) — explicit `tenant.settings.view`-or-platform-admin check in the controller (no blanket `permission:` middleware, same reason as `/dashboard` — see `docs/security.md#settings-foundation`); each section card independently permission-gated |
+| `GET` | `/settings/company` | `auth`, `tenant.matches`, `permission:tenant.view` | Real UI — view/edit, fetched client-side from `/api/v1/tenant` |
+| `GET` | `/settings/access` | `auth`, `tenant.matches`, `permission:users.view` | Placeholder — shared destination for both "Users & Access" and "Roles & Permissions" cards |
+| `GET` | `/settings/document-categories` | `auth`, `tenant.matches`, `permission:document_categories.view` | Placeholder |
+| `GET` | `/settings/leave-types` | `auth`, `tenant.matches`, `permission:leave_types.view` | Placeholder |
+| `GET` | `/settings/security` | `auth`, `tenant.matches`, `permission:audit.view` | Placeholder |
+| `GET` | `/settings/integrations` | `auth`, `tenant.matches`, `permission:tenant.settings.view` | Placeholder — no dedicated permission exists yet, falls back to the same umbrella check as the landing page |
 
 **Leave Management UI (Checkpoint 18)** reuses `resources/js/lib/api.ts`
 unchanged apart from a tightened `409` default message ("This request
@@ -319,6 +367,15 @@ placeholder with real cards fetched from the new `GET /api/v1/dashboard`
 every card is independently gated by its own module permission. Platform
 Super Admins see a safe static message and never call the dashboard API
 at all. See `docs/security.md#dashboard-foundation`.
+
+**Settings Foundation (Checkpoint 22)** replaces the Checkpoint 16
+placeholder with real, permission-aware section cards plus one fully
+real section (Company Profile, backed by the new `GET`/`PATCH
+/api/v1/tenant` documented above). `tenant.settings.view` only grants
+reaching `/settings`; every section card is independently gated by its
+own permission. Platform Super Admins see a safe static Settings page
+and are blocked from `/api/v1/tenant` with a clean `403`. See
+`docs/security.md#settings-foundation`.
 
 ### Shared props (every Inertia response)
 

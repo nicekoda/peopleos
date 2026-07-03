@@ -86,7 +86,12 @@ class DashboardAndFrontendSecurityTest extends TestCase
             'leave' => ['leave', 'leave.view'],
             'documents' => ['documents', 'documents.view'],
             'policies' => ['policies', 'policies.view'],
-            'settings' => ['settings', 'employees.update'],
+            // Checkpoint 22: /settings now uses the real tenant.settings.view
+            // permission (previously employees.update as a stand-in) —
+            // enforced by an explicit controller check (same pattern as
+            // /dashboard's dashboard.view), not blanket middleware, but
+            // behaves identically for this test's purposes.
+            'settings' => ['settings', 'tenant.settings.view'],
         ];
     }
 

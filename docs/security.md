@@ -2685,6 +2685,176 @@ sensitive/technical value (leave `reason`, policy `content`, `ip_address`,
 - Frontend test tooling (Vitest + React Testing Library), if
   component-level testing becomes valuable.
 
+## Settings Foundation
+
+Replaces the Checkpoint 16 placeholder with real, permission-aware
+section cards and one fully functional section (Company Profile) — see
+[`architecture.md`](architecture.md#settings-foundation-checkpoint-22)
+for the "singleton endpoint, pre-provisioned permissions" design and
+[`api.md`](api.md#tenant) for the new endpoint reference.
+
+### The rule, restated for the third module in a row
+
+**`tenant.settings.view` grants reaching `/settings`. It grants nothing
+else.** Every section card is independently gated by its own,
+more-specific permission — `tenant.view` for Company Profile,
+`users.view`/`roles.view` for Users & Access, `document_categories.view`,
+`leave_types.view`, `audit.view` for Security & Audit. A user holding
+only `tenant.settings.view` reaches a landing page with **zero** section
+cards, not an error and not a fallback view of anything. This is
+checked the same two ways as `dashboard.view` (Checkpoint 21):
+
+1. **Explicit controller check** on the landing page
+   (`SettingsController::index()`) — not blanket middleware, because a
+   Platform Super Admin must still be able to open `/settings` (with a
+   safe static message), and `tenant.settings.view` is a tenant-scoped
+   permission they can never hold.
+2. **Ordinary `permission:{key}` middleware** on every sub-page
+   (`/settings/company`, `/settings/access`, etc.) — each one gated by
+   the permission closest to what it will eventually manage, not by
+   `tenant.settings.view` again (except `/settings/integrations`, which
+   has no dedicated permission yet — see "Sections with no natural
+   permission" below).
+
+### The Tenant API: singleton, name-only, blocked for Platform Super Admin
+
+`GET`/`PATCH /api/v1/tenant` take no route parameter — both actions
+always operate on `app(Tenant::class)`, never a request-supplied ID
+from the URL, body, or query string (Refinement 1). This isn't just a
+convention; it's the actual mechanism that makes tenant-switching
+through this endpoint structurally impossible, the same way `/me/employee`
+(Checkpoint 11) makes it impossible to request another user's employee
+record.
+
+`UpdateTenantRequest` defines a validation rule for exactly one field:
+`name` (Refinement 2). `subdomain`, `status`, `tenant_id`, `created_at`,
+`updated_at`, `deleted_at`, and any future billing/security/system-flag
+field are structurally absent — `FormRequest::validated()` only ever
+returns keys that have a rule, so a request body containing any of
+those is silently dropped before `TenantController::update()` ever sees
+them, never partially applied. Confirmed directly
+(`test_forbidden_fields_cannot_be_changed`): a `PATCH` sending `name`,
+`subdomain`, `status`, and even a `tenant_id` pointing at a *different*
+real tenant, all in the same request, changed only `name` — every other
+field, including the cross-tenant `tenant_id` attempt, was silently
+ignored. Confirmed live too: the same multi-field payload produced an
+unchanged `subdomain`/`status` in the response.
+
+**Platform Super Admin is blocked from `/api/v1/tenant` two ways**,
+identical to the Dashboard's pattern: `permission:tenant.view`/
+`tenant.update` middleware alone already returns `403` (a platform role
+can never be assigned a tenant-scoped permission), and
+`TenantController` additionally opens both `show()` and `update()` with
+`abort_if($user->is_platform_admin, 403, ...)` as defense in depth —
+`app(Tenant::class)` is never bound for a platform admin, so without
+this explicit guard the endpoint would throw a raw, unhandled 500
+instead of a clean `403` (confirmed:
+`test_platform_super_admin_is_blocked_from_tenant_api`).
+
+### Audit log on tenant update: safe metadata only (Refinement 3)
+
+A `tenant.updated` audit entry is written only when `name` actually
+changes (`$tenant->wasChanged('name')` — no-op saves don't create noise
+log entries, same discipline as every other module). `metadata`
+carries exactly `old_name`, `new_name`, `tenant_id`, `actor_user_id` —
+all safe, all already visible to anyone who could make this change in
+the first place. No secrets, no internal system configuration, nothing
+beyond what the checkpoint asked for. Confirmed directly
+(`test_tenant_update_writes_audit_log_with_safe_metadata`).
+
+### Sections with no natural permission get the coarsest safe fallback, not an invented one
+
+"Integrations" has no dedicated permission and no real data yet —
+rather than inventing an `integrations.view` key for a page that
+currently renders nothing, its route falls back to the same
+`tenant.settings.view` umbrella check the landing page itself uses.
+"Billing & Subscription" has no route at all — a static, unlinked card
+on the landing page only, since a placeholder route with zero content
+would be exactly the "broken link" the checkpoint's own instructions
+warned against. Neither of these choices exposes any data; they're
+purely about not manufacturing permission keys or routes ahead of a
+real need.
+
+### Role mapping: `tenant.settings.view` granted narrowly, `audit.view` closes a naming gap (Refinements 7/8)
+
+| Role | `tenant.settings.view` | `tenant.view`/`tenant.update` | Sections visible |
+|---|---|---|---|
+| Tenant Admin | yes (wildcard) | yes (wildcard) | All |
+| HR Manager | **yes** (new) | no | Document Categories, Leave Types |
+| HR Officer | **yes** (new) | no | Leave Types |
+| Auditor | **yes** (new) | no | Security & Audit |
+| Employee | no | no | None — cannot reach `/settings` at all |
+| Line Manager | no | no | None — cannot reach `/settings` at all |
+
+Employee and Line Manager are deliberately **not** granted
+`tenant.settings.view` — neither was mentioned in your suggested
+per-role behavior, and "Employee should not access Settings unless
+specifically granted" extends naturally to Line Manager by the same
+conservative default. Confirmed live: both get a clean `403` from
+`/settings`.
+
+**`audit.view` was granted to Auditor** — research for this checkpoint
+found the role held **no** audit permission at all despite its name (a
+pre-existing gap from whenever Auditor was first seeded, unrelated to
+this checkpoint's own changes). This is safe to close now because
+nothing currently *does* anything with `audit.view` beyond gating the
+"Security & Audit" placeholder card — audit logging itself remains
+write-only (no viewing endpoint exists yet, see "Audit Logging" above),
+so granting this permission exposes zero actual audit data this
+checkpoint.
+
+### What is not, and cannot be, tested by a JS runner
+
+Same posture as every prior module UI checkpoint — no Jest/Vitest
+configured. Verified via `tsc --noEmit`, `npm run build`, and a live
+HTTPS smoke test: section card visibility per role, the Company Profile
+edit form's inline editing toggle, and the empty-state rendering when a
+user holds `tenant.settings.view` but no section permissions at all.
+
+What *is* backend-tested: `TenantApiTest` (11 tests) covers the
+singleton endpoint's permission gating, forbidden-field rejection,
+Platform Super Admin block, tenant isolation, and audit logging.
+`SettingsUiTest` (9 tests) covers the landing page's permission gating,
+Platform Super Admin safe behavior, cross-tenant session-reuse
+blocking, `/settings/company`'s `tenant.view` requirement and IDs-only
+props, every placeholder route's permission gating in both directions,
+and that no secret/token/storage-path substring appears anywhere across
+every Settings page's shared props.
+
+### Current limitations
+
+- No full user management UI — `/settings/access` is a permission-gated
+  placeholder only.
+- No full RBAC (roles/permissions) management UI — same placeholder,
+  shared with Users & Access (see `docs/architecture.md` for why).
+- No document category or leave type management UI — both APIs already
+  exist (Checkpoints 9/12) but have no admin UI yet.
+- No real audit log viewing UI — `/settings/security` is a placeholder;
+  audit logging remains write-only.
+- No integrations, billing/subscription, or platform-wide tenant
+  management — none of these have any backend to build a UI on yet.
+- Only `name` is editable on the tenant profile — `subdomain`/`status`
+  changes would need a dedicated, more carefully-designed admin flow
+  (subdomain changes in particular touch DNS/routing assumptions
+  throughout the app).
+- No JS/TS unit test runner — see above.
+
+### Future
+
+- Full user management UI (invite, deactivate, assign roles), building
+  on the already-seeded `users.*` permissions.
+- Full RBAC management UI (create/edit roles, assign permissions),
+  building on the already-seeded `roles.*`/`permissions.*` permissions.
+- Document category and leave type admin UIs, reusing existing APIs.
+- A real audit log viewing UI, once a read endpoint exists.
+- Integration settings, billing/subscription management, and a
+  dedicated (carefully-scoped) subdomain/status change flow.
+- A genuine platform-level tenant management surface for Platform Super
+  Admin, architecturally separate from this tenant-scoped endpoint —
+  the `platform.tenants.*` permissions already exist, unused.
+- Frontend test tooling (Vitest + React Testing Library), if
+  component-level testing becomes valuable.
+
 ## Local Demo Credentials
 
 **Local development only — these are not real secrets and only work against your own local database.** Password comes from `SEED_USER_PASSWORD` in `.env` (not committed; `.env.example` has an empty placeholder).
@@ -2727,9 +2897,10 @@ other 17 roles per tenant exist as empty placeholders for future modules.
 - **Leave Management still has no notifications or calendar integration** — see [Leave Management](#leave-management) above.
 - **Line Manager can now approve/reject leave, but direct reports only** (Checkpoint 14) — indirect (skip-level) approval is a deliberate future policy decision, not built. See [Manager-Hierarchy-Scoped Leave Approval](#manager-hierarchy-scoped-leave-approval) above.
 - **No org chart, manager self-service dashboard, or performance/probation review usage of the manager hierarchy** — see [Manager Hierarchy](#manager-hierarchy) above for the full list.
-- **Employee Records, Leave Management, (employee-scoped) Document Repository, Policy Management, and the Dashboard all have real UIs now (Checkpoints 17/18/19/20/21); the top-level `/documents` route is still a permission-gated placeholder (no tenant-wide document centre yet — see [Document Repository UI](#document-repository-ui) above), and Settings remains a placeholder too** — see [Employee Records UI](#employee-records-ui), [Leave Management UI](#leave-management-ui), [Document Repository UI](#document-repository-ui), [Policy Management UI](#policy-management-ui), and [Dashboard Foundation](#dashboard-foundation) above.
+- **Employee Records, Leave Management, (employee-scoped) Document Repository, Policy Management, the Dashboard, and Settings all have real UIs now (Checkpoints 17/18/19/20/21/22); the top-level `/documents` route is still a permission-gated placeholder (no tenant-wide document centre yet — see [Document Repository UI](#document-repository-ui) above)** — see [Employee Records UI](#employee-records-ui), [Leave Management UI](#leave-management-ui), [Document Repository UI](#document-repository-ui), [Policy Management UI](#policy-management-ui), [Dashboard Foundation](#dashboard-foundation), and [Settings Foundation](#settings-foundation) above.
 - **Leave Management UI has no balance/leave-type admin UI, calendar view, or notification integration** — see [Leave Management UI](#leave-management-ui) above.
 - **Document Repository UI has no tenant-wide document centre, approval workflow UI, eSignature, document generation, or file preview** — see [Document Repository UI](#document-repository-ui) above.
 - **Policy Management UI has no campaign automation, reminders/escalations, dashboard/compliance reporting, template library, bulk/department-wide assignment, or admin-recorded-on-behalf-of acknowledgement UI** — see [Policy Management UI](#policy-management-ui) above.
 - **Dashboard has no charts, tenant-wide document cards, platform-level dashboard, or notifications** — see [Dashboard Foundation](#dashboard-foundation) above.
+- **Settings has no full user/RBAC management UI, document category or leave type admin UI, real audit log viewing, integrations, or billing/subscription management — only the tenant name is editable** — see [Settings Foundation](#settings-foundation) above.
 - **No JS/TS unit test runner configured** — frontend verification relies on `tsc --noEmit`, `vite build`, and backend feature tests asserting Inertia response shape/shared-prop safety.

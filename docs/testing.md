@@ -696,6 +696,57 @@ be able to tell "this assertion changed because the feature changed" from
 change site makes that distinguishable later. Same pattern already
 established in Checkpoint 16 when login/logout became content-negotiated.
 
+## Settings: splitting "who holds this permission" from "which named role gets it" (Checkpoint 22)
+
+Following the exact split established for the Dashboard (Checkpoint
+21): `SettingsUiTest`/`TenantApiTest` verify the *permission-key*
+behavior generically (throwaway roles built with `userWithPermissions()`,
+the same helper every UI test file in this project already uses) —
+does a `tenant.settings.view` holder reach `/settings`, does a
+`tenant.view` holder see Company Profile, is a `documents.view`-less
+user blocked. Which *named* seeded roles (Tenant Admin, HR Manager, HR
+Officer, Auditor, Employee, Line Manager) actually get
+`tenant.settings.view`/`audit.view` is a `RoleSeeder` mapping decision —
+verified instead by a live smoke test against the real seeded/created
+demo accounts, exactly like Checkpoint 21's Dashboard role-shaped
+responses. Neither layer substitutes for the other: the automated tests
+prove the *rule* is correct in isolation; the smoke test proves the
+*role mapping* actually matches the intended per-role behavior your
+plan specified. A checkpoint that only tested one of these could still
+ship a role/permission mismatch undetected.
+
+### A one-line permission-key fix in a pre-existing test, caught by the same first full-suite run every checkpoint relies on
+
+`DashboardAndFrontendSecurityTest::placeholderRouteProvider()` still
+listed `/settings` with `employees.update` (the Checkpoint 16 stand-in
+permission this checkpoint replaced with the real `tenant.settings.view`).
+Running the full suite immediately after implementing — not just the
+new test files in isolation — caught this as a single failing test
+(`test_all_placeholder_pages_are_backend_permission_gated` with data set
+`"settings"`) rather than a silent gap. Fixed by updating the permission
+key in that one data-provider row, with a comment explaining the
+Checkpoint 22 change was the cause (matching the same "explain why this
+assertion changed" discipline established in Checkpoint 21's own
+pre-existing-test updates) — this is the same category of fix, not a
+new pattern: any checkpoint that changes an existing route's permission
+should expect (and go looking for) exactly this kind of stale
+data-provider row elsewhere in the suite.
+
+### Testing that a singleton endpoint can't be tricked into cross-tenant writes via body fields
+
+`TenantApiTest::test_tenant_a_cannot_update_tenant_b_via_body_id` sends
+a `tenant_id` pointing at a *real, different* tenant's ID alongside a
+legitimate `name` change, then asserts **both** tenants' names
+independently — tenant A's changed, tenant B's didn't. This is a
+stronger check than simply asserting the response looks right: since
+`GET`/`PATCH /api/v1/tenant` take no route parameter at all, there's no
+`{tenant}` binding to attack the way `/employees/{employee}` tests do —
+the only conceivable attack surface left is a client trying to smuggle
+a different tenant's ID into the request *body*, so that's exactly what
+this test tries and confirms fails silently (the field is simply
+absent from `UpdateTenantRequest`'s rules, so it never reaches
+`$tenant->fill()` at all).
+
 ## Verifying against the real app, not just the test suite
 
 Because of the SQLite/Postgres split above, checkpoints in this project

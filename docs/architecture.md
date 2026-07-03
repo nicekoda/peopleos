@@ -922,6 +922,83 @@ page, by contrast, deliberately does *not* get blanket
 able to open the page (to see the safe "platform dashboard not
 available" message), just without it ever calling the tenant-scoped API.
 
+## Settings Foundation (Checkpoint 22)
+
+Reuses the exact "access, not data" two-layer design Checkpoint 21
+established for the Dashboard — see
+[`security.md`](security.md#settings-foundation) for the permission
+model and [`api.md`](api.md#tenant) for the new endpoint's shape.
+
+**A permission catalog pre-provisioned three checkpoints early.**
+`tenant.view`, `tenant.update`, `tenant.settings.view`, and
+`tenant.settings.update` were already seeded in `PermissionSeeder` —
+nobody remembers exactly when, but almost certainly in anticipation of
+this exact checkpoint, since nothing used any of them until now (only
+Tenant Admin held any of the four, via the blanket "all non-platform
+permissions" grant). This checkpoint is the first to actually wire them
+to a controller, a route, and deliberate role grants.
+
+**A singleton endpoint, modeled on `/me/*`, not on the generic
+`{resource}/{id}` shape every other module uses.** `GET`/`PATCH
+/api/v1/tenant` take no route parameter at all — both actions operate
+exclusively on `app(Tenant::class)`, the tenant `tenant.matches` already
+confirmed the caller belongs to. This is a deliberate structural choice,
+not an oversight: there is no legitimate reason for a tenant-scoped
+session to ever reference a *different* tenant's ID through this
+endpoint, so the shape itself makes tenant-switching impossible rather
+than relying on a check to catch it after the fact. Same reasoning as
+`MeController`'s `/me/employee` (Checkpoint 11) — "always your own,"
+structurally.
+
+**Two tenant permissions were flagged as a real gap and approved before
+building anything.** No `TenantController`, `TenantResource`, or route
+existed anywhere before this checkpoint — a genuine blocker for goal 4
+("basic tenant profile view/edit"), not a nice-to-have. Per your
+"stop and flag before deciding" instruction, this was surfaced and
+approved explicitly rather than built silently. The resulting endpoint
+is deliberately minimal: `UpdateTenantRequest` defines a validation rule
+for exactly one field, `name` — `subdomain`/`status`/`tenant_id`/
+`created_at`/`updated_at`/`deleted_at` are structurally absent from the
+rules, so a request body containing any of them simply has those keys
+dropped by `FormRequest::validated()` before the controller ever sees
+them, never partially applied. Confirmed live: a `PATCH` sending `name`,
+`subdomain`, and `status` together only changed `name` — the other two
+came back unchanged in the same response.
+
+**`tenant.settings.view` decouples "can see the Settings page" from
+"can see any particular section," exactly like `dashboard.view`.** The
+landing page (`SettingsController::index()`) checks
+`tenant.settings.view` explicitly in the controller — not blanket
+`permission:` middleware — for the identical Platform-Super-Admin reason
+as `/dashboard`: a platform role can never hold a tenant-scoped
+permission, but a platform admin must still be able to open the page
+(to see a safe static message). Every section card the frontend renders
+is then independently gated by its own, more specific permission
+(`tenant.view` for Company Profile, `users.view`/`roles.view` for
+Users & Access, `document_categories.view`, `leave_types.view`,
+`audit.view`) — holding `tenant.settings.view` and nothing else
+produces a landing page with zero section cards, not an error.
+
+**Sections with no natural permission get the coarsest safe fallback,
+not an invented one.** "Integrations" has no real data and no dedicated
+permission — rather than inventing an `integrations.view` key for a
+page that currently shows nothing, it falls back to the same
+`tenant.settings.view` umbrella check the landing page itself uses.
+"Billing & Subscription" goes one step further: no route exists for it
+at all, just a static, unlinked card on the landing page — inventing a
+placeholder route with no content and no specific permission would have
+been the "broken link" your instructions explicitly warned against.
+
+**"Users & Access" and "Roles & Permissions" share one destination
+page.** The checkpoint's own suggested optional-page list included
+`/settings/access` but not a separate `/settings/roles` — rather than
+inventing an unlisted route, both cards link to `/settings/access`,
+gated by `users.view` (currently held only by Tenant Admin and HR
+Manager, both of whom also hold `roles.view` via the same grants — so
+this doesn't currently under- or over-expose anything, but is worth
+revisiting if a future role is ever granted `roles.view` without
+`users.view`).
+
 ## Internal IDs vs. Public-Facing References
 
 Internal database IDs may remain bigint (see

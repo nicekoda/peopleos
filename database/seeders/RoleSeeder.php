@@ -80,6 +80,13 @@ class RoleSeeder extends Seeder
             // /dashboard page/endpoint itself — every card is still
             // independently gated by its own module permission below.
             'dashboard.view',
+            // Checkpoint 22: same "access, not data" pattern —
+            // tenant.settings.view only grants reaching /settings;
+            // HR Manager sees only the sections their existing
+            // permissions already gate (document_categories.view,
+            // leave_types.view below), not Company Profile (no
+            // tenant.view/tenant.update grant here).
+            'tenant.settings.view',
             'employees.view', 'employees.create', 'employees.update', 'employees.view_sensitive', 'employees.export',
             'documents.view', 'documents.upload', 'documents.download', 'documents.approve',
             // Checkpoint 19: read-only reference data needed to upload
@@ -144,6 +151,9 @@ class RoleSeeder extends Seeder
         // here (previously empty placeholders from Checkpoint 4).
         $this->grantByKeys($roles['HR Officer'], [
             'dashboard.view',
+            // Checkpoint 22: reach Settings, see the Leave Types section
+            // only (leave_types.view below) — not Company Profile.
+            'tenant.settings.view',
             'policies.view', 'policies.create', 'policies.update',
             'policies.assign', 'policies.view_acknowledgements',
             'leave_types.view', 'leave.view', 'leave.view_all', 'leave.approve', 'leave.reject',
@@ -162,6 +172,13 @@ class RoleSeeder extends Seeder
 
         $this->grantByKeys($roles['Auditor'], [
             'dashboard.view',
+            // Checkpoint 22: reach Settings, see the Security & Audit
+            // section (audit.view below). audit.view was previously
+            // never granted to any role despite Auditor's name — no
+            // audit-viewing feature exists yet for it to gate (that's
+            // still write-only, see docs/security.md), so this closes a
+            // naming/grant mismatch without exposing anything new.
+            'tenant.settings.view', 'audit.view',
             'policies.view', 'policies.view_acknowledgements',
             'leave.view', 'leave.view_all',
             'employees.view_team',

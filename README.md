@@ -186,6 +186,23 @@ tenant-wide count). Platform Super Admins never call the dashboard API
 at all — they see a plain, safe "platform dashboard not available yet"
 message instead. See `docs/security.md`.
 
+**Settings Foundation** (Checkpoint 22) — `/settings` now shows real,
+permission-aware section cards, replacing the Checkpoint 16 placeholder.
+A new `tenant.settings.view` permission only grants reaching the page —
+each section card is independently gated by its own permission
+(`tenant.view`, `users.view`, `document_categories.view`,
+`leave_types.view`, `audit.view`), same "access, not data" two-layer
+design as the Dashboard. `/settings/company` is the one fully real
+section: view/edit backed by a new singleton `GET`/`PATCH /api/v1/tenant`
+endpoint (no `{id}` — always the caller's own tenant), editing only
+`name`; `subdomain`/`status`/`tenant_id` and any future billing/security
+field can never be changed through it. Every other section
+(Users & Access, Document Categories, Leave Types, Security & Audit,
+Integrations) is a permission-gated "coming later" placeholder with no
+data fetched. Platform Super Admins get a safe static Settings page and
+are blocked from `/api/v1/tenant` with a clean `403`. See
+`docs/security.md`.
+
 See `docs/architecture.md`/`docs/security.md`/`docs/api.md` for the full
 design, what's shared with the frontend (and what never is), and the
 future module rollout plan.

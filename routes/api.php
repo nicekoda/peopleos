@@ -12,6 +12,7 @@ use App\Http\Controllers\Api\V1\LeaveRequestController;
 use App\Http\Controllers\Api\V1\LeaveTypeController;
 use App\Http\Controllers\Api\V1\MeController;
 use App\Http\Controllers\Api\V1\PolicyController;
+use App\Http\Controllers\Api\V1\TenantController;
 use Illuminate\Support\Facades\Route;
 
 /*
@@ -43,6 +44,15 @@ Route::middleware(['auth', 'tenant.matches'])->prefix('api/v1')->group(function 
     // blocks them from this endpoint; DashboardController::summary()
     // adds an explicit is_platform_admin check too, as defense in depth.
     Route::get('dashboard', [DashboardController::class, 'summary'])->middleware('permission:dashboard.view');
+
+    // Checkpoint 22 — singleton tenant-context endpoint, no {tenant}
+    // route parameter: both actions always operate on app(Tenant::class),
+    // never a request-supplied ID. tenant.view/tenant.update are
+    // tenant-scoped permissions a Platform Super Admin can never hold,
+    // so this middleware alone already blocks them; TenantController
+    // adds an explicit is_platform_admin check too, as defense in depth.
+    Route::get('tenant', [TenantController::class, 'show'])->middleware('permission:tenant.view');
+    Route::patch('tenant', [TenantController::class, 'update'])->middleware('permission:tenant.update');
 
     Route::get('employees', [EmployeeController::class, 'index'])->middleware('permission:employees.view');
     Route::post('employees', [EmployeeController::class, 'store'])->middleware('permission:employees.create');

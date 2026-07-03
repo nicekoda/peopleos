@@ -842,6 +842,242 @@ so, and narrower is the safer default until a real need is demonstrated.
 - **Re-linking after unlink requires a fresh HR/admin action** — no
   "pending re-link request" or self-service re-link exists.
 
+## Leave Management
+
+The first tenant-owned **workflow** module, not just CRUD-with-a-status-
+field — see [`api.md`](api.md#leave-management) for the endpoint
+reference and [`database.md`](database.md#leave_types) for the table
+design. Built directly on Checkpoint 11's User ↔ Employee Linking:
+leave request creation is self-service by construction, not by later
+retrofit.
+
+### Permission mapping (as seeded in `RoleSeeder`)
+
+| Role | Permissions |
+|---|---|
+| Tenant Admin | All (automatic — every current tenant permission) |
+| HR Manager | All leave permissions, per your explicit suggested mapping — `leave_types.*` + `leave.view`/`view_all`/`request`/`approve`/`reject`/`cancel` (includes `request`/`cancel` so an HR Manager who is also a linked employee can manage their own leave) |
+| HR Officer | `leave_types.view`, `leave.view`, `leave.view_all`, `leave.approve`, `leave.reject` |
+| Employee | `leave.view`, `leave.request`, `leave.cancel` — **no** `leave.view_all` |
+| Auditor | `leave.view`, `leave.view_all` |
+| Line Manager | **None** — see below |
+
+### Why `leave.view_all` is needed, not skippable
+
+Without it, there would be no way to distinguish "see only my own leave
+requests" from "see everyone's in the tenant" — `leave.view` alone gates
+whether the endpoints are reachable *at all*, and `leave.view_all`
+(checked inside the controller, not route middleware, since it changes
+*query scope* rather than *reachability*) determines whether that access
+is self-scoped or tenant-wide. Without this second permission, granting
+`leave.view` to the Employee role for self-service viewing would also
+have to either (a) let them see everyone's leave (wrong), or (b)
+hard-code "Employee role = own only" into the controller by role name
+rather than by permission (fragile, and inconsistent with every other
+permission check in the app being data-driven, not role-name-driven).
+`leave.view_all` avoids both.
+
+### Why Line Manager gets no leave permissions this checkpoint
+
+Your suggested mapping lists `leave.approve`/`leave.reject` for Line
+Manager "if manager approval is supported." It isn't, this checkpoint —
+`Employee.manager_employee_id` exists (Checkpoint 6) but nothing
+validates "is this approver actually this employee's manager."
+`LeaveRequestController::approve()`/`reject()` have no hierarchy scoping
+at all: any holder of `leave.approve`/`leave.reject` can act on *any*
+pending request in their tenant. Granting these to Line Manager under
+that condition would let any Line Manager approve any employee's leave
+company-wide — not scoped to their own reports, which is presumably the
+entire point of a "Line Manager" role existing separately from "HR
+Manager." This is the same category of decision as Checkpoint 10's
+Employee/`policies.acknowledge` withholding: a suggested grant that
+would create an unscoped blast radius without the feature that would
+make it safe. Line Manager stays an empty placeholder (like 15 other
+roles already are) until manager-hierarchy-scoped approval is built.
+
+### Employee self-service rules (enforced, not just documented)
+
+1. A linked employee can create a leave request **for themselves only**
+   — `StoreLeaveRequestRequest` has no `employee_id` field at all.
+   `employee_id` is always resolved server-side from
+   `$request->user()->employee`. A stray `employee_id` in the request
+   body is silently ignored, not honored and not rejected — consistent
+   with how `tenant_id`/`created_by` are handled everywhere else in this
+   app (fields the client cannot influence simply aren't validated
+   fields).
+2. A user with **no** linked employee cannot create a leave request at
+   all — `422` ("You have no linked employee record...").
+3. An employee can view, submit, and cancel **only their own** requests
+   — see the two-tier object-check design below.
+4. An employee can never approve or reject **any** request, including
+   their own — `leave.approve`/`leave.reject` are never granted to the
+   Employee role, and even if a user held them while also being linked
+   to the request's employee, `ensureNotOwnRequestForApprovalAction()`
+   blocks it explicitly (matters most for Tenant Admin/HR Manager users
+   who may also be linked employees themselves — see Refinement 4 below).
+
+### Two different object-level checks, given different HTTP status codes on purpose
+
+- **Visibility** (`show`/`index`): does the caller have *any* legitimate
+  path to know this resource exists — own request, or `leave.view_all`?
+  Failure → `404`. Same "don't reveal existence" posture used
+  throughout this app for cross-tenant/cross-parent access.
+- **Self-service action ownership** (`update`/`submit`/`cancel`): is the
+  caller specifically *this* request's owner, regardless of what else
+  they can see? Failure → `403`. An HR user with `leave.view_all` can
+  already see the resource via `show()`/`index()` — a `404` here would
+  be misleading (they already know it exists), so `403` ("you can see
+  it, you're just not allowed to act on it") is the more honest
+  response. This deliberately differs from the "hide existence" 404
+  convention used elsewhere, because here existence genuinely isn't
+  secret from that caller.
+
+### Cancel is strictly self-only — a deliberate scope limit, confirmed on refinement
+
+Even though the suggested role mapping gives Tenant Admin/HR Manager
+`leave.cancel` too, there is no "cancel on behalf of employee" capability
+built this checkpoint — `ensureOwnLeaveRequest()` requires the caller's
+own linked employee to match, with no `leave.view_all`-style exception.
+Unlike policy acknowledgement (which has `policies.assign` as an
+explicit "act on behalf of" permission), no such permission exists for
+leave cancellation in this checkpoint's catalog, and building one wasn't
+requested. An HR Manager holding `leave.cancel` today can cancel their
+*own* leave requests; cancelling someone else's on their behalf (e.g. an
+employee too unwell to self-cancel) is out of scope, documented as a
+limitation below.
+
+### Refinement 4 — self-approval is blocked independent of role
+
+`ensureNotOwnRequestForApprovalAction()` checks the acting user's own
+linked employee against the request's `employee_id` on every
+`approve()`/`reject()` call, regardless of what permission got them
+there. This specifically matters for Tenant Admin/HR Manager accounts
+that are *also* linked to an employee record — without this check, a
+dual-role Tenant Admin could approve their own leave request purely by
+virtue of holding `leave.approve` tenant-wide. Tested directly
+(`test_employee_cannot_approve_own_request`).
+
+### Status transitions — centrally enforced, not per-action
+
+`App\Enums\LeaveRequestStatus::canTransitionTo()` is the single source
+of truth:
+
+```
+draft   → pending, cancelled
+pending → approved, rejected, cancelled
+approved / rejected / cancelled → (terminal, nothing)
+```
+
+Every write action calls `ensureTransitionAllowed()` before mutating
+state — `409` (state conflict), not `422` (request validation failure),
+same distinction `PolicyController::acknowledge()` already makes for a
+superseded policy version. This is what makes "approved → pending",
+"rejected → approved", double-approval, etc. impossible regardless of
+which endpoint is called, rather than needing each action to
+independently reimplement the same guard.
+
+### `total_days` is always server-computed
+
+Calculated in the controller (`Carbon` diff, inclusive of both
+endpoints) before every `create()`/relevant `update()` — never trusted
+from request input even when present in the body. Confirmed directly:
+a request sending `total_days: 999` alongside real 3-day dates persists
+`total_days: 3`.
+
+### Refinement 3 — `cancelled_by` added for accountability
+
+Not in your original field list (`cancelled_at` only). Added a nullable
+`cancelled_by` FK, matching `approved_by`/`rejected_by`'s reasoning: a
+timestamp alone records *when* something happened, not *who* did it.
+Since cancel is strictly self-only this checkpoint, `cancelled_by` will
+currently always equal the request's own linked employee's user — but
+the column exists independently so a future "HR cancels on behalf of"
+capability doesn't need a schema change, and so the audit story is
+consistent with approve/reject rather than a visible asymmetry.
+
+### `reason` / `rejection_reason` are masked in audit log snapshots
+
+Both added to `AuditLogger`'s `SENSITIVE_KEY_PATTERNS` (`app/Services/
+Audit/AuditLogger.php`) — free-text leave reasons can carry medical or
+otherwise personal information (a real example tested directly:
+"Undergoing chemotherapy treatment" is masked to `***MASKED***` in
+`audit_logs.new_values`, confirmed via both a feature test and a live
+`psql` check against the real database). The underlying `leave_requests`
+row still stores the real value (needed for the actual workflow) — only
+the audit trail's duplicate copy is masked, consistent with the
+"defense in depth, not just caller discipline" principle already
+documented for `password`/`bank`/`personal_email`/etc.
+
+### Audit events
+
+`leave_type.created`, `leave_type.updated`, `leave_type.deleted`,
+`leave_request.created`, `leave_request.updated` (PATCH, only when
+something actually changed), `leave_request.submitted`,
+`leave_request.approved`, `leave_request.rejected`,
+`leave_request.cancelled`. Every `leave_request.*` event includes
+`employee_id`/`leave_type_id` in `metadata` (not masked — these are
+identifiers, not personal content) alongside the usual
+`tenant_id`/`actor_user_id`/`auditable_type`/`auditable_id`.
+
+### Leave type deletion is safe by construction
+
+Same reasoning as `DocumentCategoryController::destroy()`
+(Checkpoint 9): the `DELETE` endpoint only ever soft-deletes — there is
+no hard-delete code path in this API at all. A leave type referenced by
+existing leave requests is always safe to "delete": `leave_requests.
+leave_type_id`'s `RESTRICT` foreign key means the *database* would
+refuse a hard delete anyway, but it's moot since the only delete path is
+a soft delete, which doesn't touch the FK at all. `StoreLeaveRequestRequest`/
+`UpdateLeaveRequestRequest` already exclude inactive/soft-deleted leave
+types from new/edited requests (the same `Rule::exists()` + explicit
+`where('status', 'active')->whereNull('deleted_at')` fix required by
+your quality-review instruction — see `database.md`).
+
+### Current limitations
+
+- **`total_days` is inclusive calendar days, including weekends and
+  public holidays** — not business days. No business-day calculation,
+  weekend exclusion, or country/location holiday calendar exists yet.
+  Half-day leave is not supported (`total_days` is a whole number).
+- **No leave balances or accrual engine** — `leave_types.
+  max_days_per_year` is stored but not enforced anywhere; a leave
+  request exceeding it is not rejected. Deliberately deferred per your
+  instruction — building a placeholder here would risk exactly the
+  "half-finished, nobody enforcing it" trap already avoided for
+  temporary permissions (see RBAC section above).
+- **No manager-hierarchy-scoped approval** — see "Why Line Manager gets
+  no leave permissions" above. `approve()`/`reject()` are tenant-wide
+  for any `leave.approve`/`leave.reject` holder, not scoped to direct
+  reports.
+- **`leave.cancel` has no "on behalf of" capability** — cancellation is
+  strictly self-only this checkpoint, even for roles holding
+  `leave.cancel` tenant-wide in principle. See above.
+- **`leave_types.requires_document`/`requires_approval` are stored but
+  not enforced** — no document-attachment capability exists on leave
+  requests, and every request goes through the same approval flow
+  regardless of `requires_approval`'s value.
+- **No notifications, email alerts, or calendar integration** —
+  explicitly out of scope this checkpoint.
+- **No frontend UI** — API-only, same as every module so far.
+
+### Future
+
+- Leave balances / accrual engine (`max_days_per_year` already reserved
+  on `leave_types`).
+- Business-day calculation, weekend exclusion, country/location holiday
+  calendars, half-day leave — see "Current limitations" above.
+- Manager-hierarchy-scoped approval (`Employee.manager_employee_id`
+  already exists; needs an actual "is this approver this employee's
+  manager" check before Line Manager can safely receive
+  `leave.approve`/`leave.reject`).
+- Notifications / email approval / reminders for pending requests.
+- Calendar integration.
+- Document attachment requirement enforcement (`requires_document` is
+  stored, unused).
+- A `leave.cancel`-on-behalf-of capability (mirroring `policies.assign`
+  for policy acknowledgement), if a real need for HR-initiated
+  cancellation emerges.
+
 ## Local Demo Credentials
 
 **Local development only — these are not real secrets and only work against your own local database.** Password comes from `SEED_USER_PASSWORD` in `.env` (not committed; `.env.example` has an empty placeholder).
@@ -879,4 +1115,5 @@ other 17 roles per tenant exist as empty placeholders for future modules.
 - No acknowledgement export/report endpoint — `policies.export_acknowledgements` permission is seeded but unused.
 - `employee_document_id` on `policy_versions` requires an existing employee-owned document — see "Policy Management" above for the schema mismatch this carries.
 - **No self-linking / invitation-token flow, no employee profile self-update, no manager-approval linking workflow** — see [User ↔ Employee Linking](#user--employee-linking) above for the full list of what Checkpoint 11 deliberately left out.
-- No Leave Management, Payroll, Performance, or Onboarding modules yet — User ↔ Employee Linking is foundational for these (an employee's own leave requests, for example, will need the same "resolve from the caller's own link" pattern used for policy acknowledgement), but none of them are built yet.
+- No Payroll, Performance, or Onboarding modules yet.
+- **Leave Management has no balances/accrual, no manager-hierarchy-scoped approval, no notifications, no calendar integration** — see [Leave Management](#leave-management) above for the full list.

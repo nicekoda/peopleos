@@ -352,6 +352,90 @@ no route parameter, no permission middleware required.
 // 404 { "message": "..." }
 ```
 
+## Leave Management
+
+| Method | Path | Permission | Notes |
+|---|---|---|---|
+| `GET` | `/api/v1/leave-types` | `leave_types.view` | Paginated |
+| `POST` | `/api/v1/leave-types` | `leave_types.create` | |
+| `GET` | `/api/v1/leave-types/{leaveType}` | `leave_types.view` | 404 if the type belongs to another tenant |
+| `PATCH` | `/api/v1/leave-types/{leaveType}` | `leave_types.update` | Partial update |
+| `DELETE` | `/api/v1/leave-types/{leaveType}` | `leave_types.delete` | Soft delete only |
+| `GET` | `/api/v1/leave-requests` | `leave.view` | Own requests only, unless the caller also holds `leave.view_all` (then tenant-wide) |
+| `POST` | `/api/v1/leave-requests` | `leave.request` | Self-service only — see below |
+| `GET` | `/api/v1/leave-requests/{leaveRequest}` | `leave.view` | 404 if not the caller's own request and the caller lacks `leave.view_all` |
+| `PATCH` | `/api/v1/leave-requests/{leaveRequest}` | `leave.request` | Owner-only, **draft status only** — `409` otherwise |
+| `POST` | `/api/v1/leave-requests/{leaveRequest}/submit` | `leave.request` | Owner-only; `draft → pending` |
+| `POST` | `/api/v1/leave-requests/{leaveRequest}/approve` | `leave.approve` | Cannot approve own request (`403`); `pending → approved` |
+| `POST` | `/api/v1/leave-requests/{leaveRequest}/reject` | `leave.reject` | Cannot reject own request (`403`); body: `{"rejection_reason": "..."}` (required); `pending → rejected` |
+| `POST` | `/api/v1/leave-requests/{leaveRequest}/cancel` | `leave.cancel` | Owner-only, no exceptions (not even for `leave.view_all` holders — see `docs/security.md`); `draft/pending → cancelled` |
+
+**`tenant_id` is never accepted as request input**, same rule as every
+other module.
+
+### Self-service leave requests — no `employee_id` field exists
+
+`POST /leave-requests` has no `employee_id` field at all. The employee is
+always resolved from the caller's own linked employee
+(`$request->user()->employee`, see `docs/security.md#user--employee-linking`).
+A caller with no linked employee gets `422`. A stray `employee_id` in
+the request body is silently ignored, not honored — the request is
+still created for the caller's own employee.
+
+### `total_days` is always computed server-side
+
+Never trusted from request input, even if present in the body —
+`Carbon`-computed inclusive calendar days between `start_date` and
+`end_date`. See `docs/security.md` for the "calendar days, not business
+days" limitation.
+
+### Status transitions
+
+```
+draft   → pending, cancelled
+pending → approved, rejected, cancelled
+approved / rejected / cancelled → (terminal)
+```
+
+Any other transition (`approved → pending`, `rejected → approved`, a
+second `approve` call, etc.) returns `409`.
+
+### Response shapes
+
+```json
+// POST /leave-requests
+{
+  "data": {
+    "id": "01h...",
+    "employee_id": "01h...",
+    "leave_type_id": "01h...",
+    "start_date": "2027-03-01",
+    "end_date": "2027-03-03",
+    "total_days": 3,
+    "reason": "Family trip",
+    "status": "draft",
+    "submitted_at": null,
+    "approved_by": null,
+    "rejected_by": null,
+    "cancelled_by": null,
+    "created_at": "2026-07-03T00:00:00+00:00"
+  }
+}
+
+// POST /leave-requests/{id}/reject (missing rejection_reason)
+// 422 { "message": "...", "errors": { "rejection_reason": ["..."] } }
+```
+
+### Validation rules
+
+| Field | Rules |
+|---|---|
+| `leave_type_id` | required, must exist, belong to the current tenant, and be `status: active` and not soft-deleted |
+| `start_date` | required, valid date |
+| `end_date` | required, valid date, ≥ `start_date` |
+| `reason` | nullable, max 2000 characters |
+| `rejection_reason` (reject only) | required, max 2000 characters |
+
 ## Current limitations
 
 - No export endpoint (`employees.export` permission is seeded but unused — explicitly out of scope this checkpoint).
@@ -359,6 +443,7 @@ no route parameter, no permission middleware required.
 - No `departments`/`locations`/`positions` CRUD endpoints — they exist only to support employee FK validation (unlike `document_categories`, which now has one).
 - No self-linking / invitation-token flow — linking a user to an employee is HR/admin-only, see `docs/security.md`.
 - No employee profile self-update endpoint — `/me/employee` is read-only.
+- No leave balances/accrual, no manager-hierarchy-scoped approval, no notifications, no calendar integration — see `docs/security.md#leave-management`.
 - No policy campaign automation, reminders, or escalations.
 - No acknowledgement export/report endpoint (`policies.export_acknowledgements` seeded, unused).
 - No document approval workflow endpoint — `documents.approve` permission and `approved_by`/`approved_at` columns are reserved, unused.
@@ -378,7 +463,9 @@ no route parameter, no permission middleware required.
 - Candidate documents (`applies_to` includes `candidate`) — no candidate/recruitment module exists yet to attach documents to.
 - Self-linking / invitation-token flow for User ↔ Employee linking (currently HR/admin-only).
 - Employee profile self-update — `/me/employee` is read-only; no endpoint lets an employee edit their own record.
-- Manager approval workflows — not built for linking or anything else yet; will matter once Leave Management exists.
+- Manager-hierarchy-scoped approval — `Employee.manager_employee_id` exists, but nothing validates "is this approver this employee's manager" yet; Line Manager deliberately holds no leave permissions until this exists (see `docs/security.md`).
+- Leave balances / accrual engine, business-day calculation, weekend/holiday exclusion, half-day leave — `leave_types.max_days_per_year` already reserved.
+- Leave notifications, email approval, and calendar integration.
 - Policy campaigns (bulk-assign a policy to a whole department/location, scheduled/recurring re-acknowledgement cycles).
 - Email/notification reminders and escalations for overdue acknowledgements.
 - Auto-reassignment when a policy is republished (currently: stale assignments are correctly rejected at acknowledge time, but nothing proactively creates a new pending row).

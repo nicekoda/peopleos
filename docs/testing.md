@@ -186,6 +186,52 @@ unauthorized) plus the "neither is available" edge case — collapsing
 them into fewer tests risks missing exactly the branch that matters for
 security.
 
+## Testing a multi-actor workflow with asymmetric trust (Checkpoint 12)
+
+`LeaveRequestApiTest` is the first test file covering a resource where
+*different actors are trusted for different state transitions on the
+same record* (employee: draft/submit/cancel; HR: approve/reject; nobody:
+self-approve). A few patterns worth reusing for the next workflow module:
+
+- **Test the two object-level checks as genuinely different scenarios,
+  not the same check twice.** `test_employee_cannot_view_another_employees_leave_request`
+  (visibility, expects `404`) and `test_patch_is_owner_only`
+  (self-service action ownership, expects `403`) look similar but assert
+  different status codes on purpose — see `docs/security.md`'s "Two
+  different object-level checks" note. Don't collapse them into one
+  test; the status code difference *is* the thing being verified.
+- **Test self-approval blocking with a user who holds the approval
+  permission**, not a user who lacks it — `test_employee_cannot_approve_own_request`
+  grants the acting user `leave.approve` explicitly, then asserts `403`
+  anyway, because the failure being tested is the ownership check, not
+  the permission gate (a user without `leave.approve` would be blocked
+  by route middleware regardless, which wouldn't prove the ownership
+  check does anything).
+- **Test status-transition rejection using a request already in the
+  target-adjacent terminal state**, not an arbitrary invalid one —
+  `test_invalid_status_transition_is_rejected` creates an already-
+  `approved` request and calls `approve()` again, which is the most
+  realistic way this bug would actually manifest (a double-click, a
+  retried request), not a synthetic "draft → rejected" case that's less
+  likely to happen in practice.
+- **Test server-computed values by deliberately sending a wrong one**,
+  not by omitting the field — `test_total_days_is_calculated_server_side`
+  sends `total_days: 999` alongside real 3-day dates and asserts the
+  *ignored* value never reaches the database, which is a stronger claim
+  than "the field works when omitted."
+
+## Testing that a sensitive field is masked, not just present in the DB
+
+`test_rejection_reason_is_not_stored_raw_in_audit_log` and
+`test_leave_reason_is_not_stored_raw_in_audit_log` don't just check that
+an audit log row was created — they read the actual `new_values` JSON
+column back and assert the specific field equals `***MASKED***`, plus a
+`assertStringNotContainsString($secretText, json_encode($auditLog->new_values))`
+belt-and-braces check. `assertDatabaseHas('audit_logs', [...])` alone
+(the pattern used for "was an event logged at all" tests elsewhere)
+would not catch a masking regression — a row can exist with the raw
+secret value still inside it and that assertion would still pass.
+
 ## Verifying against the real app, not just the test suite
 
 Because of the SQLite/Postgres split above, checkpoints in this project

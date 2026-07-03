@@ -39,6 +39,11 @@ class AuditLogger
         'tax_id',
         'personal_email',
         'phone',
+        // Added in Checkpoint 12: leave_requests.reason/rejection_reason
+        // are free-text fields that can carry medical/personal
+        // information (e.g. "chemotherapy appointment"). Matches both —
+        // substring match, same as bank/account_number above.
+        'reason',
     ];
 
     private const MASK = '***MASKED***';

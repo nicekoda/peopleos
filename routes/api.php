@@ -4,6 +4,8 @@ use App\Http\Controllers\Api\V1\DocumentCategoryController;
 use App\Http\Controllers\Api\V1\EmployeeController;
 use App\Http\Controllers\Api\V1\EmployeeDocumentController;
 use App\Http\Controllers\Api\V1\EmployeeUserLinkController;
+use App\Http\Controllers\Api\V1\LeaveRequestController;
+use App\Http\Controllers\Api\V1\LeaveTypeController;
 use App\Http\Controllers\Api\V1\MeController;
 use App\Http\Controllers\Api\V1\PolicyController;
 use Illuminate\Support\Facades\Route;
@@ -69,4 +71,25 @@ Route::middleware(['auth', 'tenant.matches'])->prefix('api/v1')->group(function 
     // No specific permission — inherently self-scoped (the caller's own
     // link, resolved server-side), same as a "whoami" endpoint.
     Route::get('me/employee', [MeController::class, 'employee']);
+
+    Route::get('leave-types', [LeaveTypeController::class, 'index'])->middleware('permission:leave_types.view');
+    Route::post('leave-types', [LeaveTypeController::class, 'store'])->middleware('permission:leave_types.create');
+    Route::get('leave-types/{leaveType}', [LeaveTypeController::class, 'show'])->middleware('permission:leave_types.view');
+    Route::patch('leave-types/{leaveType}', [LeaveTypeController::class, 'update'])->middleware('permission:leave_types.update');
+    Route::delete('leave-types/{leaveType}', [LeaveTypeController::class, 'destroy'])->middleware('permission:leave_types.delete');
+
+    // leave.view gates every leave-requests route uniformly; index()/
+    // show() additionally scope by ownership vs. leave.view_all inside
+    // the controller (not expressible as route middleware — see
+    // docs/security.md). store()/update()/submit()/cancel() are further
+    // gated by leave.request/leave.cancel plus an object-level ownership
+    // check.
+    Route::get('leave-requests', [LeaveRequestController::class, 'index'])->middleware('permission:leave.view');
+    Route::post('leave-requests', [LeaveRequestController::class, 'store'])->middleware('permission:leave.request');
+    Route::get('leave-requests/{leaveRequest}', [LeaveRequestController::class, 'show'])->middleware('permission:leave.view');
+    Route::patch('leave-requests/{leaveRequest}', [LeaveRequestController::class, 'update'])->middleware('permission:leave.request');
+    Route::post('leave-requests/{leaveRequest}/submit', [LeaveRequestController::class, 'submit'])->middleware('permission:leave.request');
+    Route::post('leave-requests/{leaveRequest}/approve', [LeaveRequestController::class, 'approve'])->middleware('permission:leave.approve');
+    Route::post('leave-requests/{leaveRequest}/reject', [LeaveRequestController::class, 'reject'])->middleware('permission:leave.reject');
+    Route::post('leave-requests/{leaveRequest}/cancel', [LeaveRequestController::class, 'cancel'])->middleware('permission:leave.cancel');
 });

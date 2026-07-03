@@ -78,7 +78,13 @@ class RoleSeeder extends Seeder
         $this->grantByKeys($roles['HR Manager'], [
             'employees.view', 'employees.create', 'employees.update', 'employees.view_sensitive', 'employees.export',
             'documents.view', 'documents.upload', 'documents.download', 'documents.approve',
-            'leave.view', 'leave.approve', 'leave.reject',
+            // All leave permissions, per your explicit suggested mapping
+            // ("HR Manager: all leave permissions") — includes
+            // leave.request/leave.cancel so an HR Manager who is also a
+            // linked employee can manage their own leave, not just
+            // others'.
+            'leave_types.view', 'leave_types.create', 'leave_types.update', 'leave_types.delete',
+            'leave.view', 'leave.view_all', 'leave.request', 'leave.approve', 'leave.reject', 'leave.cancel',
             'announcements.view', 'announcements.create', 'announcements.publish',
             'users.view',
             // Not archive/export_acknowledgements — reserved for Tenant
@@ -95,7 +101,11 @@ class RoleSeeder extends Seeder
         $this->grantByKeys($roles['Employee'], [
             'employees.view',
             'documents.view', 'documents.upload',
-            'leave.view', 'leave.request',
+            // No leave.view_all — an Employee only ever sees their own
+            // leave requests (LeaveRequestController::index() scopes to
+            // the caller's own linked employee without it). See
+            // docs/security.md.
+            'leave.view', 'leave.request', 'leave.cancel',
             'announcements.view',
             // Now safe as of Checkpoint 11: acknowledge() resolves the
             // target employee from the caller's own verified link by
@@ -111,13 +121,28 @@ class RoleSeeder extends Seeder
         $this->grantByKeys($roles['HR Officer'], [
             'policies.view', 'policies.create', 'policies.update',
             'policies.assign', 'policies.view_acknowledgements',
+            'leave_types.view', 'leave.view', 'leave.view_all', 'leave.approve', 'leave.reject',
         ]);
 
         $this->grantByKeys($roles['Auditor'], [
             'policies.view', 'policies.view_acknowledgements',
+            'leave.view', 'leave.view_all',
         ]);
 
-        // Remaining roles (HR Director, Line Manager, etc.) are
+        // Line Manager deliberately receives NO leave permissions this
+        // checkpoint, despite your suggested mapping listing
+        // leave.approve/leave.reject "if manager approval is supported."
+        // It isn't — there's no manager-hierarchy enforcement yet
+        // (Employee.manager_employee_id exists but nothing validates
+        // "is this approver actually this employee's manager"). Granting
+        // leave.approve/leave.reject now would let any Line Manager
+        // approve any employee's leave tenant-wide, since this
+        // checkpoint's approve()/reject() have no hierarchy scoping —
+        // the same category of insecure shortcut avoided for Employee/
+        // policies.acknowledge in Checkpoint 10. Revisit once manager-
+        // hierarchy-scoped approval is built. See docs/security.md.
+
+        // Remaining roles (HR Director, Department Head, etc.) are
         // intentionally left as placeholders with no permissions
         // attached yet.
     }

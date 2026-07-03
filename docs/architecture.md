@@ -296,6 +296,68 @@ before reaching for `tinker` to seed one-off tenant-owned records: set
 `$model->tenant_id` directly (bypassing mass assignment), then `fill()`
 the rest.
 
+## Leave Management
+
+The first real tenant-owned **workflow** module — every prior business
+module (Employee Records, Documents, Policies) was CRUD-plus-lifecycle;
+this one has a genuine multi-actor state machine (`draft → pending →
+approved/rejected/cancelled`) with different actors trusted for
+different transitions. See [`api.md`](api.md) and
+[`security.md`](security.md#leave-management) for the full design.
+
+**Built directly on the User ↔ Employee Linking foundation.** Leave
+request creation is self-service *only* because `$request->user()->
+employee` (Checkpoint 11) exists to resolve "which employee is this" —
+without it, this checkpoint would have faced the exact same "no
+verified identity link" problem Policy Management hit in Checkpoint 10,
+and would have had to make the same "admin-recorded only" compromise.
+Instead, self-service was safe to build from day one here.
+
+**Status transitions are centralized, not re-implemented per action.**
+`App\Enums\LeaveRequestStatus::canTransitionTo()` is the single source
+of truth for which transitions are legal; every write action
+(`submit`/`approve`/`reject`/`cancel`) routes through
+`LeaveRequestController::ensureTransitionAllowed()` rather than each
+action independently checking "is the current status X." This is
+deliberate — a workflow with 5 states and asymmetric actor trust
+(employee-only vs. HR-only transitions) is exactly the kind of code
+where re-implementing the same check five slightly-differently-worded
+times would eventually drift.
+
+**Two distinct kinds of object-level check, given different HTTP status
+codes on purpose.** `LeaveRequestController` distinguishes:
+
+- **Visibility** (`show`/`index`) — does the caller have *any*
+  legitimate path to know this resource exists? Own request, or
+  `leave.view_all`. Failure → `404`, the same "don't reveal existence"
+  posture used everywhere else in this app.
+- **Self-service action ownership** (`update`/`submit`/`cancel`) — is
+  the caller specifically *this* request's owner? An HR user with
+  `leave.view_all` can already see the resource (so hiding it via `404`
+  would be misleading, not a real IDOR protection) but still isn't
+  allowed to submit/edit/cancel someone else's draft. Failure → `403`.
+
+Worth remembering as a general pattern: "can this caller know this
+resource exists" and "can this caller perform this specific action on
+it" are different questions, and conflating their status codes either
+over-reveals (403 when 404 was warranted) or under-informs (404 to
+someone who legitimately already knows the resource is there).
+
+**A permission granted broadly was deliberately withheld from one role
+this checkpoint, for the same reason as Checkpoint 10's Employee/
+`policies.acknowledge` decision.** Line Manager's suggested mapping
+included `leave.approve`/`leave.reject`, but this checkpoint has no
+manager-hierarchy enforcement (nothing checks "is this approver actually
+this employee's manager") — granting it now would let any Line Manager
+approve any employee's leave tenant-wide. Left as an empty placeholder,
+same as 15 other roles already are, until manager-hierarchy-scoped
+approval is built. This is the same shape of decision as Checkpoint 10's,
+now the second time this exact pattern ("a suggested grant would create
+an unscoped blast radius without a feature that doesn't exist yet") has
+come up — worth watching for a third time as a signal that "permission
+implies role" mappings in future spec documents should be treated as
+starting points, not given.
+
 ## Internal IDs vs. Public-Facing References
 
 Internal database IDs may remain bigint (see

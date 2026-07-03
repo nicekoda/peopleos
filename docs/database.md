@@ -18,7 +18,12 @@ PostgreSQL. Migrations only — no manual schema changes.
   reference code — not `/employees/482`.
 - **Tenant-owned tables** must include `tenant_id` (ULID, references
   `tenants.id`) and use the `BelongsToTenant` trait — see
-  [`architecture.md`](architecture.md).
+  [`architecture.md`](architecture.md). `leave_types`/`leave_requests`
+  (Checkpoint 12) follow this convention with ULID primary keys, same as
+  every other tenant-owned business table (`employees`, `policies`,
+  `document_categories`, ...) — the bigint exception remains scoped to
+  `users`/`roles`/`permissions`/their pivots only, unchanged since the
+  Checkpoint 4 decision. No new inconsistency introduced.
 - **Soft deletes** on tables where records should be recoverable /
   audit-relevant rather than hard-deleted (e.g. `tenants`).
 - **`created_by` / `updated_by`**: not yet added anywhere, including
@@ -329,6 +334,53 @@ present in any FormRequest's validated rules), only from the controller's
 own explicit assignment, which is the actual security boundary that
 matters.
 
+### `leave_types`
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | ulid, primary key | |
+| `tenant_id` | ulid, FK → `tenants.id` `RESTRICT` | |
+| `name` / `slug` | string | Both unique per tenant |
+| `description` | text, nullable | |
+| `is_paid` | boolean, default `true` | |
+| `requires_approval` | boolean, default `true` | Stored but not yet enforced — every leave request goes through the same `draft → pending → approved/rejected` flow regardless of this flag this checkpoint; see `security.md` for the limitation |
+| `requires_document` | boolean, default `false` | Stored but not enforced — no document-attachment capability exists on leave requests yet |
+| `max_days_per_year` | unsigned smallint, nullable | Stored but not enforced — no leave-balance/accrual engine exists yet, see `security.md` "Future" |
+| `status` | string, default `active` | `App\Enums\LeaveTypeStatus`: `active` \| `inactive` |
+| `created_by` / `updated_by` | bigint, nullable, FK → `users.id` `SET NULL` | |
+| `deleted_at` | timestamp, nullable | Soft delete — the `DELETE` endpoint soft-deletes only, same pattern as `document_categories` |
+
+### `leave_requests`
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | ulid, primary key | |
+| `tenant_id` | ulid, FK → `tenants.id` `RESTRICT` | |
+| `employee_id` | ulid, FK → `employees.id` `CASCADE` | Never accepted from request input — always resolved from the caller's own linked employee, see `security.md` |
+| `leave_type_id` | ulid, FK → `leave_types.id` `RESTRICT` | `RESTRICT`, not `SET NULL`, because the column is required (not nullable) — matches the `tenant_id` FK convention for a required lookup reference |
+| `start_date` / `end_date` | date, required | `end_date` must be ≥ `start_date` |
+| `total_days` | unsigned smallint | **Always server-computed** (inclusive calendar days between `start_date`/`end_date`) — never trusted from request input, even if present in the body |
+| `reason` | text, nullable | Free text — masked in audit log old/new-value snapshots, see `security.md` |
+| `status` | string, default `draft` | `App\Enums\LeaveRequestStatus`: `draft` \| `pending` \| `approved` \| `rejected` \| `cancelled` |
+| `submitted_at` | timestamp, nullable | Set by the `submit` action |
+| `approved_by` / `approved_at` | bigint/timestamp, nullable, FK `SET NULL` | Set by the `approve` action |
+| `rejected_by` / `rejected_at` | bigint/timestamp, nullable, FK `SET NULL` | Set by the `reject` action |
+| `rejection_reason` | text, nullable | Required by `RejectLeaveRequestRequest` when rejecting; masked in audit logs same as `reason` |
+| `cancelled_by` / `cancelled_at` | bigint/timestamp, nullable, FK `SET NULL` | **Not in the original field list** — `cancelled_by` added per explicit refinement request for accountability, same reasoning as `approved_by`/`rejected_by` (a timestamp alone records *when*, not *who*) |
+| `created_by` / `updated_by` | bigint, nullable, FK → `users.id` `SET NULL` | |
+| `deleted_at` | timestamp, nullable | Soft delete |
+
+Indexed on (`tenant_id`,`employee_id`) and (`tenant_id`,`status`) — the
+two dimensions every query filters on (own-employee scoping, and
+pending-requests-for-approval listing).
+
+**`total_days` calculation — inclusive calendar days, not business
+days.** Weekends and public holidays are counted. Chosen as the simplest
+correct default for this checkpoint; no business-day calculation,
+weekend exclusion, or holiday calendar exists. See `security.md` for the
+full list of deferred improvements (business-day calculation, half-day
+leave, leave balances/accrual).
+
 ### Checkpoint 11 `$fillable` review — one more real gap found
 
 The audit above was scoped to models with a `created_by`/`updated_by`
@@ -340,3 +392,24 @@ explicitly. See [`architecture.md`](architecture.md#required-fillable-quality-re
 and [`security.md`](security.md#user--employee-linking) for the full
 writeup. `Department`, `Location`, `Position`, `EmployeeDocument` were
 also checked and found correct.
+
+### Checkpoint 12 quality review — no new issues, same fixes applied proactively
+
+Per your explicit instruction (given the `$fillable`/`Rule::exists()`/
+`Model::create()` bug history above), `LeaveType` and `LeaveRequest`
+were built with all three known fixes applied from the start rather than
+found after the fact:
+
+1. `leave_type_id` validation in `StoreLeaveRequestRequest`/
+   `UpdateLeaveRequestRequest` uses `Rule::exists()` with an explicit
+   `where('status', 'active')->whereNull('deleted_at')` closure — the
+   same fix already required for `document_category_id` in Checkpoint 9.
+2. `status`, `is_paid`, `requires_approval`, `requires_document` on
+   `LeaveType`, and `status`/`total_days` on `LeaveRequest`, are
+   explicitly defaulted in the controller before `create()` — the same
+   fix already required for `DocumentCategory` in Checkpoint 9.
+3. `created_by`/`updated_by`/`employee_id`/`total_days` and every
+   approval/rejection/cancellation field are included in both models'
+   `$fillable` from the start, with the same "trusted controller
+   assignment, never accepted from request input" comment pattern used
+   everywhere else.

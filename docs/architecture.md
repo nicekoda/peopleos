@@ -603,6 +603,56 @@ page yet — deliberately left off the sidebar rather than linking
 somewhere that 404s. Add them to `Sidebar.tsx`'s `links` array once
 their pages exist, not before.
 
+## Employee Records UI (Checkpoint 17)
+
+The first real module screen — `/employees`, `/employees/create`,
+`/employees/{id}`, `/employees/{id}/edit`. See
+[`security.md`](security.md#employee-records-ui) and
+[`api.md`](api.md#frontend-routes-inertia) for the security model and
+route reference.
+
+**Client-side data fetching, not server-rendered props — a deliberate
+architecture decision, not a default.** `EmployeeUiController`'s four
+methods each do nothing but `Inertia::render('Employees/...')`; `show()`/
+`edit()` pass only `employeeId` (a route-model-bound, already tenant-
+scoped string). The actual employee record is fetched by the React page
+component itself, via `resources/js/lib/api.ts`, hitting the exact same
+`/api/v1/employees` endpoints already built and tested in Checkpoints
+6/7/11/13. This was the right call here specifically because a fully-
+built, independently-tested JSON API already existed — reusing it
+directly avoids duplicating data-loading/masking logic into a second
+(web-controller) code path that could drift from the API's own
+behavior. Future module UIs (Leave, Documents, Policies) should default
+to this same pattern: thin web routes, `lib/api.ts` for data, unless a
+specific reason argues otherwise.
+
+**`lib/api.ts` is the second "single place a concern lives" pattern
+introduced on the frontend** (the first was `HandleInertiaRequests::share()`
+in Checkpoint 16) — one axios instance, one `toApiError()` normalizer,
+reused by every page that talks to the API, rather than each page
+rolling its own fetch/error-handling logic. Mirrors `AuditLogger`/
+`ManagerHierarchyService`/`LeaveBalanceService` on the backend: when
+something needs to behave consistently everywhere, give it exactly one
+implementation.
+
+**Form payloads are built from an explicit allowlist type
+(`EmployeeFormPayload`), never by spreading the fetched `Employee`
+object.** This is a second layer behind the backend's own field
+exclusions (`Store`/`UpdateEmployeeRequest` already reject `tenant_id`/
+`manager_employee_id`/user-link fields structurally) — belt and braces,
+not a replacement for the backend check. Confirmed directly during the
+live smoke test: a payload that deliberately included `tenant_id` and
+`manager_employee_id` was still accepted (`201`), with both fields
+silently ignored and `manager_employee_id` staying `null` — the
+backend, not the frontend's honest form, is what actually enforced this.
+
+**`department_id`/`location_id`/`position_id` are omitted from every
+form and display, not just the create form** — there's no listing
+endpoint for departments/locations/positions yet (unchanged limitation
+since Checkpoint 6), so there's no safe way to let a user pick a real
+value. A future checkpoint adding that listing API is a prerequisite
+for surfacing these fields in the UI at all.
+
 ## Internal IDs vs. Public-Facing References
 
 Internal database IDs may remain bigint (see

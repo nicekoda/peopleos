@@ -444,6 +444,49 @@ explicitly does *not* match a second, unrelated tenant created in the
 same test — a test that only checked "the tenant field is present"
 would pass even if it were leaking the wrong tenant's data.
 
+## Testing a client-side-fetching Inertia page: only the ID crosses the server/client boundary (Checkpoint 17)
+
+`EmployeeUiController::show()`/`edit()` pass only `employeeId` as an
+Inertia prop — the actual employee record arrives via a separate,
+client-side call to `/api/v1/employees/{id}`. This has a direct testing
+consequence: **there is no new sensitive-field-leak surface to test at
+the Inertia-props layer for these pages**, since no employee data ever
+flows through them. `EmployeeUiTest::test_show_page_props_contain_only_employee_id_not_employee_data`
+confirms this structurally — it asserts the page's props contain
+exactly `employeeId` (beyond the standard shared `auth`/`tenant`/
+`errors`) and that a known sensitive value never appears anywhere in
+the serialized props — but the actual masking logic being correct is
+still fully the responsibility of (and already covered by)
+`EmployeeApiTest` from Checkpoints 6/7, since that's the endpoint that
+actually decides what the frontend will render. Don't re-test masking
+logic at the web-route layer just because a new page exists — test that
+the *new* thing (the page passes only an ID) is true, and trust the
+existing API test suite for everything downstream of that ID.
+
+## What a JS-runner-free frontend checkpoint can and cannot claim to test (Checkpoint 17)
+
+With no Jest/Vitest configured, a module UI checkpoint's "tests
+required" list splits cleanly into two categories — say so explicitly,
+don't blur them:
+
+- **Backend-testable** (permission gating per route, guest redirects,
+  tenant isolation via route-model-binding, the exact prop shape passed
+  to each page): ordinary Laravel feature tests, `assertInertia()`,
+  `$response->viewData('page')`. `EmployeeUiTest` covers all of this for
+  the Employee Records UI.
+- **Not backend-testable** (does the Create button actually not render
+  for a user without the permission, does a `422` actually populate the
+  right input's error text, does the delete confirmation dialog appear):
+  these require a real browser/JS test runner, which doesn't exist yet.
+  Verified instead via `tsc --noEmit` (the component compiles against
+  its prop/state types correctly), `npm run build` (the whole app
+  bundles without error), and a live HTTPS smoke test exercising the
+  actual flow end-to-end (login → list → create → detail → edit →
+  delete, plus a forbidden-field payload and a cross-tenant session
+  request) — documented as smoke-test verification, not claimed as
+  automated test coverage. If a future checkpoint adds Vitest + React
+  Testing Library, these are exactly the cases to backfill first.
+
 ## Verifying against the real app, not just the test suite
 
 Because of the SQLite/Postgres split above, checkpoints in this project

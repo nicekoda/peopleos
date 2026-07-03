@@ -127,10 +127,20 @@ resources/js/
   app.tsx              — Inertia entry point
   Pages/               — one component per Inertia::render(...) call
   Layouts/AppLayout.tsx — sidebar + topbar shell for authenticated pages
-  Components/          — reusable UI primitives (Button, Card, PermissionGate, ...)
+  Components/          — reusable UI primitives (Button, Card, PermissionGate, FormField, ...)
   hooks/useCan.ts       — permission-aware UI helper (UI-only, not security)
+  lib/api.ts            — shared axios client + error normalizer for talking to /api/v1
   types/index.d.ts      — shared Inertia page props (mirrors HandleInertiaRequests::share())
+  types/employee.ts      — Employee/EmployeeFormPayload types (mirrors EmployeeResource)
 ```
+
+**Employee Records UI** (Checkpoint 17) is the first real module screen
+— `/employees`, `/employees/create`, `/employees/{id}`,
+`/employees/{id}/edit`. It fetches its data **client-side** from the
+existing `/api/v1/employees` endpoints via `resources/js/lib/api.ts`,
+not via server-rendered Inertia props — see `docs/architecture.md` for
+why, and reuse this same pattern (`api.ts` + `toApiError()`) for any
+future module UI rather than inventing a new one per module.
 
 See `docs/architecture.md`/`docs/security.md`/`docs/api.md` for the full
 design, what's shared with the frontend (and what never is), and the

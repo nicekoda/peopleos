@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\DashboardController;
+use App\Http\Controllers\EmployeeUiController;
 use Illuminate\Support\Facades\Route;
 use Inertia\Inertia;
 
@@ -25,8 +26,20 @@ Route::get('/', function () {
 Route::middleware(['auth', 'tenant.matches'])->group(function () {
     Route::get('dashboard', [DashboardController::class, 'index'])->name('dashboard');
 
-    Route::get('employees', fn () => Inertia::render('Employees/Index'))
+    // Employee Records UI (Checkpoint 17) — thin page routes; the actual
+    // employee data is fetched client-side from /api/v1/employees, never
+    // passed through as an Inertia prop. 'employees/create' must be
+    // registered before 'employees/{employee}' so Laravel doesn't treat
+    // "create" as an {employee} route parameter.
+    Route::get('employees', [EmployeeUiController::class, 'index'])
         ->middleware('permission:employees.view')->name('employees.index');
+    Route::get('employees/create', [EmployeeUiController::class, 'create'])
+        ->middleware('permission:employees.create')->name('employees.create');
+    Route::get('employees/{employee}', [EmployeeUiController::class, 'show'])
+        ->middleware('permission:employees.view')->name('employees.show');
+    Route::get('employees/{employee}/edit', [EmployeeUiController::class, 'edit'])
+        ->middleware('permission:employees.update')->name('employees.edit');
+
     Route::get('leave', fn () => Inertia::render('Leave/Index'))
         ->middleware('permission:leave.view')->name('leave.index');
     Route::get('documents', fn () => Inertia::render('Documents/Index'))

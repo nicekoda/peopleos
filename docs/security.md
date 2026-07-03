@@ -1829,6 +1829,136 @@ frontend page route (`/employees`, `/leave`, `/documents`, `/policies`,
   component-level testing becomes valuable beyond the current
   backend-response-shape verification.
 
+## Employee Records UI
+
+The first real module screen built on the Checkpoint 16 frontend
+foundation — see [`architecture.md`](architecture.md#employee-records-ui-checkpoint-17)
+for the client-side-fetching design and [`api.md`](api.md#frontend-routes-inertia)
+for the route reference.
+
+### The rule restated, because it matters most here
+
+Every one of the 4 web routes (`/employees`, `/employees/create`,
+`/employees/{id}`, `/employees/{id}/edit`) carries the exact same
+`permission:{key}` middleware its corresponding `/api/v1/employees`
+action already requires. `PermissionGate`/`useCan()` only ever decide
+what a React component *renders* (a Create button, an Edit link, a
+Delete action, which microcopy to show for a masked field) — they never
+decide what a request is *allowed to do*. A user who bypasses the UI
+entirely (a direct URL, a modified request, a browser devtools console)
+hits the identical backend checks a legitimate UI interaction would.
+Confirmed directly in the live smoke test: a user without
+`employees.create`/`employees.update` gets `403` from
+`/employees/create`/`/employees/{id}/edit` regardless of what the
+sidebar shows them.
+
+### Sensitive fields: rendered honestly, never worked around (Refinement 5)
+
+`personal_email`/`phone` come back `null` from `/api/v1/employees/{id}`
+both when genuinely empty and when the viewer lacks
+`employees.view_sensitive` (`EmployeeResource`'s existing masking logic,
+unchanged since Checkpoint 6) — the frontend cannot and does not try to
+distinguish these from the value alone. `Show.tsx` uses the viewer's own
+`employees.view_sensitive` entry in the already-shared permission list
+purely to choose *microcopy* for an already-`null` value: "Not visible"
+(lacks the permission) vs. "Not provided" (holds it, genuinely empty).
+This is cosmetic, not a security decision — the real value was already
+decided server-side before this component ever received the response.
+No client-side code anywhere attempts a second request, a different
+endpoint, or any other workaround to obtain a masked value.
+
+### Payload allowlisting (Refinement 3) — belt and braces, not the real backstop
+
+Create/Edit forms build their `POST`/`PATCH` payload from
+`EmployeeFormPayload` field-by-field, never by spreading a broader
+object. This is a second, independent layer behind the backend's own
+structural field exclusions (`manager_employee_id`/`user_id`/
+`tenant_id`/`created_by`/`updated_by` were already unconditionally
+rejected by `Store`/`UpdateEmployeeRequest` since Checkpoints 11/13) —
+useful because it means the *form itself* can never accidentally submit
+a forbidden field, but the backend remains what actually enforces the
+rule. Tested live: a payload deliberately including `tenant_id` and
+`manager_employee_id` was still accepted (`201`), both fields silently
+dropped, `manager_employee_id` staying `null`.
+
+### Delete is safe by construction (Refinement 4)
+
+The list page's delete action requires `employees.delete` (UI-gated),
+confirms via `window.confirm()`, calls `DELETE /api/v1/employees/{id}`,
+and only removes the row from the visible list *after* the backend
+confirms success (a full refetch, never an optimistic removal
+beforehand) — matching the backend's own guarantee (unchanged since
+Checkpoint 6) that this endpoint only ever soft-deletes. A `403`/`404`
+from the delete call surfaces as the same safe inline error banner used
+elsewhere, never a raw response body.
+
+### `lib/api.ts` — the shared error-handling contract
+
+| Backend response | Frontend behavior |
+|---|---|
+| `401` | Full-page redirect to `/login` (`redirectIfUnauthenticated()`) — no useful in-page state exists once the session is gone |
+| `403` | Safe generic message: "You don't have permission to do this." |
+| `404` | Safe generic message: "Not found." |
+| `422` | Field-level errors mapped onto the form; a general "Please fix the errors below." banner |
+| anything else | Generic "Something went wrong. Please try again." — never the raw response body or a stack trace |
+
+### Web route tenant isolation for `show`/`edit` (Refinement 1)
+
+`{employee}` route-model-binding is already scoped by `BelongsToTenant`'s
+global scope — a cross-tenant ID never resolves to a model at all, so
+Laravel throws `ModelNotFoundException` (a plain `404`) before
+`EmployeeUiController::show()`/`edit()` ever runs. Both methods
+additionally call `ensureBelongsToCurrentTenant()` as defense in depth,
+the same "don't rely solely on the global scope" principle every API
+controller in this app already follows — matters here specifically
+because these methods never forward employee *data* onward, only the
+ID, so there's nothing to leak even in the hypothetical case this check
+were bypassed. Confirmed directly: a live cross-tenant session request
+to `/employees/{other-tenant-employee-id}` returns `404` (the same
+pre-existing status-code nuance documented in Checkpoint 13 — route-
+model-binding's tenant scope resolves before `tenant.matches` would
+otherwise return `403`).
+
+### What is not, and cannot be, tested by a JS runner (Refinement 7)
+
+No Jest/Vitest is configured (unchanged since Checkpoint 16). The
+following are verified through `tsc --noEmit`, `npm run build`, and a
+live HTTPS smoke test — **not** automated unit tests, and this is
+stated explicitly rather than implied:
+
+- Create/Edit/Delete button visibility based on `useCan()`.
+- Client-side rendering of `422` field errors onto form inputs.
+- The `403`/`404`/generic error banners actually appearing in the DOM.
+- The delete confirmation dialog (`window.confirm()`) itself.
+
+What *is* backend-tested (`EmployeeUiTest`): permission-gating on all 4
+routes (`403`/`200`), guest redirects, cross-tenant `404` on `show`/
+`edit`, the correct `employeeId` prop, and that shared Inertia props for
+these pages carry only the ID — never employee data (so there's no new
+sensitive-field-leak surface via Inertia to test; the existing
+`EmployeeApiTest` suite already covers the actual masking logic these
+pages render).
+
+### Current limitations
+
+- No department/location/position pickers — no listing API exists yet
+  for those lookup tables (see `architecture.md`).
+- No manager assignment or user-linking UI — both have dedicated backend
+  endpoints (Checkpoints 11/13) but no frontend yet; the generic
+  edit form deliberately never loads or submits either.
+- No employee documents UI.
+- No bulk actions, import/export, or advanced search/filtering beyond
+  whatever `/api/v1/employees` already supports.
+- No JS/TS unit test runner — see above.
+
+### Future
+
+- Manager assignment UI, reusing `PATCH`/`DELETE /employees/{id}/manager`.
+- User-linking UI, reusing `POST`/`DELETE /employees/{id}/link-user`/`unlink-user`.
+- Employee documents UI, reusing the existing document upload/download/list endpoints.
+- Department/location/position pickers, once a listing API exists.
+- Frontend test tooling (Vitest + React Testing Library), if component-level testing becomes valuable.
+
 ## Local Demo Credentials
 
 **Local development only — these are not real secrets and only work against your own local database.** Password comes from `SEED_USER_PASSWORD` in `.env` (not committed; `.env.example` has an empty placeholder).
@@ -1871,5 +2001,5 @@ other 17 roles per tenant exist as empty placeholders for future modules.
 - **Leave Management still has no notifications or calendar integration** — see [Leave Management](#leave-management) above.
 - **Line Manager can now approve/reject leave, but direct reports only** (Checkpoint 14) — indirect (skip-level) approval is a deliberate future policy decision, not built. See [Manager-Hierarchy-Scoped Leave Approval](#manager-hierarchy-scoped-leave-approval) above.
 - **No org chart, manager self-service dashboard, or performance/probation review usage of the manager hierarchy** — see [Manager Hierarchy](#manager-hierarchy) above for the full list.
-- **No real module UI yet** — the frontend foundation (Checkpoint 16) has only a dashboard and permission-gated placeholders for Employees/Leave/Documents/Policies/Settings. See [Frontend Security Model](#frontend-security-model) above.
+- **Employee Records has a real UI now (Checkpoint 17); Leave/Documents/Policies/Settings are still permission-gated placeholders** — see [Employee Records UI](#employee-records-ui) above.
 - **No JS/TS unit test runner configured** — frontend verification relies on `tsc --noEmit`, `vite build`, and backend feature tests asserting Inertia response shape/shared-prop safety.

@@ -220,7 +220,10 @@ served through the `web` middleware group, session-based auth same as
 | `POST` | `/login` | `guest` | Content-negotiated — JSON for `Accept: application/json`, redirect otherwise. See `docs/security.md` |
 | `POST` | `/logout` | `auth` | Same content negotiation |
 | `GET` | `/dashboard` | `auth`, `tenant.matches` | Explicit active-user/active-tenant check (no `permission:` middleware exists to gate it otherwise) |
-| `GET` | `/employees` | `auth`, `tenant.matches`, `permission:employees.view` | Placeholder (`EmptyState`) |
+| `GET` | `/employees` | `auth`, `tenant.matches`, `permission:employees.view` | Real UI (Checkpoint 17) — list, fetched client-side from `/api/v1/employees` |
+| `GET` | `/employees/create` | `auth`, `tenant.matches`, `permission:employees.create` | Create form |
+| `GET` | `/employees/{employee}` | `auth`, `tenant.matches`, `permission:employees.view` | Detail — passes only `employeeId` as a prop, never employee data (see `docs/architecture.md`) |
+| `GET` | `/employees/{employee}/edit` | `auth`, `tenant.matches`, `permission:employees.update` | Edit form |
 | `GET` | `/leave` | `auth`, `tenant.matches`, `permission:leave.view` | Placeholder |
 | `GET` | `/documents` | `auth`, `tenant.matches`, `permission:documents.view` | Placeholder |
 | `GET` | `/policies` | `auth`, `tenant.matches`, `permission:policies.view` | Placeholder |
@@ -684,7 +687,9 @@ second `approve` call, etc.) returns `409`.
 - Leave balance accrual engine, carry-forward automation, half-day leave, business-day calculation, weekend/holiday exclusion — leave balances themselves now exist (Checkpoint 15), see `docs/security.md#leave-balances-foundation` for what's still missing.
 - Manager team-balance view/dashboard — `ManagerHierarchyService` could support this, no endpoint exists yet.
 - Leave notifications, email approval, and calendar integration.
-- Real Employee/Leave/Document/Policy module UI — `/employees`, `/leave`, `/documents`, `/policies`, `/settings` are permission-gated placeholders (Checkpoint 16), not functional screens yet.
+- Real Leave/Document/Policy module UI — `/leave`, `/documents`, `/policies` are still permission-gated placeholders; Employees got a real UI in Checkpoint 17, reusing these same `/api/v1/employees` endpoints client-side (see `docs/architecture.md`).
+- No department/location/position pickers in the Employee UI — no listing endpoint exists yet for those lookup tables.
+- No manager-assignment or user-linking UI — `PATCH`/`DELETE /employees/{id}/manager` and `/link-user`/`/unlink-user` are unchanged, fully functional API endpoints (Checkpoints 11/13) with no frontend yet.
 - Manager/Reports/Audit nav groups and pages, once they exist.
 - Frontend test tooling (Vitest + React Testing Library), if component-level testing becomes valuable.
 - Policy campaigns (bulk-assign a policy to a whole department/location, scheduled/recurring re-acknowledgement cycles).

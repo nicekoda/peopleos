@@ -523,6 +523,59 @@ test proves the UI doesn't accidentally create a path around it (e.g. a
 stale cached button, a client-side scope guess that turns out wrong in
 the *permissive* direction).
 
+## Document Repository UI: a second object-level check needs its own dedicated test (Checkpoint 19)
+
+`EmployeeDocumentUiTest` mirrors `EmployeeUiTest`/`LeaveUiTest` for the
+usual set (guest redirects, permission gating, cross-tenant `404`, the
+IDs-only prop assertion) — but this checkpoint's routes are nested two
+levels deep (`/employees/{employee}/documents/{document}`), which
+introduces a failure mode the single-model routes don't have:
+`test_same_tenant_wrong_employee_document_returns_404` creates two
+employees in the *same* tenant, uploads a document for employee B, and
+asserts that requesting it through employee A's route 404s. This is
+deliberately a separate test from the cross-tenant case
+(`test_cross_tenant_document_id_returns_404`) — a route-model-binding
+scoped correctly to the tenant would happily resolve `{document}` here
+(it *is* a valid document in this tenant); only the explicit
+`ensureDocumentBelongsToEmployee()` ownership check catches it. Any
+future checkpoint that nests a route two levels under two different
+parent models should write this exact test shape rather than assuming
+tenant isolation alone covers it.
+
+### A pre-existing permission gap needed fixture verification, not just a role-seeder diff (Refinement 1)
+
+Granting `document_categories.view` to HR Manager/Employee in
+`RoleSeeder` is a seed-data change, not exercised by
+`EmployeeDocumentUiTest` (which builds its own throwaway roles/permissions
+per test, the same pattern every UI test file in this project uses —
+see `userWithPermissions()` helpers). The actual effect of the seeder
+change was confirmed two different ways: a `tinker` script asserting
+`hasPermission('document_categories.view')` on the real seeded
+`hr.manager@uesl.peopleos.test`/`employee@uesl.peopleos.test` accounts
+before the live smoke test, and the smoke test itself successfully
+calling `GET /api/v1/document-categories` as HR Manager (`200`, where it
+would have `403`'d before this checkpoint). Worth remembering: a
+role-seeder change needs its effect verified against the actual seeded
+demo accounts, since the throwaway-role test pattern everywhere else in
+this project doesn't touch `RoleSeeder` at all and wouldn't catch a
+regression there.
+
+### The live smoke test surfaced a role-mapping fact worth knowing before writing the next fixture
+
+The first delete-step attempt in this checkpoint's live smoke test used
+`hr.manager@uesl.peopleos.test` and got a `403` — not a bug, but a
+reminder that HR Manager was never granted `documents.delete`
+(`RoleSeeder`, Checkpoint 8: HR Manager holds `documents.view`/`upload`/
+`download`/`approve`, not `delete`; only Tenant Admin does). The smoke
+test was corrected to use `admin@uesl.peopleos.test` for the delete
+step, which then succeeded (`200`) and the subsequent `GET` on the
+deleted document correctly returned `404` on both the API and the web
+detail-page route. Worth checking a role's actual seeded permission set
+directly (`hasPermission()` in `tinker`, or just re-reading
+`RoleSeeder`) before assuming a demo account holds a given permission —
+the "HR Manager: all document permissions" assumption would have been
+wrong here.
+
 ## Verifying against the real app, not just the test suite
 
 Because of the SQLite/Postgres split above, checkpoints in this project

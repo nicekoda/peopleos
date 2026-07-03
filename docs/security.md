@@ -2119,6 +2119,191 @@ the serialized props.
 - Frontend test tooling (Vitest + React Testing Library), if
   component-level testing becomes valuable.
 
+## Document Repository UI
+
+The third real module screen, built on the same Checkpoint 16
+foundation — see
+[`architecture.md`](architecture.md#document-repository-ui-checkpoint-19)
+for the employee-scoped design rationale and
+[`api.md`](api.md#frontend-routes-inertia) for the route reference.
+
+### The rule restated a third time, because it's the whole security model
+
+`/employees/{employee}/documents` and `/employees/{employee}/documents/{document}`
+require `permission:documents.view`; `/employees/{employee}/documents/upload`
+requires `permission:documents.upload` — identical to their `/api/v1`
+counterparts. `PermissionGate`/`useCan()` only ever decide whether
+Upload/Download/Delete *render*. Every backend check from Checkpoint 8
+(`ensureEmployeeBelongsToCurrentTenant()`, `ensureDocumentBelongsToEmployee()`,
+sensitive-document exclusion, private-disk storage, `documents.delete`)
+is completely unchanged and remains the sole authority. Confirmed
+directly in the live smoke test: an HR Manager's Delete button (which
+the frontend correctly never renders, since HR Manager doesn't hold
+`documents.delete` — see the Role mapping table under
+[Employee Records](#employee-records) — only Tenant Admin does) was also
+independently rejected (`403`) when the underlying API call was issued
+directly, confirming the UI's hidden button and the backend's real
+enforcement agree, rather than one silently relying on the other.
+
+### A pre-existing permission gap, closed narrowly (the plan's Refinement 1)
+
+`GET /api/v1/document-categories` requires `document_categories.view` —
+seeded, before this checkpoint, only to Tenant Admin. HR Manager and
+Employee (the only two roles holding `documents.upload`) would have hit
+a `403` fetching the very category list their own upload form depends
+on. Fixed in `RoleSeeder` by granting **only** `document_categories.view`
+to both roles — explicitly **not** `document_categories.create`/
+`update`/`delete`, which remain Tenant-Admin-only. This is a narrow,
+additive, read-only grant: seeing what categories exist (needed to
+upload correctly — sensitivity indicator, expiry-date requirement) is a
+materially lower trust level than being able to create, rename, or
+retire a category tenant-wide. Confirmed directly in the live smoke
+test: HR Manager's `GET /api/v1/document-categories` call, which would
+have `403`'d before this checkpoint, now returns `200`.
+
+### Category dropdown filtering and its safe-failure default (Refinement 2)
+
+The upload form's category dropdown shows only `status: active`
+categories, preferring `applies_to: employee` ones; if none of those
+exist, it falls back to any active category rather than leaving the
+dropdown confusingly empty. If the category fetch itself fails (e.g. a
+future role holds `documents.upload` without `document_categories.view`),
+the upload form is replaced entirely by a blocking error message — it
+does **not** silently fall back to letting the user upload an
+uncategorised document, per your explicit instruction not to choose that
+fallback silently. This matters because the sensitivity-indicator and
+expiry-date-requirement checks below both depend on the category list
+having loaded successfully; proceeding without it would silently skip
+those safeguards rather than surfacing that they're unavailable.
+
+### Expiry-date and sensitivity indicators are cosmetic, not authoritative (Refinements 3/4)
+
+If the selected category has `requires_expiry_date: true`, the expiry
+date input becomes client-side `required` and submission is blocked
+client-side without one — purely a UX nicety; `StoreEmployeeDocumentRequest::
+withValidator()` (Checkpoint 8, unchanged) independently rejects a
+missing expiry date for such a category regardless of what the client
+did or didn't check. If the selected category has `is_sensitive: true`,
+an inline warning ("This document category is marked as sensitive.
+Access will be restricted.") is shown — again cosmetic; the actual
+restriction (`documents.view_sensitive`-gated exclusion from listings,
+Checkpoint 8) happens entirely server-side, driven by the category's
+real `is_sensitive` value, not by anything the browser decided to
+display.
+
+### Download: a new helper, because the JSON error contract doesn't apply to binary responses (Refinement 5)
+
+`lib/download.ts`'s `downloadEmployeeDocument()` calls the existing
+authenticated download endpoint through `api` (the same
+`withCredentials` axios instance every other request uses) with
+`responseType: 'blob'`, creates an object URL only after a genuine `2xx`
+response, triggers the download via a temporary anchor element, and
+revokes the object URL immediately after. Deliberately **not** a plain
+`window.location = downloadUrl` navigation or a raw `<a href="...">` to
+the API — two reasons: (1) that would bypass `toApiError()`'s handling
+entirely, so a `403`/`404` response would either fail silently or (2)
+worse, some browsers would happily save the raw JSON error body to disk
+as if it were the requested file, named after the document. The helper
+re-parses a failed blob response's body as text/JSON before handing it
+to `toApiError()` for exactly this reason — a `Blob` isn't something
+`toApiError()` can read `.message`/`.errors` off directly. Confirmed
+live: a `403` download attempt (a user holding `documents.view` but not
+`documents.download`) surfaced the normal safe generic message, not a
+downloaded error-body file.
+
+### Delete/archive: same safe pattern as Employee Records and Leave (Refinement 6)
+
+Requires `documents.delete` (UI-gated), confirms via `window.confirm()`,
+calls the existing `DELETE` endpoint, and only navigates away/refetches
+*after* the backend confirms success — never an optimistic removal
+beforehand. A `403`/`404` from the delete call surfaces as the same safe
+inline error banner used elsewhere. Confirmed live: after a successful
+delete, both the API `show` endpoint and the web detail page correctly
+return `404` (the document is gone via `SoftDeletes`' global scope), not
+some stale cached state.
+
+### Object-level checks: the same-tenant-wrong-employee case, tested explicitly (Refinement 7)
+
+`EmployeeDocumentUiController::show()` performs the same two-layer check
+`EmployeeDocumentController::show()` already does at the API layer
+(Checkpoint 8): `ensureEmployeeBelongsToCurrentTenant()` *and*
+`ensureDocumentBelongsToEmployee()`. The second check catches a
+genuinely different failure mode than tenant isolation — a `document_id`
+that's entirely valid *for the current tenant*, just for a *different
+employee* than the one in the URL. Both the route-model-binding's
+`BelongsToTenant` scope and a plain cross-tenant check would let this
+through; only the explicit ownership check catches it. Tested directly
+(`EmployeeDocumentUiTest::test_same_tenant_wrong_employee_document_returns_404`)
+and confirmed live.
+
+### No document data or private storage paths ever reach the frontend as props
+
+`EmployeeDocumentUiController`'s three methods pass only `employeeId`
+and (on `show()`) `documentId` — never document data, and certainly
+never `storage_path`/`storage_disk`/`stored_filename` (which
+`EmployeeDocumentResource` never returns to *any* consumer in the first
+place, unchanged since Checkpoint 8). Tested directly
+(`EmployeeDocumentUiTest::test_show_page_props_contain_only_ids_not_document_data`
+seeds a document with a deliberately identifiable title and a
+recognisable fake storage path, then asserts neither string appears
+anywhere in the serialized page props).
+
+### No file preview (Refinement 9)
+
+The detail page shows metadata only — title, description, category,
+original filename, MIME type, file size, status, dates, sensitivity
+indicator, and Download/Delete actions. No inline preview, no embedded
+viewer, no thumbnail generation — deliberately out of scope this
+checkpoint, per your explicit "do not build" instruction.
+
+### What is not, and cannot be, tested by a JS runner
+
+Same posture as Checkpoints 17/18 — no Jest/Vitest configured. Verified
+via `tsc --noEmit`, `npm run build`, and a live HTTPS smoke test, not
+automated unit tests:
+
+- Upload/Download/Delete button visibility based on `useCan()`.
+- The category dropdown's active/employee-scoped filtering and its
+  sensitivity/expiry-requirement UI hints.
+- The file picker and client-side expiry-date-required validation.
+- The actual blob-download-and-save browser behavior.
+- The delete confirmation dialog (`window.confirm()`).
+
+What *is* backend-tested (`EmployeeDocumentUiTest`, 12 tests): guest
+redirects, permission gating on all 3 routes, cross-tenant `404` on
+employee ID, cross-tenant `404` on document ID, the same-tenant-wrong-
+employee `404` (Refinement 7), and that shared Inertia props for both
+the list and detail pages carry only IDs.
+
+### Current limitations
+
+- No tenant-wide document centre — see
+  [`architecture.md`](architecture.md#document-repository-ui-checkpoint-19)
+  for why (no tenant-wide listing endpoint exists yet to build one on).
+- No document approval workflow UI — `documents.approve` permission and
+  `approved_by`/`approved_at` fields remain reserved, unused (same
+  backend limitation as Checkpoint 8).
+- No eSignature, document generation, OCR, malware-scanning UI, or
+  cloud/S3 UI — matches the backend, which has none of these either.
+- No bulk upload, folder management, or advanced search/filtering.
+- No file preview — see Refinement 9 above.
+- No policy-document integration UI — Policy Management's own document
+  linking (`policy_versions.employee_document_id`, Checkpoint 10) has no
+  frontend yet.
+- No JS/TS unit test runner — see above.
+
+### Future
+
+- A tenant-wide document centre, once a tenant-wide listing endpoint
+  exists to build it on safely.
+- Policy document integration UI, reusing `policy_versions.employee_document_id`.
+- A document approval workflow UI, reusing the reserved `documents.approve`
+  permission and `approved_by`/`approved_at` fields.
+- eSignature and document generation — explicitly out of scope until a
+  real backend capability exists for either.
+- Frontend test tooling (Vitest + React Testing Library), if
+  component-level testing becomes valuable.
+
 ## Local Demo Credentials
 
 **Local development only — these are not real secrets and only work against your own local database.** Password comes from `SEED_USER_PASSWORD` in `.env` (not committed; `.env.example` has an empty placeholder).
@@ -2161,6 +2346,7 @@ other 17 roles per tenant exist as empty placeholders for future modules.
 - **Leave Management still has no notifications or calendar integration** — see [Leave Management](#leave-management) above.
 - **Line Manager can now approve/reject leave, but direct reports only** (Checkpoint 14) — indirect (skip-level) approval is a deliberate future policy decision, not built. See [Manager-Hierarchy-Scoped Leave Approval](#manager-hierarchy-scoped-leave-approval) above.
 - **No org chart, manager self-service dashboard, or performance/probation review usage of the manager hierarchy** — see [Manager Hierarchy](#manager-hierarchy) above for the full list.
-- **Employee Records and Leave Management both have real UIs now (Checkpoints 17/18); Documents/Policies/Settings are still permission-gated placeholders** — see [Employee Records UI](#employee-records-ui) and [Leave Management UI](#leave-management-ui) above.
+- **Employee Records, Leave Management, and (employee-scoped) Document Repository all have real UIs now (Checkpoints 17/18/19); the top-level `/documents` route is still a permission-gated placeholder (no tenant-wide document centre yet — see [Document Repository UI](#document-repository-ui) above), and Policies/Settings remain placeholders too** — see [Employee Records UI](#employee-records-ui), [Leave Management UI](#leave-management-ui), and [Document Repository UI](#document-repository-ui) above.
 - **Leave Management UI has no balance/leave-type admin UI, calendar view, or notification integration** — see [Leave Management UI](#leave-management-ui) above.
+- **Document Repository UI has no tenant-wide document centre, approval workflow UI, eSignature, document generation, or file preview** — see [Document Repository UI](#document-repository-ui) above.
 - **No JS/TS unit test runner configured** — frontend verification relies on `tsc --noEmit`, `vite build`, and backend feature tests asserting Inertia response shape/shared-prop safety.

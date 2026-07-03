@@ -707,6 +707,66 @@ approved their direct report's request and was correctly `403`'d
 approving an unrelated employee's — from the UI's perspective, both
 buttons were equally "available."
 
+## Document Repository UI (Checkpoint 19)
+
+The third real module screen, and the first one deliberately **not**
+built as a top-level module — see
+[`security.md`](security.md#document-repository-ui) for the security
+model and [`api.md`](api.md#frontend-routes-inertia) for the route
+reference.
+
+**Employee-scoped, not tenant-wide, because the backend API is
+employee-scoped.** Every existing document endpoint
+(`EmployeeDocumentController`, Checkpoint 8) is nested under
+`/api/v1/employees/{employee}/documents/...` — there is no tenant-wide
+`/api/v1/documents` listing endpoint to build a document centre on top
+of. Rather than inventing one prematurely, the UI mirrors the API's own
+shape: `/employees/{employee}/documents(/upload)(/{document})`, reachable
+from a "Documents" link on the Employee detail page. A tenant-wide
+document centre is explicit future work, gated on a tenant-wide listing
+endpoint actually existing first (see "Future" below).
+
+**`EmployeeDocumentUiController` mirrors `EmployeeUiController`/
+`LeaveUiController`'s three-method shape, with one addition**: `show()`
+takes *two* route-bound models, not one, and does *two* object-level
+ownership checks accordingly — `ensureEmployeeBelongsToCurrentTenant()`
+(same as every other module) *and* `ensureDocumentBelongsToEmployee()`,
+because `/employees/{employee}/documents/{document}` has a nesting
+relationship the single-model Employee/Leave routes don't: a `document`
+ID that's perfectly valid *for the current tenant* but belongs to a
+*different employee* must still 404, not just IDs from a different
+tenant. This is the same two-layer check `EmployeeDocumentController`
+already does at the API layer (Checkpoint 8) — the web controller
+repeats it rather than trusting the API layer alone, consistent with
+every other module's "don't rely solely on one layer" posture.
+
+**A pre-existing permission gap, closed narrowly.** `GET
+/api/v1/document-categories` requires `document_categories.view` — but
+before this checkpoint, only Tenant Admin held it. HR Manager and
+Employee (the only two roles holding `documents.upload`) would have hit
+a `403` fetching the category list the upload form depends on for
+sensitivity/expiry-requirement display. Fixed by granting
+`document_categories.view` — and *only* that, not `create`/`update`/
+`delete` — to both roles in `RoleSeeder`. Viewing what categories exist
+is reference data needed to upload correctly; managing the category
+catalog remains a materially higher-trust action reserved for Tenant
+Admin. See [`security.md`](security.md#document-repository-ui) for the
+full reasoning.
+
+**`lib/download.ts` — a new helper, not a reuse of `lib/api.ts` alone.**
+Every other module's data flows as JSON through `api.get()`/`.post()`;
+a file download is fundamentally different (a binary response, not
+something to parse and render) and has a failure mode the JSON helpers
+don't: with `responseType: 'blob'`, a failed request's error body
+arrives as a `Blob`, not parsed JSON — `toApiError()` can't read
+`.message`/`.errors` off a `Blob` directly. `downloadEmployeeDocument()`
+re-parses a failed blob response as text/JSON before handing it to
+`toApiError()`, so a `403`/`404` still produces the same safe generic
+message every other API call gets, rather than either a blank message
+or (worse) the raw error blob being silently offered to the browser as
+if it were the requested file. See `docs/security.md` for why this
+also rules out a plain `window.location = downloadUrl` navigation.
+
 ## Internal IDs vs. Public-Facing References
 
 Internal database IDs may remain bigint (see

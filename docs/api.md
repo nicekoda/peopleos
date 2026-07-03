@@ -227,7 +227,10 @@ served through the `web` middleware group, session-based auth same as
 | `GET` | `/leave` | `auth`, `tenant.matches`, `permission:leave.view` | Real UI (Checkpoint 18) — list + inline balances, fetched client-side from `/api/v1/leave-requests`, `/api/v1/leave-types`, `/api/v1/me/leave-balances` |
 | `GET` | `/leave/create` | `auth`, `tenant.matches`, `permission:leave.request` | Create form — registered before `/leave/{id}` to avoid route-param collision |
 | `GET` | `/leave/{leaveRequest}` | `auth`, `tenant.matches`, `permission:leave.view` | Detail — passes only `leaveRequestId` as a prop, never leave-request data (see `docs/architecture.md`); `404` if the request belongs to another tenant |
-| `GET` | `/documents` | `auth`, `tenant.matches`, `permission:documents.view` | Placeholder |
+| `GET` | `/employees/{employee}/documents` | `auth`, `tenant.matches`, `permission:documents.view` | Real UI (Checkpoint 19) — list, fetched client-side from `/api/v1/employees/{employee}/documents` |
+| `GET` | `/employees/{employee}/documents/upload` | `auth`, `tenant.matches`, `permission:documents.upload` | Upload form — registered before `/employees/{employee}/documents/{document}` to avoid route-param collision |
+| `GET` | `/employees/{employee}/documents/{document}` | `auth`, `tenant.matches`, `permission:documents.view` | Detail — passes only `employeeId`/`documentId` as props, never document data (see `docs/architecture.md`); `404` if the employee belongs to another tenant, or the document doesn't belong to this employee |
+| `GET` | `/documents` | `auth`, `tenant.matches`, `permission:documents.view` | Placeholder — a tenant-wide document centre, distinct from the employee-scoped UI above; not built yet (see `docs/architecture.md`) |
 | `GET` | `/policies` | `auth`, `tenant.matches`, `permission:policies.view` | Placeholder |
 | `GET` | `/settings` | `auth`, `tenant.matches`, `permission:employees.update` | Placeholder — no dedicated `settings.*` permission exists yet, `employees.update` used as a stand-in admin-capability signal |
 
@@ -239,6 +242,15 @@ conflicts with the current state." from Checkpoint 17). See
 why Approve/Reject buttons cannot predict `resolveApprovalScope()`'s
 manager-hierarchy result and simply let a resulting `403` surface like
 any other.
+
+**Document Repository UI (Checkpoint 19)** reuses the existing
+`/api/v1/employees/{employee}/documents` and `/api/v1/document-categories`
+endpoints (Checkpoints 8/9), plus a new `resources/js/lib/download.ts`
+helper for authenticated blob downloads (`api` with `responseType:
+'blob'`, never a raw browser navigation to the API URL). `document-categories.view`
+was newly granted to HR Manager and Employee (previously Tenant-Admin-only)
+so the upload form's category dropdown works for the roles that
+actually upload documents — see `docs/security.md#document-repository-ui`.
 
 ### Shared props (every Inertia response)
 
@@ -409,6 +421,12 @@ scoped to any single employee.
 
 **`tenant_id` is never accepted as request input**, same rule as every
 other module.
+
+**`document_categories.view` is granted to HR Manager and Employee as of
+Checkpoint 19** (previously Tenant-Admin-only) — the Document Repository
+UI's upload form needs this list to show category names, sensitivity
+indicators, and expiry-date requirements; `create`/`update`/`delete`
+remain Tenant-Admin-only. See `docs/security.md#document-repository-ui`.
 
 ### Validation rules
 

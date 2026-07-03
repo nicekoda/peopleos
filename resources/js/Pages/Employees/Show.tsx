@@ -96,14 +96,24 @@ export default function EmployeesShow() {
                 title={employee.full_name}
                 description={`Employee #${employee.employee_number}`}
                 actions={
-                    <PermissionGate permission="employees.update">
-                        <Link
-                            href={`/employees/${employee.id}/edit`}
-                            className="inline-flex items-center justify-center gap-2 rounded-md bg-indigo-600 px-3.5 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500"
-                        >
-                            Edit
-                        </Link>
-                    </PermissionGate>
+                    <div className="flex items-center gap-3">
+                        <PermissionGate permission="documents.view">
+                            <Link
+                                href={`/employees/${employee.id}/documents`}
+                                className="text-sm font-medium text-indigo-600 hover:text-indigo-500"
+                            >
+                                Documents
+                            </Link>
+                        </PermissionGate>
+                        <PermissionGate permission="employees.update">
+                            <Link
+                                href={`/employees/${employee.id}/edit`}
+                                className="inline-flex items-center justify-center gap-2 rounded-md bg-indigo-600 px-3.5 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500"
+                            >
+                                Edit
+                            </Link>
+                        </PermissionGate>
+                    </div>
                 }
             />
 

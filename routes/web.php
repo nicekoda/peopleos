@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\DashboardController;
+use App\Http\Controllers\EmployeeDocumentUiController;
 use App\Http\Controllers\EmployeeUiController;
 use App\Http\Controllers\LeaveUiController;
 use Illuminate\Support\Facades\Route;
@@ -40,6 +41,19 @@ Route::middleware(['auth', 'tenant.matches'])->group(function () {
         ->middleware('permission:employees.view')->name('employees.show');
     Route::get('employees/{employee}/edit', [EmployeeUiController::class, 'edit'])
         ->middleware('permission:employees.update')->name('employees.edit');
+
+    // Document Repository UI (Checkpoint 19) — employee-scoped, same
+    // thin-page-route pattern: document data is fetched client-side from
+    // the existing /api/v1/employees/{employee}/documents endpoints
+    // (Checkpoint 8), never passed through as an Inertia prop.
+    // 'documents/upload' must be registered before 'documents/{document}'
+    // so Laravel doesn't treat "upload" as a {document} route parameter.
+    Route::get('employees/{employee}/documents', [EmployeeDocumentUiController::class, 'index'])
+        ->middleware('permission:documents.view')->name('employees.documents.index');
+    Route::get('employees/{employee}/documents/upload', [EmployeeDocumentUiController::class, 'create'])
+        ->middleware('permission:documents.upload')->name('employees.documents.create');
+    Route::get('employees/{employee}/documents/{document}', [EmployeeDocumentUiController::class, 'show'])
+        ->middleware('permission:documents.view')->name('employees.documents.show');
 
     // Leave Management UI (Checkpoint 18) — same thin-page-route pattern
     // as Employee Records (Checkpoint 17): the actual leave request/

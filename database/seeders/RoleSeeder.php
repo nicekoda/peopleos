@@ -78,6 +78,12 @@ class RoleSeeder extends Seeder
         $this->grantByKeys($roles['HR Manager'], [
             'employees.view', 'employees.create', 'employees.update', 'employees.view_sensitive', 'employees.export',
             'documents.view', 'documents.upload', 'documents.download', 'documents.approve',
+            // Checkpoint 19: read-only reference data needed to upload
+            // documents correctly (sensitivity indicator, expiry-date
+            // requirement) — NOT create/update/delete, which stay
+            // Tenant-Admin-only. Viewing what categories exist is not
+            // the same trust level as managing them. See docs/security.md.
+            'document_categories.view',
             // All leave permissions, per your explicit suggested mapping
             // ("HR Manager: all leave permissions") — includes
             // leave.request/leave.cancel so an HR Manager who is also a
@@ -109,6 +115,11 @@ class RoleSeeder extends Seeder
         $this->grantByKeys($roles['Employee'], [
             'employees.view',
             'documents.view', 'documents.upload',
+            // Checkpoint 19: same read-only reference-data reasoning as
+            // HR Manager above — an Employee uploading their own
+            // documents needs to see category names/sensitivity/expiry
+            // requirements, not manage the category catalog.
+            'document_categories.view',
             // No leave.view_all — an Employee only ever sees their own
             // leave requests (LeaveRequestController::index() scopes to
             // the caller's own linked employee without it). See

@@ -151,6 +151,17 @@ The frontend cannot know the full manager-hierarchy approval scope
 render based on permission and status alone, and a resulting `403` is
 handled the same safe way as any other. See `docs/security.md`.
 
+**Document Repository UI** (Checkpoint 19) — employee-scoped, not a
+tenant-wide document centre yet: `/employees/{id}/documents` (list),
+`/employees/{id}/documents/upload`, `/employees/{id}/documents/{id}`
+(metadata only, no file preview). Reuses the existing
+`/api/v1/employees/{employee}/documents` and `/api/v1/document-categories`
+endpoints and the same `lib/api.ts` error contract, plus a new
+`lib/download.ts` helper for safe authenticated blob downloads (never a
+raw browser navigation to the API URL, which could otherwise offer a
+403/404 JSON error body up as if it were the downloaded file). See
+`docs/security.md`.
+
 See `docs/architecture.md`/`docs/security.md`/`docs/api.md` for the full
 design, what's shared with the frontend (and what never is), and the
 future module rollout plan.

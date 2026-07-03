@@ -88,11 +88,61 @@ PeopleOS identifies tenants/clients by subdomain (e.g.
 A helper for adding these entries when a new tenant is provisioned is
 planned as part of the tenant foundation checkpoint.
 
+## Frontend (Inertia + React + TypeScript + Tailwind)
+
+Added in Checkpoint 16 — a secure, permission-aware UI shell over the
+existing `/api/v1` backend. **The frontend is presentation only; it is
+never the security boundary** — see [`docs/security.md`](docs/security.md#frontend-security-model)
+for the full rule.
+
+**Stack**: Inertia.js (server-side adapter: `inertiajs/inertia-laravel`),
+React 19, TypeScript, Tailwind CSS 4, Vite.
+
+**Dev server** (hot-reloading, run alongside `php artisan serve` or your
+Apache/Laragon vhost):
+
+```bash
+npm run dev
+```
+
+**Production build** (required before deploying, or whenever you want
+`php artisan serve`/Apache to serve the built assets instead of the dev
+server):
+
+```bash
+npm run build
+```
+
+**Type-checking** (Vite's build does not fully type-check TypeScript —
+run this separately):
+
+```bash
+npx tsc --noEmit
+```
+
+**Directory layout**:
+
+```
+resources/js/
+  app.tsx              — Inertia entry point
+  Pages/               — one component per Inertia::render(...) call
+  Layouts/AppLayout.tsx — sidebar + topbar shell for authenticated pages
+  Components/          — reusable UI primitives (Button, Card, PermissionGate, ...)
+  hooks/useCan.ts       — permission-aware UI helper (UI-only, not security)
+  types/index.d.ts      — shared Inertia page props (mirrors HandleInertiaRequests::share())
+```
+
+See `docs/architecture.md`/`docs/security.md`/`docs/api.md` for the full
+design, what's shared with the frontend (and what never is), and the
+future module rollout plan.
+
 ## Documentation
 
-- [`docs/architecture.md`](docs/architecture.md) — multi-tenancy, tenant resolution, RBAC overview, internal-vs-public IDs.
+- [`docs/architecture.md`](docs/architecture.md) — multi-tenancy, tenant resolution, RBAC overview, internal-vs-public IDs, frontend architecture.
 - [`docs/database.md`](docs/database.md) — schema conventions and table reference.
-- [`docs/security.md`](docs/security.md) — authentication, RBAC design, local demo credentials, known limitations.
+- [`docs/security.md`](docs/security.md) — authentication, RBAC design, local demo credentials, frontend security model, known limitations.
+- [`docs/api.md`](docs/api.md) — `/api/v1` endpoint reference.
+- [`docs/testing.md`](docs/testing.md) — testing conventions and patterns.
 
 ## Project Standards
 

@@ -2,6 +2,7 @@
 
 use App\Http\Middleware\EnsurePermission;
 use App\Http\Middleware\EnsureTenantMatchesAuthenticatedUser;
+use App\Http\Middleware\HandleInertiaRequests;
 use App\Http\Middleware\ResolveTenant;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
@@ -22,25 +23,36 @@ return Application::configure(basePath: dirname(__DIR__))
         // BelongsToTenant's global scope wouldn't be active yet for that
         // lookup. prependToGroup, not appendToGroup.
         $middleware->prependToGroup('web', ResolveTenant::class);
+        $middleware->appendToGroup('web', HandleInertiaRequests::class);
         $middleware->alias([
             'permission' => EnsurePermission::class,
             'tenant.matches' => EnsureTenantMatchesAuthenticatedUser::class,
         ]);
 
-        // No HTML login form exists anywhere in this app (auth is
-        // JSON-only — see LoginRequest/AuthenticatedSessionController).
-        // Without this, an unauthenticated non-JSON request to any
-        // 'auth'-protected route crashes with a 500 (Laravel's default
-        // Authenticate middleware tries to redirect to a 'login' named
-        // route that doesn't exist), instead of a clean 401. Found while
-        // testing the tenant-matching middleware in Checkpoint 7.
-        $middleware->redirectGuestsTo(fn () => null);
+        // Checkpoint 16: a real 'login' named route now exists (the
+        // Inertia login page), so an unauthenticated non-JSON request to
+        // any 'auth'-protected route redirects there instead of crashing.
+        // JSON-expecting requests are unaffected — Laravel's Authenticate
+        // middleware only consults this closure when
+        // !$request->expectsJson(), always returning a plain 401 JSON
+        // response otherwise (see every existing getJson()/postJson()
+        // "unauthenticated" test across the API suite). Previously
+        // fn () => null, back when no login route existed at all
+        // (Checkpoint 7) — see docs/security.md.
+        $middleware->redirectGuestsTo(fn () => route('login'));
     })
     ->withExceptions(function (Exceptions $exceptions): void {
-        // No login/logout UI exists yet (backend-only auth foundation),
-        // so these endpoints must always respond JSON, not redirect back
-        // to a nonexistent form on validation failure.
+        // api/* always gets JSON, full stop — it's an API surface
+        // regardless of what a caller's Accept header happens to say.
+        // Everything else (including /login, /logout, now serving both
+        // the JSON API contract and real Inertia browser/form requests)
+        // defers to normal content negotiation: a request that actually
+        // wants JSON (postJson()/getJson() in tests, or a genuine API
+        // client) still gets it; a real browser/Inertia request gets
+        // Laravel's normal redirect-back-with-errors behavior instead,
+        // which Inertia's client renders as form validation errors. See
+        // docs/security.md.
         $exceptions->shouldRenderJsonWhen(
-            fn (Request $request) => $request->is('api/*') || $request->is('login') || $request->is('logout'),
+            fn (Request $request) => $request->is('api/*') || $request->expectsJson(),
         );
     })->create();

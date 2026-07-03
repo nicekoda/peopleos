@@ -9,6 +9,13 @@ use Illuminate\Support\Facades\Hash;
 use RuntimeException;
 use Tests\TestCase;
 
+/**
+ * Uses postJson() throughout — as of Checkpoint 16, /login is content-
+ * negotiated (JSON for postJson()/API clients, a redirect for real
+ * browser/Inertia form posts). These tests exercise the JSON contract
+ * specifically; see tests/Feature/Auth/InertiaAuthTest.php for the
+ * browser/redirect flow.
+ */
 class AuthenticationTest extends TestCase
 {
     use RefreshDatabase;
@@ -30,7 +37,7 @@ class AuthenticationTest extends TestCase
             'password' => Hash::make('secret-password'),
         ]);
 
-        $response = $this->post($this->loginUrl($tenant), [
+        $response = $this->postJson($this->loginUrl($tenant), [
             'email' => $user->email,
             'password' => 'secret-password',
         ]);
@@ -51,7 +58,7 @@ class AuthenticationTest extends TestCase
             'password' => Hash::make('secret-password'),
         ]);
 
-        $response = $this->post($this->loginUrl($tenant), [
+        $response = $this->postJson($this->loginUrl($tenant), [
             'email' => $user->email,
             'password' => 'secret-password',
         ]);
@@ -68,7 +75,7 @@ class AuthenticationTest extends TestCase
             'password' => Hash::make('secret-password'),
         ]);
 
-        $response = $this->post($this->loginUrl($tenant), [
+        $response = $this->postJson($this->loginUrl($tenant), [
             'email' => $user->email,
             'password' => 'secret-password',
         ]);
@@ -91,7 +98,7 @@ class AuthenticationTest extends TestCase
             'password' => Hash::make('secret-password'),
         ]);
 
-        $response = $this->post($this->loginUrl($tenant), [
+        $response = $this->postJson($this->loginUrl($tenant), [
             'email' => $user->email,
             'password' => 'secret-password',
         ]);
@@ -114,7 +121,7 @@ class AuthenticationTest extends TestCase
             'password' => Hash::make('secret-password'),
         ]);
 
-        $response = $this->post($this->loginUrl(), [
+        $response = $this->postJson($this->loginUrl(), [
             'email' => $admin->email,
             'password' => 'secret-password',
         ]);
@@ -132,7 +139,7 @@ class AuthenticationTest extends TestCase
             'password' => Hash::make('secret-password'),
         ]);
 
-        $response = $this->post($this->loginUrl($otherTenant), [
+        $response = $this->postJson($this->loginUrl($otherTenant), [
             'email' => $user->email,
             'password' => 'secret-password',
         ]);

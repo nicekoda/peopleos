@@ -25,7 +25,7 @@ class AuditLoggingTest extends TestCase
             'password' => Hash::make('secret-password'),
         ]);
 
-        $this->post('http://'.$tenant->subdomain.'.'.config('tenancy.base_domain').'/login', [
+        $this->postJson('http://'.$tenant->subdomain.'.'.config('tenancy.base_domain').'/login', [
             'email' => $user->email,
             'password' => 'secret-password',
         ])->assertOk();
@@ -44,7 +44,7 @@ class AuditLoggingTest extends TestCase
         $user = User::factory()->create(['tenant_id' => $tenant->id]);
 
         $this->actingAs($user)
-            ->post('http://'.$tenant->subdomain.'.'.config('tenancy.base_domain').'/logout')
+            ->postJson('http://'.$tenant->subdomain.'.'.config('tenancy.base_domain').'/logout')
             ->assertOk();
 
         $this->assertDatabaseHas('audit_logs', [

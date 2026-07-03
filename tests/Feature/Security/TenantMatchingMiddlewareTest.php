@@ -85,7 +85,31 @@ class TenantMatchingMiddlewareTest extends TestCase
         $response->assertOk();
     }
 
-    public function test_unauthenticated_request_is_rejected_by_auth_not_tenant_matches(): void
+    public function test_unauthenticated_json_request_is_rejected_by_auth_not_tenant_matches(): void
+    {
+        $this->registerTestRoute();
+
+        $tenant = Tenant::factory()->create();
+
+        $response = $this->getJson('http://'.$tenant->subdomain.'.'.config('tenancy.base_domain').'/__test/tenant-scoped');
+
+        // Rejected — by 'auth' (no user to check), not by 'tenant.matches'
+        // (which passes through when there's no authenticated user). A
+        // clean 401 for a JSON-expecting caller (every real API client).
+        $response->assertUnauthorized();
+    }
+
+    /**
+     * Checkpoint 16: a real 'login' route now exists, so a plain
+     * browser (non-JSON) request to an auth-protected route redirects
+     * there instead of a 401 — see the redirectGuestsTo update in
+     * bootstrap/app.php. Before Checkpoint 16, this scenario was
+     * untestable (no login route existed at all, so `redirectGuestsTo`
+     * was hardcoded to return null and the app deliberately produced a
+     * plain 401 for everyone — see git history for the Checkpoint 7 fix
+     * this superseded).
+     */
+    public function test_unauthenticated_browser_request_redirects_to_login_not_tenant_matches(): void
     {
         $this->registerTestRoute();
 
@@ -93,11 +117,7 @@ class TenantMatchingMiddlewareTest extends TestCase
 
         $response = $this->get('http://'.$tenant->subdomain.'.'.config('tenancy.base_domain').'/__test/tenant-scoped');
 
-        // Rejected — by 'auth' (no user to check), not by 'tenant.matches'
-        // (which passes through when there's no authenticated user). A
-        // clean 401, not a redirect to a login page that doesn't exist —
-        // see the redirectGuestsTo fix in bootstrap/app.php.
-        $response->assertUnauthorized();
+        $response->assertRedirect(route('login'));
     }
 
     public function test_tenant_mismatch_writes_a_critical_audit_log(): void

@@ -168,4 +168,38 @@ trait HasPermissions
 
         return $this->permissionGrants()->where('permission_id', $permission->id)->exists();
     }
+
+    /**
+     * The flat list of permission key strings this user holds, via role
+     * or direct grant combined — used only to drive frontend
+     * permission-aware UI (Checkpoint 16). This is presentation data,
+     * never itself the authorization check: every backend route/action
+     * still calls hasPermission()/the `permission:` middleware
+     * independently. Fails closed the same way hasPermission() does —
+     * an inactive user or inactive tenant gets an empty list, not a
+     * stale one.
+     *
+     * @return list<string>
+     */
+    public function permissionKeys(): array
+    {
+        if (! $this->isActive()) {
+            return [];
+        }
+
+        if (! $this->is_platform_admin && (! $this->tenant || ! $this->tenant->isActive())) {
+            return [];
+        }
+
+        $roleIds = $this->roles()->pluck('roles.id');
+
+        $viaRoles = Permission::query()
+            ->whereHas('roles', fn ($query) => $query->whereIn('roles.id', $roleIds))
+            ->pluck('key');
+
+        $grantedIds = $this->permissionGrants()->pluck('permission_id');
+        $viaGrants = Permission::query()->whereIn('id', $grantedIds)->pluck('key');
+
+        return $viaRoles->merge($viaGrants)->unique()->sort()->values()->all();
+    }
 }

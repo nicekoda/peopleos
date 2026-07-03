@@ -208,6 +208,48 @@ see `docs/security.md` for the full reasoning and future direction.
 `available_days` is always computed, never a stored/cached value — see
 `docs/security.md`.
 
+## Frontend Routes (Inertia)
+
+Checkpoint 16 — separate from the `/api/v1` surface above (no prefix,
+served through the `web` middleware group, session-based auth same as
+`/login`). See `docs/architecture.md`/`docs/security.md` for the design.
+
+| Method | Path | Middleware | Notes |
+|---|---|---|---|
+| `GET` | `/login` | `guest` | Renders `Auth/Login`; redirects to `/dashboard` if already authenticated |
+| `POST` | `/login` | `guest` | Content-negotiated — JSON for `Accept: application/json`, redirect otherwise. See `docs/security.md` |
+| `POST` | `/logout` | `auth` | Same content negotiation |
+| `GET` | `/dashboard` | `auth`, `tenant.matches` | Explicit active-user/active-tenant check (no `permission:` middleware exists to gate it otherwise) |
+| `GET` | `/employees` | `auth`, `tenant.matches`, `permission:employees.view` | Placeholder (`EmptyState`) |
+| `GET` | `/leave` | `auth`, `tenant.matches`, `permission:leave.view` | Placeholder |
+| `GET` | `/documents` | `auth`, `tenant.matches`, `permission:documents.view` | Placeholder |
+| `GET` | `/policies` | `auth`, `tenant.matches`, `permission:policies.view` | Placeholder |
+| `GET` | `/settings` | `auth`, `tenant.matches`, `permission:employees.update` | Placeholder — no dedicated `settings.*` permission exists yet, `employees.update` used as a stand-in admin-capability signal |
+
+### Shared props (every Inertia response)
+
+```json
+{
+  "auth": {
+    "user": {
+      "id": 7,
+      "name": "Jane Doe",
+      "email": "jane@example.com",
+      "is_platform_admin": false,
+      "employee_id": "01h...",
+      "permissions": ["employees.view", "leave.view", "..."]
+    }
+  },
+  "tenant": { "id": "01h...", "name": "UESL" },
+  "errors": {}
+}
+```
+
+`auth.user` is `null` when unauthenticated (only reachable on `/login`).
+`tenant` is `null` whenever no tenant is resolved (Platform Super Admin
+on the base domain) — never fabricated. See `docs/security.md` for the
+full "what's shared, what never is" list.
+
 ## Manager Hierarchy
 
 | Method | Path | Permission | Notes |
@@ -642,6 +684,9 @@ second `approve` call, etc.) returns `409`.
 - Leave balance accrual engine, carry-forward automation, half-day leave, business-day calculation, weekend/holiday exclusion — leave balances themselves now exist (Checkpoint 15), see `docs/security.md#leave-balances-foundation` for what's still missing.
 - Manager team-balance view/dashboard — `ManagerHierarchyService` could support this, no endpoint exists yet.
 - Leave notifications, email approval, and calendar integration.
+- Real Employee/Leave/Document/Policy module UI — `/employees`, `/leave`, `/documents`, `/policies`, `/settings` are permission-gated placeholders (Checkpoint 16), not functional screens yet.
+- Manager/Reports/Audit nav groups and pages, once they exist.
+- Frontend test tooling (Vitest + React Testing Library), if component-level testing becomes valuable.
 - Policy campaigns (bulk-assign a policy to a whole department/location, scheduled/recurring re-acknowledgement cycles).
 - Email/notification reminders and escalations for overdue acknowledgements.
 - Auto-reassignment when a policy is republished (currently: stale assignments are correctly rejected at acknowledge time, but nothing proactively creates a new pending row).

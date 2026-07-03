@@ -365,6 +365,85 @@ something actually loads the relation.
   row created at all — proving the "was this request actually pending"
   check in `cancel()` does something, not merely that it doesn't crash.
 
+## Testing the frontend (Checkpoint 16): backend-verified, not a JS test runner
+
+No Jest/Vitest is configured — frontend correctness is verified three
+ways instead:
+
+1. **`npx tsc --noEmit`** — full TypeScript type-checking. `vite build`
+   alone does *not* fully type-check (it transpiles); run this
+   separately, and after any change to shared types
+   (`resources/js/types/index.d.ts`) or a component's props.
+2. **`npm run build`** — the production Vite build must succeed.
+3. **Backend feature tests asserting the Inertia response shape** —
+   `assertInertia(fn ($page) => $page->component('Dashboard'))` proves
+   the correct page component is being rendered; reading
+   `$response->viewData('page')` (the raw page array Inertia's test
+   response exposes) lets a test inspect the actual shared-prop payload
+   directly, which is how sensitive-field and tenant-isolation checks
+   are verified (see below) — there's no need for a JS runner to prove
+   the *data* reaching the frontend is correct, only that the frontend
+   *renders* it correctly, which isn't covered yet (see Known
+   limitations).
+
+## An authentication-endpoint content-negotiation change exposed 3 tests that assumed "always JSON" (Checkpoint 16)
+
+`AuthenticatedSessionController::store()`/`destroy()` now branch on
+`$request->expectsJson()` (JSON for API clients, a redirect for real
+browser/Inertia posts) instead of always returning JSON. Three
+pre-existing test files called these routes with **bare** `$this->post()`/
+`$this->get()` (no explicit `Accept` header) and asserted `200`/`401`
+outright:
+
+- `AuthenticationTest` (7 call sites) — converted to `postJson()`, since
+  these tests were always exercising the JSON contract in spirit (they
+  only check status codes, never inspect HTML), just never had to say so
+  explicitly because nothing else existed.
+- `AuditLoggingTest::test_login_success_creates_audit_log`/
+  `test_logout_creates_audit_log` — same fix.
+- `TenantMatchingMiddlewareTest::test_unauthenticated_request_is_rejected_by_auth_not_tenant_matches` —
+  split into two tests: one converted to `getJson()` (proving the JSON
+  contract still gets a clean `401`), one new
+  (`test_unauthenticated_browser_request_redirects_to_login_not_tenant_matches`)
+  proving the *new*, correct behavior for a real browser request
+  (redirect to `/login`, not a crash) — this scenario was genuinely
+  untestable before Checkpoint 16, since no login route existed for
+  Laravel's default redirect-fallback to resolve.
+
+**The lesson, generalized**: a bare `$this->post()`/`$this->get()` test
+call implicitly assumes "this endpoint responds the same way regardless
+of what I ask for." That assumption is only ever true by accident — when
+an endpoint later needs to serve two audiences differently (as `/login`
+now does), tests written against the accidental behavior need to
+declare, explicitly, which contract they're testing (`postJson()` for
+"I want the JSON contract," bare `get()`/`post()` for "I'm a real
+browser"). This is the same shape of fix as Checkpoint 11's `PolicyApiTest`
+and Checkpoint 14's `LeaveRequestApiTest` — an authorization/behavior
+tightening breaks some existing tests, and the fix is to make each
+test's own expectations explicit, not to weaken the new behavior.
+
+## Testing shared Inertia props directly, not just that a page renders
+
+`$response->viewData('page')` returns the same page array Inertia's own
+`assertInertia()` macro inspects internally, but as a plain PHP array —
+useful for assertions `assertInertia()`'s fluent API doesn't cover
+directly, like "no key anywhere in this JSON contains `password`":
+
+```php
+$page = $response->viewData('page');
+$propsJson = json_encode($page['props']);
+$this->assertStringNotContainsString('password', $propsJson);
+```
+
+Test the *specific* refinements a shared-props design promises, not just
+"the page loaded": `test_platform_super_admin_does_not_receive_tenant_context`
+asserts `tenant` is exactly `null` for a Platform Super Admin (not an
+empty array, not a placeholder tenant); `test_tenant_user_shared_props_reflect_only_their_own_tenant`
+asserts the shared tenant `id` matches the acting user's own tenant and
+explicitly does *not* match a second, unrelated tenant created in the
+same test — a test that only checked "the tenant field is present"
+would pass even if it were leaking the wrong tenant's data.
+
 ## Verifying against the real app, not just the test suite
 
 Because of the SQLite/Postgres split above, checkpoints in this project
@@ -393,6 +472,34 @@ session coverage only uses parameter-free routes). Worth checking for
 directly the next time a checkpoint adds a `{model}`-bound route: don't
 assume `tenant.matches`'s `403` is what a cross-tenant-session test
 against it will see — verify empirically, the same way this was found.
+
+### Live-testing an Inertia page load: the page data lives in a `<script>` tag, not a `data-page` div attribute (Checkpoint 16)
+
+Older Inertia examples/tutorials show the initial page object embedded
+as a `data-page="..."` attribute on the root `<div id="app">`. This
+project's Inertia version instead embeds it as JSON text inside
+`<script data-page="app" type="application/json">{...}</script>`. A
+smoke-test script parsing the raw HTML response needs to extract from
+the script tag's *text content*, not an attribute value:
+
+```php
+preg_match('/<script data-page="app" type="application\/json">(.+?)<\/script>/s', $html, $m);
+$page = json_decode($m[1], true); // {component, props, url, version, sharedProps}
+```
+
+Also worth knowing: a **plain** `GET` (no `X-Inertia` header) always
+gets this full HTML document — the natural shape of a direct URL visit
+or full page reload. An `X-Inertia: true` GET gets a raw JSON page
+object directly, *but* only if it also sends a matching
+`X-Inertia-Version` header — omit it (as a hand-rolled smoke-test script
+easily might) and Inertia's version-mismatch handling returns `409`,
+which looks like a bug but isn't: it's Inertia correctly telling a
+client with a stale/unknown asset version to do a full reload. For a
+one-off smoke test that doesn't already have a previous page's version
+to carry forward, skip the `X-Inertia` header on `GET`s entirely and
+parse the embedded script tag instead — `X-Inertia`/`X-Requested-With`
+headers are still useful (and safe) on `POST`s (login/logout), since
+Inertia's version check only applies to `GET`.
 
 ### A real CSRF round-trip against the live app, done correctly (Checkpoint 11)
 

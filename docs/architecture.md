@@ -553,6 +553,56 @@ patching every test's fields individually — see `docs/testing.md` for
 the full explanation and why `recycle()` is the right tool for this
 class of problem going forward.
 
+## Frontend Foundation (Inertia + React + TypeScript)
+
+The first frontend this app has ever had — every prior checkpoint was
+API-only. See [`security.md`](security.md#frontend-security-model) for
+the full "what's shared, what never is, why the frontend is never the
+security boundary" design, and [`api.md`](api.md#frontend-routes-inertia)
+for the route/page reference.
+
+**One endpoint, content-negotiated, not two parallel auth systems.**
+`AuthenticatedSessionController::store()`/`destroy()` branch on
+`$request->expectsJson()` — a caller that actually wants JSON
+(`postJson()` in every existing test, or a genuine API client) gets
+exactly the same response as before this checkpoint; a real
+browser/Inertia form post (which doesn't set that header) gets a
+redirect instead. This is the standard Laravel+Inertia hybrid pattern,
+not a custom invention — and it's why `AuthenticationTest.php`
+(Checkpoint 3) needed no logic changes, only its own test calls
+switched from bare `post()` to explicit `postJson()` once the same URL
+started serving two audiences with genuinely different expectations.
+See `docs/testing.md` for the two pre-existing test files this exposed
+(`AuthenticationTest`, `AuditLoggingTest`, and `TenantMatchingMiddlewareTest`)
+that had silently relied on "every response from this endpoint is JSON,
+regardless of what I asked for" — true only because no alternative had
+ever existed until now.
+
+**`HandleInertiaRequests::share()` is the single place shared frontend
+props are assembled** — one function, not scattered across controllers.
+Mirrors the `AuditLogger`/`ManagerHierarchyService` pattern already
+established in this app: when a concern needs to be correct
+consistently everywhere, give it exactly one implementation, not N
+callers each getting to decide independently what's "safe enough" to
+expose.
+
+**Page routes are backend-permission-gated, not just hidden from the
+nav.** Every placeholder route (`/employees`, `/leave`, `/documents`,
+`/policies`, `/settings`) carries the same `permission:{key}` middleware
+its real API endpoints already require. `PermissionGate`/`useCan()`
+(React) only ever decide what to *render*; a direct link, a bookmarked
+URL, or a modified request to any of these routes is rejected by the
+backend regardless of what the sidebar shows. This is the same
+"backend remains authoritative" principle already applied to every
+other permission check in this app — extended to page routes, not a
+new principle invented for the frontend.
+
+**Nav only lists modules with an actual page this checkpoint.**
+"Manager," "Reports," and "Audit" were suggested nav groups but have no
+page yet — deliberately left off the sidebar rather than linking
+somewhere that 404s. Add them to `Sidebar.tsx`'s `links` array once
+their pages exist, not before.
+
 ## Internal IDs vs. Public-Facing References
 
 Internal database IDs may remain bigint (see

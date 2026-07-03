@@ -1652,6 +1652,183 @@ duplicated here).
 - Manager team-balance view/dashboard.
 - Leave encashment.
 
+## Frontend Security Model
+
+The first frontend this app has (Checkpoint 16: Inertia + React +
+TypeScript + Tailwind). See [`architecture.md`](architecture.md#frontend-foundation-inertia--react--typescript)
+and [`api.md`](api.md#frontend-routes-inertia) for the design rationale
+and route reference.
+
+### The rule, stated once, that governs everything below
+
+**Permission-aware UI is for user experience only. The frontend is
+never the source of truth for authorization.** Every backend route,
+middleware, policy, tenant-isolation check, and object-level check that
+existed before this checkpoint is completely unchanged. `PermissionGate`/
+`useCan()` (React) decide what to *render*; they never decide what a
+request is *allowed to do*. Hiding a sidebar link, disabling a button, or
+not rendering a form does not and cannot substitute for a backend check
+— every page route and every API action is independently gated exactly
+as it was before a frontend existed.
+
+### What's shared with the frontend (`HandleInertiaRequests::share()`)
+
+| Field | Source | Notes |
+|---|---|---|
+| `auth.user.id` | `$user->id` | |
+| `auth.user.name` | `$user->name` | |
+| `auth.user.email` | `$user->email` | |
+| `auth.user.is_platform_admin` | `$user->is_platform_admin` | |
+| `auth.user.employee_id` | `$user->employee?->id` | `null` if unlinked |
+| `auth.user.permissions` | `$user->permissionKeys()` | Flat array of permission key strings — presentation data, see below |
+| `tenant.id` / `tenant.name` | The container-bound `Tenant`, or `null` | `null` whenever no tenant is resolved (Platform Super Admin on the base domain) — never fabricated |
+| `errors` | Inertia's own default share (validation errors) | Standard Inertia behavior, not custom |
+
+### What's never shared, on purpose
+
+Password hash, remember token, session internals, API tokens, document
+storage paths/disk, audit log entries, salary/bank/other sensitive
+employee fields, raw role-assignment rows, or any tenant configuration
+beyond id/name. `#[Hidden(['password', 'remember_token'])]` on `User`
+(existing since Checkpoint 3) already prevents the model itself from
+serializing these; `HandleInertiaRequests::share()` additionally never
+reads them into the shared payload in the first place — two independent
+layers, not one relying on the other. Tested directly
+(`test_shared_inertia_props_contain_no_sensitive_fields` asserts none of
+`password`/`remember_token`/`salary`/`bank`/`storage_path`/`storage_disk`/
+`national_id`/`ssn` appear anywhere in the serialized shared props).
+
+### `permissionKeys()` — presentation data, not a new authorization path
+
+`User::permissionKeys()` (in `HasPermissions`) returns the flat list of
+permission key strings a user holds via role or direct grant — fails
+closed the same way `hasPermission()` does (inactive user or inactive
+tenant → empty list, never a stale one). It exists *only* to drive
+`useCan()`/`PermissionGate` on the frontend. It is not itself consulted
+by any backend authorization check — `hasPermission()` (queried fresh,
+per permission, per request) remains the single enforcement point
+everywhere it always has been.
+
+### Platform Super Admin never receives a fake tenant context (Refinement 4)
+
+`tenant` in shared props is `null` whenever `app()->bound(Tenant::class)`
+is false — which is exactly the case for a Platform Super Admin on the
+base domain (no subdomain, `ResolveTenant` binds nothing). There is no
+tenant-switching input anywhere in the shared-props payload or any
+frontend component — a Platform Super Admin cannot select a tenant to
+view through the UI (no such feature is built), and `tenant` being
+`null` is not silently defaulted to some tenant's data. Tested directly
+(`test_platform_super_admin_does_not_receive_tenant_context`).
+
+### Login/logout: one endpoint, content-negotiated (Refinements 1/2)
+
+`AuthenticatedSessionController::store()`/`destroy()` branch on
+`$request->expectsJson()`:
+
+- **True** (existing `postJson()` tests, any real API client) → the
+  exact same JSON response as every checkpoint before this one.
+- **False** (a real browser/Inertia form post — Inertia's client never
+  sends an `Accept: application/json` header) → a redirect
+  (`route('dashboard')` on login, `route('login')` on logout).
+
+This required two small `bootstrap/app.php` changes, both already
+flagged in their own comments as temporary JSON-only-era workarounds:
+
+1. `redirectGuestsTo` was `fn () => null` (Checkpoint 7 — no login route
+   existed at all, so falling through to Laravel's default `route('login')`
+   lookup would fatal). Now `fn () => route('login')`, since a real one
+   exists. Only consulted for non-JSON-expecting requests — every
+   existing `getJson()`/`postJson()` "unauthenticated" test across the
+   API suite is unaffected (`expectsJson()` true → straight to `401`,
+   this closure never runs).
+2. `shouldRenderJsonWhen` hardcoded JSON for `login`/`logout` regardless
+   of what the caller wanted. Now `$request->is('api/*') ||
+   $request->expectsJson()` — `api/*` always gets JSON (an API surface,
+   full stop); everything else defers to real content negotiation, so a
+   validation failure on a genuine Inertia form post redirects back with
+   errors (which Inertia's client renders on the form) instead of
+   returning a raw JSON body to a browser.
+
+### Login page security (Refinement 8)
+
+- CSRF: Inertia's `useForm()` submits through axios, which Laravel's
+  `VerifyCsrfToken` middleware already protects via the standard
+  `XSRF-TOKEN` cookie/header exchange — no custom CSRF handling was
+  written for this page.
+- Validation errors are the exact same generic messages
+  `LoginRequest::authenticate()` has always thrown ("These credentials
+  do not match our records.") — never revealing whether a given email
+  exists, whether the failure was the password vs. the account vs. the
+  tenant. No behavior change to `LoginRequest` itself; only *how* the
+  error reaches the user changed (redirect-back-with-errors vs. JSON
+  body).
+- An authenticated user hitting `/login` is redirected to `/dashboard`
+  before the page ever renders (`AuthenticatedSessionController::create()`).
+- Inactive-user and inactive-tenant checks are unchanged — same
+  `LoginRequest::authenticate()` code path, now just reachable from two
+  request shapes instead of one.
+
+### A pre-existing test assumption this checkpoint exposed
+
+Three test files (`AuthenticationTest`, `AuditLoggingTest`,
+`TenantMatchingMiddlewareTest`) called the login/logout/an ad-hoc
+protected route with bare `$this->post()`/`$this->get()` and asserted
+`200`/`401` outright. This worked only because *every* response from
+those routes was JSON, unconditionally, regardless of what the request
+actually asked for — true before this checkpoint, no longer true now
+that a real browser flow exists. Fixed by converting the JSON-contract
+tests to explicit `postJson()` (matching what they were actually always
+testing) and adding new tests for the browser/redirect flow
+specifically (`InertiaAuthTest`) — see `docs/testing.md` for the full
+writeup; this is not a weakening of any check, just making each test
+honestly declare which contract it exercises.
+
+### Route-level "fail closed" for the one page without a permission gate
+
+`/dashboard` has no `permission:{key}` middleware (nothing to gate — it's
+the landing page every authenticated user reaches), so it's the one
+authenticated route that doesn't already fail closed for inactive
+users/tenants via `hasPermission()`'s existing fail-closed behavior.
+`DashboardController::index()` checks `$user->isActive()` and tenant
+active-status explicitly, aborting `403` otherwise — the same rule
+`hasPermission()` already enforces everywhere else, applied directly
+since there's no permission check here to piggyback on. Every other
+frontend page route (`/employees`, `/leave`, `/documents`, `/policies`,
+`/settings`) inherits fail-closed behavior "for free" from its
+`permission:` middleware, exactly like their API counterparts.
+
+### Current limitations
+
+- No real analytics/dashboard data — the dashboard is welcome message +
+  linked-employee status + a permission count, explicitly not built
+  further this checkpoint.
+- No Employee/Leave/Document/Policy module UI — `/employees`, `/leave`,
+  `/documents`, `/policies`, `/settings` are permission-gated
+  placeholders (`EmptyState`), not functional screens.
+- No JS/TS unit test runner configured (no Jest/Vitest) — frontend
+  verification this checkpoint is: `tsc --noEmit`, `vite build`, and
+  backend feature tests asserting the Inertia response shape
+  (`assertInertia()`), redirects, and shared-prop safety. See
+  `docs/testing.md`.
+- `Sidebar.tsx`'s nav list is hardcoded in the component, not derived
+  from a backend-provided menu structure — fine for 5 static links,
+  worth revisiting if the nav grows data-driven needs (per-tenant
+  branding, feature flags, etc.).
+- No Ziggy (route-name-to-JS) — plain path strings in React. Revisit if
+  hardcoded paths become a real maintenance burden as more pages are
+  added.
+
+### Future
+
+- Real module UIs for Employees, Leave, Documents, Policies (each
+  reusing the existing `/api/v1` endpoints already built).
+- Manager/Reports/Audit nav groups and pages, once they exist.
+- A real dashboard with live counts/summaries (still no charts/analytics
+  engine planned yet — that's an explicit future decision, not assumed).
+- Frontend test tooling (Vitest + React Testing Library) if/when
+  component-level testing becomes valuable beyond the current
+  backend-response-shape verification.
+
 ## Local Demo Credentials
 
 **Local development only — these are not real secrets and only work against your own local database.** Password comes from `SEED_USER_PASSWORD` in `.env` (not committed; `.env.example` has an empty placeholder).
@@ -1694,3 +1871,5 @@ other 17 roles per tenant exist as empty placeholders for future modules.
 - **Leave Management still has no notifications or calendar integration** — see [Leave Management](#leave-management) above.
 - **Line Manager can now approve/reject leave, but direct reports only** (Checkpoint 14) — indirect (skip-level) approval is a deliberate future policy decision, not built. See [Manager-Hierarchy-Scoped Leave Approval](#manager-hierarchy-scoped-leave-approval) above.
 - **No org chart, manager self-service dashboard, or performance/probation review usage of the manager hierarchy** — see [Manager Hierarchy](#manager-hierarchy) above for the full list.
+- **No real module UI yet** — the frontend foundation (Checkpoint 16) has only a dashboard and permission-gated placeholders for Employees/Leave/Documents/Policies/Settings. See [Frontend Security Model](#frontend-security-model) above.
+- **No JS/TS unit test runner configured** — frontend verification relies on `tsc --noEmit`, `vite build`, and backend feature tests asserting Inertia response shape/shared-prop safety.

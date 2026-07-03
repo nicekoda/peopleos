@@ -3,9 +3,11 @@
 namespace App\Http\Requests\Leave;
 
 use App\Enums\LeaveTypeStatus;
+use App\Models\LeaveRequest;
 use App\Models\Tenant;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
+use Illuminate\Validation\Validator;
 
 /**
  * PATCH is deliberately narrow: only start_date/end_date/leave_type_id/
@@ -45,5 +47,26 @@ class UpdateLeaveRequestRequest extends FormRequest
             'end_date' => ['sometimes', 'required', 'date', 'after_or_equal:start_date'],
             'reason' => ['nullable', 'string', 'max:2000'],
         ];
+    }
+
+    /**
+     * Cross-year leave requests are rejected for now (Checkpoint 15,
+     * Option A) — same rule as StoreLeaveRequestRequest, falling back to
+     * the route-bound request's existing dates for whichever of
+     * start_date/end_date isn't present in this partial update.
+     */
+    public function withValidator(Validator $validator): void
+    {
+        $validator->after(function (Validator $validator): void {
+            /** @var LeaveRequest $leaveRequest */
+            $leaveRequest = $this->route('leaveRequest');
+
+            $startDate = $this->input('start_date') ?? $leaveRequest->start_date?->toDateString();
+            $endDate = $this->input('end_date') ?? $leaveRequest->end_date?->toDateString();
+
+            if ($startDate && $endDate && date('Y', strtotime($startDate)) !== date('Y', strtotime($endDate))) {
+                $validator->errors()->add('end_date', 'Leave requests cannot span more than one calendar year yet.');
+            }
+        });
     }
 }

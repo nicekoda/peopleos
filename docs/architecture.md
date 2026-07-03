@@ -479,6 +479,80 @@ recurring pattern in this app is: when an action needs a genuinely
 different authorization scope, introduce a new permission key rather
 than overload an existing one with context-dependent meaning.
 
+## Leave Balances Foundation
+
+Adds `leave_balances` (per employee/leave-type/year) and wires
+enforcement into the existing `LeaveRequestController::submit()`/
+`approve()`/`reject()`/`cancel()` actions — no new leave-request
+endpoints, this is a constraint layered onto the existing workflow. See
+[`security.md`](security.md#leave-balances-foundation) and
+[`api.md`](api.md#leave-balances) for the full design.
+
+**`available_days` is computed, never stored** — `entitlement_days +
+carried_forward_days + adjustment_days - used_days - pending_days`,
+evaluated fresh on every read (`LeaveBalance::availableDays()`). This is
+the same principle already applied to `LeaveRequest::total_days` never
+trusting client input, extended to "don't even trust your own
+denormalized cache of a value that's cheap to recompute."
+
+**Balance-controlled is opt-in per leave type, not a global switch.** A
+leave type with `max_days_per_year = null` has no balance row ever
+created for it and no enforcement at all — `LeaveBalanceService::
+isBalanceControlled()` is the single gate every workflow action checks
+before touching balance logic at all. This means the feature can be
+adopted leave-type-by-leave-type without a data migration for existing
+unlimited types.
+
+**The transaction boundary spans the balance mutation *and* the leave
+request's own status change, deliberately, not two separate
+transactions.** `DB::transaction()` wraps both in `submit()`/`approve()`/
+`reject()`/`cancel()` — a balance check/reservation failure aborts
+before the leave request's status ever changes; a status-update failure
+after a successful reservation rolls the reservation back too. This is
+the first place in the app where two different tables' writes needed to
+be atomic with each other, not just internally consistent.
+
+**Locking, not optimistic retry.** `LeaveBalanceService::findOrCreate()`
+takes a `lockForUpdate()` row lock on the balance before any read used
+for a decision (the `available_days >= requested` check). Two concurrent
+submits against the same balance serialize at the database level rather
+than racing to read a stale value — the classic "check-then-act" bug
+this pattern exists to close. The one unavoidable race (two *first-ever*
+submits for the same employee/leave-type/year, before any row exists to
+lock) is handled by catching the partial unique index's constraint
+violation and re-fetching (now lockable) instead of failing outright —
+see `LeaveBalanceService::findOrCreate()`.
+
+**`pending_days` is a shared aggregate per balance, not a per-request
+ledger** — this is why `cancel()` must know whether the specific leave
+request it's cancelling was actually `Pending` (i.e. had itself
+contributed to that aggregate via `submit()`) before calling
+`releasePending()`. Cancelling a `Draft` request must be a no-op on
+balance, because a draft never reserved anything — releasing anyway
+would silently steal reserved balance from a *different* pending
+request against the same balance row. Found and fixed during this
+checkpoint's own implementation, not by a later bug report — worth
+remembering as a general shape: any aggregate counter fed by multiple
+independent writers needs each release/consume call to verify it's
+undoing *its own* prior contribution, not just "the same field."
+
+**A cross-tenant test-fixture bug found while implementing this
+checkpoint, unrelated to leave balances specifically.** `LeaveRequestFactory`'s
+`leave_type_id => LeaveType::factory()` default creates a brand-new,
+randomly-tenanted `LeaveType` unless told otherwise — harmless as long
+as nothing ever dereferences `$leaveRequest->leaveType`. This
+checkpoint is the first code to actually load that relation from a
+real tenant-scoped request (to check `max_days_per_year`), and
+`BelongsToTenant`'s global scope silently filtered it to `null` for
+every existing test that overrode `tenant_id` without also pinning
+`leave_type_id` to the same tenant — 15 tests broke, not because of new
+behavior being wrong, but because the relation had never been
+meaningfully exercised in a tenant-scoped context before. Fixed via
+Laravel's `Factory::recycle()` at each affected call site rather than
+patching every test's fields individually — see `docs/testing.md` for
+the full explanation and why `recycle()` is the right tool for this
+class of problem going forward.
+
 ## Internal IDs vs. Public-Facing References
 
 Internal database IDs may remain bigint (see

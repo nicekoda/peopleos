@@ -91,9 +91,9 @@ class ManagerScopedLeaveApprovalTest extends TestCase
         $tenant = Tenant::factory()->create();
         [$manager, $managerEmployee] = $this->linkedUser($tenant, 'leave.view', 'leave.view_team');
         $report = Employee::factory()->create(['tenant_id' => $tenant->id, 'manager_employee_id' => $managerEmployee->id]);
-        $reportRequest = LeaveRequest::factory()->create(['tenant_id' => $tenant->id, 'employee_id' => $report->id]);
+        $reportRequest = LeaveRequest::factory()->recycle($tenant)->create(['tenant_id' => $tenant->id, 'employee_id' => $report->id]);
         $unrelated = Employee::factory()->create(['tenant_id' => $tenant->id]);
-        LeaveRequest::factory()->create(['tenant_id' => $tenant->id, 'employee_id' => $unrelated->id]);
+        LeaveRequest::factory()->recycle($tenant)->create(['tenant_id' => $tenant->id, 'employee_id' => $unrelated->id]);
 
         $response = $this->actingAs($manager)->getJson($this->url($tenant, 'leave-requests'));
 
@@ -109,7 +109,7 @@ class ManagerScopedLeaveApprovalTest extends TestCase
         $tenant = Tenant::factory()->create();
         [$manager] = $this->linkedUser($tenant, 'leave.view', 'leave.view_team');
         $unrelated = Employee::factory()->create(['tenant_id' => $tenant->id]);
-        LeaveRequest::factory()->create(['tenant_id' => $tenant->id, 'employee_id' => $unrelated->id]);
+        LeaveRequest::factory()->recycle($tenant)->create(['tenant_id' => $tenant->id, 'employee_id' => $unrelated->id]);
 
         $response = $this->actingAs($manager)->getJson($this->url($tenant, 'leave-requests'));
 
@@ -123,7 +123,7 @@ class ManagerScopedLeaveApprovalTest extends TestCase
         $tenant = Tenant::factory()->create();
         [$manager, $managerEmployee] = $this->linkedUser($tenant, 'leave.view', 'leave.view_team');
         $report = Employee::factory()->create(['tenant_id' => $tenant->id, 'manager_employee_id' => $managerEmployee->id]);
-        $leaveRequest = LeaveRequest::factory()->create(['tenant_id' => $tenant->id, 'employee_id' => $report->id]);
+        $leaveRequest = LeaveRequest::factory()->recycle($tenant)->create(['tenant_id' => $tenant->id, 'employee_id' => $report->id]);
 
         $response = $this->actingAs($manager)->getJson($this->url($tenant, "leave-requests/{$leaveRequest->id}"));
 
@@ -136,7 +136,7 @@ class ManagerScopedLeaveApprovalTest extends TestCase
         $tenant = Tenant::factory()->create();
         [$manager] = $this->linkedUser($tenant, 'leave.view', 'leave.view_team');
         $unrelated = Employee::factory()->create(['tenant_id' => $tenant->id]);
-        $leaveRequest = LeaveRequest::factory()->create(['tenant_id' => $tenant->id, 'employee_id' => $unrelated->id]);
+        $leaveRequest = LeaveRequest::factory()->recycle($tenant)->create(['tenant_id' => $tenant->id, 'employee_id' => $unrelated->id]);
 
         $response = $this->actingAs($manager)->getJson($this->url($tenant, "leave-requests/{$leaveRequest->id}"));
 
@@ -149,7 +149,7 @@ class ManagerScopedLeaveApprovalTest extends TestCase
         $tenant = Tenant::factory()->create();
         [$manager, $managerEmployee] = $this->linkedUser($tenant, 'leave.approve');
         $report = Employee::factory()->create(['tenant_id' => $tenant->id, 'manager_employee_id' => $managerEmployee->id]);
-        $leaveRequest = LeaveRequest::factory()->pending()->create(['tenant_id' => $tenant->id, 'employee_id' => $report->id]);
+        $leaveRequest = LeaveRequest::factory()->pending()->recycle($tenant)->create(['tenant_id' => $tenant->id, 'employee_id' => $report->id]);
 
         $response = $this->actingAs($manager)->postJson($this->url($tenant, "leave-requests/{$leaveRequest->id}/approve"));
 
@@ -163,7 +163,7 @@ class ManagerScopedLeaveApprovalTest extends TestCase
         $tenant = Tenant::factory()->create();
         [$manager, $managerEmployee] = $this->linkedUser($tenant, 'leave.reject');
         $report = Employee::factory()->create(['tenant_id' => $tenant->id, 'manager_employee_id' => $managerEmployee->id]);
-        $leaveRequest = LeaveRequest::factory()->pending()->create(['tenant_id' => $tenant->id, 'employee_id' => $report->id]);
+        $leaveRequest = LeaveRequest::factory()->pending()->recycle($tenant)->create(['tenant_id' => $tenant->id, 'employee_id' => $report->id]);
 
         $response = $this->actingAs($manager)->postJson($this->url($tenant, "leave-requests/{$leaveRequest->id}/reject"), [
             'rejection_reason' => 'Team is short-staffed that week.',
@@ -179,7 +179,7 @@ class ManagerScopedLeaveApprovalTest extends TestCase
         $tenant = Tenant::factory()->create();
         [$manager] = $this->linkedUser($tenant, 'leave.approve');
         $unrelated = Employee::factory()->create(['tenant_id' => $tenant->id]);
-        $leaveRequest = LeaveRequest::factory()->pending()->create(['tenant_id' => $tenant->id, 'employee_id' => $unrelated->id]);
+        $leaveRequest = LeaveRequest::factory()->pending()->recycle($tenant)->create(['tenant_id' => $tenant->id, 'employee_id' => $unrelated->id]);
 
         $response = $this->actingAs($manager)->postJson($this->url($tenant, "leave-requests/{$leaveRequest->id}/approve"));
 
@@ -193,7 +193,7 @@ class ManagerScopedLeaveApprovalTest extends TestCase
         $tenant = Tenant::factory()->create();
         [$manager] = $this->linkedUser($tenant, 'leave.reject');
         $unrelated = Employee::factory()->create(['tenant_id' => $tenant->id]);
-        $leaveRequest = LeaveRequest::factory()->pending()->create(['tenant_id' => $tenant->id, 'employee_id' => $unrelated->id]);
+        $leaveRequest = LeaveRequest::factory()->pending()->recycle($tenant)->create(['tenant_id' => $tenant->id, 'employee_id' => $unrelated->id]);
 
         $response = $this->actingAs($manager)->postJson($this->url($tenant, "leave-requests/{$leaveRequest->id}/reject"), [
             'rejection_reason' => 'Not my report.',
@@ -208,7 +208,7 @@ class ManagerScopedLeaveApprovalTest extends TestCase
     {
         $tenant = Tenant::factory()->create();
         [$manager, $managerEmployee] = $this->linkedUser($tenant, 'leave.approve');
-        $leaveRequest = LeaveRequest::factory()->pending()->create(['tenant_id' => $tenant->id, 'employee_id' => $managerEmployee->id]);
+        $leaveRequest = LeaveRequest::factory()->pending()->recycle($tenant)->create(['tenant_id' => $tenant->id, 'employee_id' => $managerEmployee->id]);
 
         $response = $this->actingAs($manager)->postJson($this->url($tenant, "leave-requests/{$leaveRequest->id}/approve"));
 
@@ -220,7 +220,7 @@ class ManagerScopedLeaveApprovalTest extends TestCase
     {
         $tenant = Tenant::factory()->create();
         [$manager, $managerEmployee] = $this->linkedUser($tenant, 'leave.reject');
-        $leaveRequest = LeaveRequest::factory()->pending()->create(['tenant_id' => $tenant->id, 'employee_id' => $managerEmployee->id]);
+        $leaveRequest = LeaveRequest::factory()->pending()->recycle($tenant)->create(['tenant_id' => $tenant->id, 'employee_id' => $managerEmployee->id]);
 
         $response = $this->actingAs($manager)->postJson($this->url($tenant, "leave-requests/{$leaveRequest->id}/reject"), [
             'rejection_reason' => 'N/A',
@@ -236,7 +236,7 @@ class ManagerScopedLeaveApprovalTest extends TestCase
         [$topManager, $topEmployee] = $this->linkedUser($tenant, 'leave.approve');
         $midManager = Employee::factory()->create(['tenant_id' => $tenant->id, 'manager_employee_id' => $topEmployee->id]);
         $grandchild = Employee::factory()->create(['tenant_id' => $tenant->id, 'manager_employee_id' => $midManager->id]);
-        $leaveRequest = LeaveRequest::factory()->pending()->create(['tenant_id' => $tenant->id, 'employee_id' => $grandchild->id]);
+        $leaveRequest = LeaveRequest::factory()->pending()->recycle($tenant)->create(['tenant_id' => $tenant->id, 'employee_id' => $grandchild->id]);
 
         $response = $this->actingAs($topManager)->postJson($this->url($tenant, "leave-requests/{$leaveRequest->id}/approve"));
 
@@ -251,7 +251,7 @@ class ManagerScopedLeaveApprovalTest extends TestCase
         [$topManager, $topEmployee] = $this->linkedUser($tenant, 'leave.reject');
         $midManager = Employee::factory()->create(['tenant_id' => $tenant->id, 'manager_employee_id' => $topEmployee->id]);
         $grandchild = Employee::factory()->create(['tenant_id' => $tenant->id, 'manager_employee_id' => $midManager->id]);
-        $leaveRequest = LeaveRequest::factory()->pending()->create(['tenant_id' => $tenant->id, 'employee_id' => $grandchild->id]);
+        $leaveRequest = LeaveRequest::factory()->pending()->recycle($tenant)->create(['tenant_id' => $tenant->id, 'employee_id' => $grandchild->id]);
 
         $response = $this->actingAs($topManager)->postJson($this->url($tenant, "leave-requests/{$leaveRequest->id}/reject"), [
             'rejection_reason' => 'Not a direct report.',
@@ -267,7 +267,7 @@ class ManagerScopedLeaveApprovalTest extends TestCase
         $tenant = Tenant::factory()->create();
         $hrAdmin = $this->userWithPermissions($tenant, 'leave.approve', 'leave.view_all');
         $employee = Employee::factory()->create(['tenant_id' => $tenant->id]);
-        $leaveRequest = LeaveRequest::factory()->pending()->create(['tenant_id' => $tenant->id, 'employee_id' => $employee->id]);
+        $leaveRequest = LeaveRequest::factory()->pending()->recycle($tenant)->create(['tenant_id' => $tenant->id, 'employee_id' => $employee->id]);
 
         $response = $this->actingAs($hrAdmin)->postJson($this->url($tenant, "leave-requests/{$leaveRequest->id}/approve"));
 
@@ -279,7 +279,7 @@ class ManagerScopedLeaveApprovalTest extends TestCase
     {
         $tenant = Tenant::factory()->create();
         [$hrAdmin, $employee] = $this->linkedUser($tenant, 'leave.approve', 'leave.view_all');
-        $leaveRequest = LeaveRequest::factory()->pending()->create(['tenant_id' => $tenant->id, 'employee_id' => $employee->id]);
+        $leaveRequest = LeaveRequest::factory()->pending()->recycle($tenant)->create(['tenant_id' => $tenant->id, 'employee_id' => $employee->id]);
 
         $response = $this->actingAs($hrAdmin)->postJson($this->url($tenant, "leave-requests/{$leaveRequest->id}/approve"));
 
@@ -292,7 +292,7 @@ class ManagerScopedLeaveApprovalTest extends TestCase
         $tenant = Tenant::factory()->create();
         $hrAdmin = $this->userWithPermissions($tenant, 'leave.reject', 'leave.view_all');
         $employee = Employee::factory()->create(['tenant_id' => $tenant->id]);
-        $leaveRequest = LeaveRequest::factory()->pending()->create(['tenant_id' => $tenant->id, 'employee_id' => $employee->id]);
+        $leaveRequest = LeaveRequest::factory()->pending()->recycle($tenant)->create(['tenant_id' => $tenant->id, 'employee_id' => $employee->id]);
 
         $response = $this->actingAs($hrAdmin)->postJson($this->url($tenant, "leave-requests/{$leaveRequest->id}/reject"), [
             'rejection_reason' => 'Policy conflict.',
@@ -306,7 +306,7 @@ class ManagerScopedLeaveApprovalTest extends TestCase
     {
         $tenant = Tenant::factory()->create();
         [$hrAdmin, $employee] = $this->linkedUser($tenant, 'leave.reject', 'leave.view_all');
-        $leaveRequest = LeaveRequest::factory()->pending()->create(['tenant_id' => $tenant->id, 'employee_id' => $employee->id]);
+        $leaveRequest = LeaveRequest::factory()->pending()->recycle($tenant)->create(['tenant_id' => $tenant->id, 'employee_id' => $employee->id]);
 
         $response = $this->actingAs($hrAdmin)->postJson($this->url($tenant, "leave-requests/{$leaveRequest->id}/reject"), [
             'rejection_reason' => 'N/A',
@@ -325,7 +325,7 @@ class ManagerScopedLeaveApprovalTest extends TestCase
         $tenant = Tenant::factory()->create();
         $user = $this->userWithPermissions($tenant, 'leave.approve');
         $employee = Employee::factory()->create(['tenant_id' => $tenant->id]);
-        $leaveRequest = LeaveRequest::factory()->pending()->create(['tenant_id' => $tenant->id, 'employee_id' => $employee->id]);
+        $leaveRequest = LeaveRequest::factory()->pending()->recycle($tenant)->create(['tenant_id' => $tenant->id, 'employee_id' => $employee->id]);
 
         $response = $this->actingAs($user)->postJson($this->url($tenant, "leave-requests/{$leaveRequest->id}/approve"));
 
@@ -341,7 +341,7 @@ class ManagerScopedLeaveApprovalTest extends TestCase
         $tenant = Tenant::factory()->create();
         $user = $this->userWithPermissions($tenant, 'leave.reject');
         $employee = Employee::factory()->create(['tenant_id' => $tenant->id]);
-        $leaveRequest = LeaveRequest::factory()->pending()->create(['tenant_id' => $tenant->id, 'employee_id' => $employee->id]);
+        $leaveRequest = LeaveRequest::factory()->pending()->recycle($tenant)->create(['tenant_id' => $tenant->id, 'employee_id' => $employee->id]);
 
         $response = $this->actingAs($user)->postJson($this->url($tenant, "leave-requests/{$leaveRequest->id}/reject"), [
             'rejection_reason' => 'Trying anyway.',
@@ -357,7 +357,7 @@ class ManagerScopedLeaveApprovalTest extends TestCase
         $tenant = Tenant::factory()->create();
         $user = $this->userWithPermissions($tenant, 'leave.approve');
         $employee = Employee::factory()->create(['tenant_id' => $tenant->id]);
-        $leaveRequest = LeaveRequest::factory()->pending()->create(['tenant_id' => $tenant->id, 'employee_id' => $employee->id]);
+        $leaveRequest = LeaveRequest::factory()->pending()->recycle($tenant)->create(['tenant_id' => $tenant->id, 'employee_id' => $employee->id]);
 
         $response = $this->actingAs($user)->postJson($this->url($tenant, "leave-requests/{$leaveRequest->id}/approve"));
 
@@ -384,7 +384,7 @@ class ManagerScopedLeaveApprovalTest extends TestCase
         $tenant = Tenant::factory()->create();
         [$manager, $managerEmployee] = $this->linkedUser($tenant, 'leave.approve');
         $report = Employee::factory()->create(['tenant_id' => $tenant->id, 'manager_employee_id' => $managerEmployee->id]);
-        $leaveRequest = LeaveRequest::factory()->pending()->create(['tenant_id' => $tenant->id, 'employee_id' => $report->id]);
+        $leaveRequest = LeaveRequest::factory()->pending()->recycle($tenant)->create(['tenant_id' => $tenant->id, 'employee_id' => $report->id]);
 
         $this->actingAs($manager)->postJson($this->url($tenant, "leave-requests/{$leaveRequest->id}/approve"))->assertOk();
 
@@ -403,7 +403,7 @@ class ManagerScopedLeaveApprovalTest extends TestCase
         $tenant = Tenant::factory()->create();
         $hrAdmin = $this->userWithPermissions($tenant, 'leave.reject', 'leave.view_all');
         $employee = Employee::factory()->create(['tenant_id' => $tenant->id]);
-        $leaveRequest = LeaveRequest::factory()->pending()->create(['tenant_id' => $tenant->id, 'employee_id' => $employee->id]);
+        $leaveRequest = LeaveRequest::factory()->pending()->recycle($tenant)->create(['tenant_id' => $tenant->id, 'employee_id' => $employee->id]);
 
         $this->actingAs($hrAdmin)->postJson($this->url($tenant, "leave-requests/{$leaveRequest->id}/reject"), [
             'rejection_reason' => 'Blackout period.',
@@ -421,7 +421,7 @@ class ManagerScopedLeaveApprovalTest extends TestCase
         $tenant = Tenant::factory()->create();
         $hrAdmin = $this->userWithPermissions($tenant, 'leave.reject', 'leave.view_all');
         $employee = Employee::factory()->create(['tenant_id' => $tenant->id]);
-        $leaveRequest = LeaveRequest::factory()->pending()->create(['tenant_id' => $tenant->id, 'employee_id' => $employee->id]);
+        $leaveRequest = LeaveRequest::factory()->pending()->recycle($tenant)->create(['tenant_id' => $tenant->id, 'employee_id' => $employee->id]);
         $secretReason = 'Recovering from surgery.';
 
         $this->actingAs($hrAdmin)->postJson($this->url($tenant, "leave-requests/{$leaveRequest->id}/reject"), [
@@ -458,7 +458,7 @@ class ManagerScopedLeaveApprovalTest extends TestCase
         [$manager, $managerEmployee] = $this->linkedUser($tenant, 'leave.approve');
         $manager->update(['status' => User::STATUS_INACTIVE]);
         $report = Employee::factory()->create(['tenant_id' => $tenant->id, 'manager_employee_id' => $managerEmployee->id]);
-        $leaveRequest = LeaveRequest::factory()->pending()->create(['tenant_id' => $tenant->id, 'employee_id' => $report->id]);
+        $leaveRequest = LeaveRequest::factory()->pending()->recycle($tenant)->create(['tenant_id' => $tenant->id, 'employee_id' => $report->id]);
 
         $response = $this->actingAs($manager)->postJson($this->url($tenant, "leave-requests/{$leaveRequest->id}/approve"));
 
@@ -470,7 +470,7 @@ class ManagerScopedLeaveApprovalTest extends TestCase
         $tenant = Tenant::factory()->create();
         [$manager, $managerEmployee] = $this->linkedUser($tenant, 'leave.approve');
         $report = Employee::factory()->create(['tenant_id' => $tenant->id, 'manager_employee_id' => $managerEmployee->id]);
-        $leaveRequest = LeaveRequest::factory()->pending()->create(['tenant_id' => $tenant->id, 'employee_id' => $report->id]);
+        $leaveRequest = LeaveRequest::factory()->pending()->recycle($tenant)->create(['tenant_id' => $tenant->id, 'employee_id' => $report->id]);
         $tenant->update(['status' => Tenant::STATUS_SUSPENDED]);
 
         $response = $this->actingAs($manager)->postJson($this->url($tenant, "leave-requests/{$leaveRequest->id}/approve"));

@@ -8,16 +8,19 @@ use App\Http\Requests\Leave\RejectLeaveRequestRequest;
 use App\Http\Requests\Leave\StoreLeaveRequestRequest;
 use App\Http\Requests\Leave\UpdateLeaveRequestRequest;
 use App\Http\Resources\LeaveRequestResource;
+use App\Models\LeaveBalance;
 use App\Models\LeaveRequest;
 use App\Models\Tenant;
 use App\Models\User;
 use App\Services\Audit\AuditLogger;
+use App\Services\LeaveBalanceService;
 use App\Services\ManagerHierarchyService;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
 use Illuminate\Pagination\LengthAwarePaginator;
+use Illuminate\Support\Facades\DB;
 
 class LeaveRequestController extends Controller
 {
@@ -166,31 +169,68 @@ class LeaveRequestController extends Controller
         return new LeaveRequestResource($leaveRequest);
     }
 
+    /**
+     * Balance enforcement happens here, not at store() — a draft never
+     * touches balance (Checkpoint 15). If the leave type is balance-
+     * controlled (leave_types.max_days_per_year is set), this reserves
+     * total_days into pending_days, rejecting the submission (422,
+     * before the leave request's own status ever changes) if
+     * insufficient balance is available. Everything — the balance
+     * lookup/lock, the reservation, and the leave request's status
+     * change — happens inside one DB transaction (Refinement 3), so a
+     * failure at any point rolls back the whole thing, not just part of
+     * it.
+     */
     public function submit(Request $request, LeaveRequest $leaveRequest): LeaveRequestResource
     {
         $this->ensureBelongsToCurrentTenant($leaveRequest);
         $this->ensureOwnLeaveRequest($request, $leaveRequest);
         $this->ensureTransitionAllowed($leaveRequest, LeaveRequestStatus::Pending);
 
-        $leaveRequest->update([
-            'status' => LeaveRequestStatus::Pending,
-            'submitted_at' => now(),
-            'updated_by' => $request->user()->id,
-        ]);
+        $balanceService = app(LeaveBalanceService::class);
+        $leaveType = $leaveRequest->leaveType;
 
-        AuditLogger::logFor(
-            actor: $request->user(),
-            action: 'leave_request.submitted',
-            module: 'leave',
-            tenantId: $leaveRequest->tenant_id,
-            auditableType: LeaveRequest::class,
-            auditableId: $leaveRequest->id,
-            description: 'Leave request submitted for approval.',
-            newValues: ['status' => LeaveRequestStatus::Pending->value],
-            metadata: ['employee_id' => $leaveRequest->employee_id, 'leave_type_id' => $leaveRequest->leave_type_id],
-            ipAddress: $request->ip(),
-            userAgent: $request->userAgent(),
-        );
+        DB::transaction(function () use ($request, $leaveRequest, $balanceService, $leaveType) {
+            $balance = null;
+
+            if ($balanceService->isBalanceControlled($leaveType)) {
+                $balance = $balanceService->findOrCreate($leaveRequest->employee, $leaveType, $leaveRequest->start_date->year, $request->user());
+                $oldPending = (float) $balance->pending_days;
+
+                $reserved = $balanceService->reservePending($balance, (float) $leaveRequest->total_days);
+                abort_unless($reserved, 422, 'Insufficient leave balance available for the requested dates.');
+
+                $this->logBalanceAudit(
+                    action: 'leave_balance.pending_reserved',
+                    balance: $balance,
+                    leaveRequest: $leaveRequest,
+                    days: (float) $leaveRequest->total_days,
+                    oldPending: $oldPending,
+                    actor: $request->user(),
+                    request: $request,
+                );
+            }
+
+            $leaveRequest->update([
+                'status' => LeaveRequestStatus::Pending,
+                'submitted_at' => now(),
+                'updated_by' => $request->user()->id,
+            ]);
+
+            AuditLogger::logFor(
+                actor: $request->user(),
+                action: 'leave_request.submitted',
+                module: 'leave',
+                tenantId: $leaveRequest->tenant_id,
+                auditableType: LeaveRequest::class,
+                auditableId: $leaveRequest->id,
+                description: 'Leave request submitted for approval.',
+                newValues: ['status' => LeaveRequestStatus::Pending->value],
+                metadata: ['employee_id' => $leaveRequest->employee_id, 'leave_type_id' => $leaveRequest->leave_type_id],
+                ipAddress: $request->ip(),
+                userAgent: $request->userAgent(),
+            );
+        });
 
         return new LeaveRequestResource($leaveRequest->fresh());
     }
@@ -212,27 +252,52 @@ class LeaveRequestController extends Controller
         $this->ensureTransitionAllowed($leaveRequest, LeaveRequestStatus::Approved);
 
         $oldStatus = $leaveRequest->status->value;
+        $balanceService = app(LeaveBalanceService::class);
+        $leaveType = $leaveRequest->leaveType;
 
-        $leaveRequest->update([
-            'status' => LeaveRequestStatus::Approved,
-            'approved_by' => $request->user()->id,
-            'approved_at' => now(),
-            'updated_by' => $request->user()->id,
-        ]);
+        DB::transaction(function () use ($request, $leaveRequest, $balanceService, $leaveType, $scope, $oldStatus) {
+            if ($balanceService->isBalanceControlled($leaveType)) {
+                // Only reached from Pending (ensureTransitionAllowed above),
+                // so pending_days already reflects this request's own
+                // reservation from submit() — consumePending() moves
+                // exactly that amount into used_days (Refinement 2).
+                $balance = $balanceService->findOrCreate($leaveRequest->employee, $leaveType, $leaveRequest->start_date->year, $request->user());
+                $oldPending = (float) $balance->pending_days;
 
-        AuditLogger::logFor(
-            actor: $request->user(),
-            action: 'leave_request.approved',
-            module: 'leave',
-            tenantId: $leaveRequest->tenant_id,
-            auditableType: LeaveRequest::class,
-            auditableId: $leaveRequest->id,
-            description: "Leave request approved ({$scope}).",
-            newValues: ['status' => LeaveRequestStatus::Approved->value],
-            metadata: $this->approvalAuditMetadata($request, $leaveRequest, $scope, $oldStatus, LeaveRequestStatus::Approved->value),
-            ipAddress: $request->ip(),
-            userAgent: $request->userAgent(),
-        );
+                $balanceService->consumePending($balance, (float) $leaveRequest->total_days);
+
+                $this->logBalanceAudit(
+                    action: 'leave_balance.used_recorded',
+                    balance: $balance,
+                    leaveRequest: $leaveRequest,
+                    days: (float) $leaveRequest->total_days,
+                    oldPending: $oldPending,
+                    actor: $request->user(),
+                    request: $request,
+                );
+            }
+
+            $leaveRequest->update([
+                'status' => LeaveRequestStatus::Approved,
+                'approved_by' => $request->user()->id,
+                'approved_at' => now(),
+                'updated_by' => $request->user()->id,
+            ]);
+
+            AuditLogger::logFor(
+                actor: $request->user(),
+                action: 'leave_request.approved',
+                module: 'leave',
+                tenantId: $leaveRequest->tenant_id,
+                auditableType: LeaveRequest::class,
+                auditableId: $leaveRequest->id,
+                description: "Leave request approved ({$scope}).",
+                newValues: ['status' => LeaveRequestStatus::Approved->value],
+                metadata: $this->approvalAuditMetadata($request, $leaveRequest, $scope, $oldStatus, LeaveRequestStatus::Approved->value),
+                ipAddress: $request->ip(),
+                userAgent: $request->userAgent(),
+            );
+        });
 
         return new LeaveRequestResource($leaveRequest->fresh());
     }
@@ -246,35 +311,56 @@ class LeaveRequestController extends Controller
         $this->ensureTransitionAllowed($leaveRequest, LeaveRequestStatus::Rejected);
 
         $oldStatus = $leaveRequest->status->value;
+        $balanceService = app(LeaveBalanceService::class);
+        $leaveType = $leaveRequest->leaveType;
 
-        $leaveRequest->update([
-            'status' => LeaveRequestStatus::Rejected,
-            'rejected_by' => $request->user()->id,
-            'rejected_at' => now(),
-            'rejection_reason' => $request->validated('rejection_reason'),
-            'updated_by' => $request->user()->id,
-        ]);
+        DB::transaction(function () use ($request, $leaveRequest, $balanceService, $leaveType, $scope, $oldStatus) {
+            if ($balanceService->isBalanceControlled($leaveType)) {
+                $balance = $balanceService->findOrCreate($leaveRequest->employee, $leaveType, $leaveRequest->start_date->year, $request->user());
+                $oldPending = (float) $balance->pending_days;
 
-        AuditLogger::logFor(
-            actor: $request->user(),
-            action: 'leave_request.rejected',
-            module: 'leave',
-            tenantId: $leaveRequest->tenant_id,
-            auditableType: LeaveRequest::class,
-            auditableId: $leaveRequest->id,
-            description: "Leave request rejected ({$scope}).",
-            // rejection_reason is deliberately included here — it's
-            // auto-masked by AuditLogger's sensitive-key patterns (see
-            // app/Services/Audit/AuditLogger.php), the same defense-in-
-            // depth posture used everywhere else, not caller discipline.
-            // approval_scope/old_status/new_status live in metadata
-            // (never masked, never sensitive) — see
-            // approvalAuditMetadata().
-            newValues: $leaveRequest->only(['status', 'rejection_reason']),
-            metadata: $this->approvalAuditMetadata($request, $leaveRequest, $scope, $oldStatus, LeaveRequestStatus::Rejected->value),
-            ipAddress: $request->ip(),
-            userAgent: $request->userAgent(),
-        );
+                $balanceService->releasePending($balance, (float) $leaveRequest->total_days);
+
+                $this->logBalanceAudit(
+                    action: 'leave_balance.pending_released',
+                    balance: $balance,
+                    leaveRequest: $leaveRequest,
+                    days: (float) $leaveRequest->total_days,
+                    oldPending: $oldPending,
+                    actor: $request->user(),
+                    request: $request,
+                );
+            }
+
+            $leaveRequest->update([
+                'status' => LeaveRequestStatus::Rejected,
+                'rejected_by' => $request->user()->id,
+                'rejected_at' => now(),
+                'rejection_reason' => $request->validated('rejection_reason'),
+                'updated_by' => $request->user()->id,
+            ]);
+
+            AuditLogger::logFor(
+                actor: $request->user(),
+                action: 'leave_request.rejected',
+                module: 'leave',
+                tenantId: $leaveRequest->tenant_id,
+                auditableType: LeaveRequest::class,
+                auditableId: $leaveRequest->id,
+                description: "Leave request rejected ({$scope}).",
+                // rejection_reason is deliberately included here — it's
+                // auto-masked by AuditLogger's sensitive-key patterns (see
+                // app/Services/Audit/AuditLogger.php), the same defense-in-
+                // depth posture used everywhere else, not caller discipline.
+                // approval_scope/old_status/new_status live in metadata
+                // (never masked, never sensitive) — see
+                // approvalAuditMetadata().
+                newValues: $leaveRequest->only(['status', 'rejection_reason']),
+                metadata: $this->approvalAuditMetadata($request, $leaveRequest, $scope, $oldStatus, LeaveRequestStatus::Rejected->value),
+                ipAddress: $request->ip(),
+                userAgent: $request->userAgent(),
+            );
+        });
 
         return new LeaveRequestResource($leaveRequest->fresh());
     }
@@ -343,26 +429,56 @@ class LeaveRequestController extends Controller
         $this->ensureOwnLeaveRequest($request, $leaveRequest);
         $this->ensureTransitionAllowed($leaveRequest, LeaveRequestStatus::Cancelled);
 
-        $leaveRequest->update([
-            'status' => LeaveRequestStatus::Cancelled,
-            'cancelled_by' => $request->user()->id,
-            'cancelled_at' => now(),
-            'updated_by' => $request->user()->id,
-        ]);
+        // Balance is only released if this request was actually Pending
+        // (i.e. it went through submit() and reserved balance) — a draft
+        // never reserved anything, so cancelling a draft must not touch
+        // balance at all (goal #1). pending_days is a shared aggregate
+        // per employee/leave-type/year, not a per-request ledger, so
+        // "releasing" for a request that never reserved would corrupt a
+        // different pending request's reservation on the same balance.
+        $wasPending = $leaveRequest->status === LeaveRequestStatus::Pending;
+        $balanceService = app(LeaveBalanceService::class);
+        $leaveType = $leaveRequest->leaveType;
 
-        AuditLogger::logFor(
-            actor: $request->user(),
-            action: 'leave_request.cancelled',
-            module: 'leave',
-            tenantId: $leaveRequest->tenant_id,
-            auditableType: LeaveRequest::class,
-            auditableId: $leaveRequest->id,
-            description: 'Leave request cancelled.',
-            newValues: ['status' => LeaveRequestStatus::Cancelled->value],
-            metadata: ['employee_id' => $leaveRequest->employee_id, 'leave_type_id' => $leaveRequest->leave_type_id],
-            ipAddress: $request->ip(),
-            userAgent: $request->userAgent(),
-        );
+        DB::transaction(function () use ($request, $leaveRequest, $balanceService, $leaveType, $wasPending) {
+            if ($wasPending && $balanceService->isBalanceControlled($leaveType)) {
+                $balance = $balanceService->findOrCreate($leaveRequest->employee, $leaveType, $leaveRequest->start_date->year, $request->user());
+                $oldPending = (float) $balance->pending_days;
+
+                $balanceService->releasePending($balance, (float) $leaveRequest->total_days);
+
+                $this->logBalanceAudit(
+                    action: 'leave_balance.pending_released',
+                    balance: $balance,
+                    leaveRequest: $leaveRequest,
+                    days: (float) $leaveRequest->total_days,
+                    oldPending: $oldPending,
+                    actor: $request->user(),
+                    request: $request,
+                );
+            }
+
+            $leaveRequest->update([
+                'status' => LeaveRequestStatus::Cancelled,
+                'cancelled_by' => $request->user()->id,
+                'cancelled_at' => now(),
+                'updated_by' => $request->user()->id,
+            ]);
+
+            AuditLogger::logFor(
+                actor: $request->user(),
+                action: 'leave_request.cancelled',
+                module: 'leave',
+                tenantId: $leaveRequest->tenant_id,
+                auditableType: LeaveRequest::class,
+                auditableId: $leaveRequest->id,
+                description: 'Leave request cancelled.',
+                newValues: ['status' => LeaveRequestStatus::Cancelled->value],
+                metadata: ['employee_id' => $leaveRequest->employee_id, 'leave_type_id' => $leaveRequest->leave_type_id],
+                ipAddress: $request->ip(),
+                userAgent: $request->userAgent(),
+            );
+        });
 
         return new LeaveRequestResource($leaveRequest->fresh());
     }
@@ -485,6 +601,39 @@ class LeaveRequestController extends Controller
             $leaveRequest->status->canTransitionTo($target),
             409,
             "Cannot transition leave request from '{$leaveRequest->status->value}' to '{$target->value}'.",
+        );
+    }
+
+    /**
+     * Safe metadata only (Refinement 4) — IDs, the year, the day delta,
+     * and old/new pending_days, never employee names or leave reason
+     * text. One log entry per balance-affecting workflow step
+     * (leave_balance.pending_reserved/used_recorded/pending_released),
+     * separate from the leave_request.* lifecycle event already logged
+     * alongside it in the same transaction.
+     */
+    private function logBalanceAudit(string $action, LeaveBalance $balance, LeaveRequest $leaveRequest, float $days, float $oldPending, User $actor, Request $request): void
+    {
+        AuditLogger::logFor(
+            actor: $actor,
+            action: $action,
+            module: 'leave',
+            tenantId: $balance->tenant_id,
+            auditableType: LeaveBalance::class,
+            auditableId: $balance->id,
+            description: "Leave balance {$action} for leave request.",
+            metadata: [
+                'leave_balance_id' => $balance->id,
+                'leave_request_id' => $leaveRequest->id,
+                'employee_id' => $leaveRequest->employee_id,
+                'leave_type_id' => $leaveRequest->leave_type_id,
+                'year' => $balance->year,
+                'days' => $days,
+                'old_pending_days' => $oldPending,
+                'new_pending_days' => (float) $balance->pending_days,
+            ],
+            ipAddress: $request->ip(),
+            userAgent: $request->userAgent(),
         );
     }
 }

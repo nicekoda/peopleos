@@ -294,6 +294,77 @@ authorization logic, re-run the affected module's full test suite before
 writing any new tests, and fix what breaks by adding the *now-required*
 permission to the fixture, not by loosening the new check.
 
+## A nested-factory tenant-scoping trap, and `Factory::recycle()` as the fix (Checkpoint 15)
+
+`LeaveRequestFactory`'s `leave_type_id => LeaveType::factory()` default
+creates a brand-new `LeaveType` belonging to its **own** randomly
+generated `Tenant` — not the tenant of whatever `tenant_id` override you
+pass to `LeaveRequest::factory()->create([...])`. This is harmless right
+up until something actually dereferences the relation
+(`$leaveRequest->leaveType`) from within a real tenant-scoped request:
+`BelongsToTenant`'s global scope then silently filters the mismatched
+leave type out, and the relation resolves to `null`.
+
+This checkpoint's `submit()`/`approve()`/`reject()`/`cancel()` are the
+first code to actually load `->leaveType()` this way (to check
+`max_days_per_year`), and it broke 15 existing tests across
+`LeaveRequestApiTest` and `ManagerScopedLeaveApprovalTest` — every one
+of them created a `LeaveRequest` with an explicit `tenant_id` override
+but no matching `leave_type_id` override, so the factory silently
+created an orphaned-relationship fixture that had simply never been
+exercised before.
+
+**The fix: `Factory::recycle($tenant)`, not touching 50 individual call
+sites.** Laravel's `recycle()` tells a factory "when resolving any
+nested factory default for this model class, reuse this specific
+instance instead of creating a new one" — it cascades through the whole
+dependency tree for that `create()` call, so
+`LeaveRequest::factory()->recycle($tenant)->create(['tenant_id' =>
+$tenant->id, ...])` makes the nested `LeaveType::factory()` (and
+`Employee::factory()`, if not otherwise overridden) reuse `$tenant`
+instead of generating their own. This is the general answer whenever a
+factory's default nests another factory that itself defaults to a new
+`Tenant::factory()` — reach for `recycle()` rather than overriding every
+nested relation's fields by hand at every call site.
+
+**Takeaway for future checkpoints**: any new relation dereferenced for
+the first time from inside a real (not just unit-tested-in-isolation)
+tenant-scoped code path is worth checking against existing test fixtures
+built with partial `tenant_id` overrides — the mismatch is silent until
+something actually loads the relation.
+
+## Testing balance enforcement: locking, idempotency, and rollback (Checkpoint 15)
+
+- **Test concurrency protection with a *sequential* two-submit scenario,
+  not a literal concurrent one.** `test_balance_reservation_uses_locking_and_prevents_overspend`
+  doesn't spin up parallel requests — it submits two draft requests one
+  after another against a 5-day balance (3 + 3 days) and asserts the
+  second is rejected. This doesn't prove the lock prevents a true race
+  under real concurrency, but it does prove the *arithmetic* correctly
+  rejects overspend once the first reservation is committed — the
+  `lockForUpdate()` mechanism itself is a well-established Postgres/
+  MySQL primitive, not something this app needs to reprove from
+  scratch; what's worth testing here is that the application logic
+  actually uses the freshly-locked value rather than a stale one.
+- **Test the rollback claim directly (Refinement 8), not just the
+  error status code.** `test_submit_exceeding_available_balance_is_rejected`
+  asserts both the `422` response *and* that `$leaveRequest->fresh()->status`
+  is still `draft` — a bug that changed the leave request's status
+  before checking balance (or that failed to roll back a partial write)
+  would still return `422` from the balance check but leave the request
+  incorrectly `pending`. The status code alone wouldn't have caught that.
+- **Test the specific idempotency failure mode, not just "the happy
+  path works twice."** `test_invalid_status_transition_does_not_change_balance`
+  approves a request, then approves it *again*, and asserts `used_days`
+  didn't double — this is the concrete manifestation of "an already-
+  approved request must not consume balance again" from Refinement 1,
+  more convincing than asserting the second call merely returns `409`.
+- **Test that a no-op path is actually a no-op, not just unreachable.**
+  `test_cancel_draft_request_does_not_affect_balance` confirms cancelling
+  a `draft` (which never reserved anything) leaves no `leave_balances`
+  row created at all — proving the "was this request actually pending"
+  check in `cancel()` does something, not merely that it doesn't crash.
+
 ## Verifying against the real app, not just the test suite
 
 Because of the SQLite/Postgres split above, checkpoints in this project

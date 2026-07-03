@@ -6,6 +6,7 @@ use App\Http\Controllers\Api\V1\EmployeeDocumentController;
 use App\Http\Controllers\Api\V1\EmployeeHierarchyController;
 use App\Http\Controllers\Api\V1\EmployeeManagerController;
 use App\Http\Controllers\Api\V1\EmployeeUserLinkController;
+use App\Http\Controllers\Api\V1\LeaveBalanceController;
 use App\Http\Controllers\Api\V1\LeaveRequestController;
 use App\Http\Controllers\Api\V1\LeaveTypeController;
 use App\Http\Controllers\Api\V1\MeController;
@@ -77,6 +78,9 @@ Route::middleware(['auth', 'tenant.matches'])->prefix('api/v1')->group(function 
     // linked employee's direct reports, never anyone else's. See
     // docs/security.md.
     Route::get('me/direct-reports', [MeController::class, 'directReports']);
+    // Also no specific permission — scoped only to the caller's own
+    // linked employee's leave balances, never anyone else's.
+    Route::get('me/leave-balances', [MeController::class, 'leaveBalances']);
 
     Route::patch('employees/{employee}/manager', [EmployeeManagerController::class, 'update'])->middleware('permission:employees.update_manager');
     Route::delete('employees/{employee}/manager', [EmployeeManagerController::class, 'destroy'])->middleware('permission:employees.update_manager');
@@ -103,4 +107,15 @@ Route::middleware(['auth', 'tenant.matches'])->prefix('api/v1')->group(function 
     Route::post('leave-requests/{leaveRequest}/approve', [LeaveRequestController::class, 'approve'])->middleware('permission:leave.approve');
     Route::post('leave-requests/{leaveRequest}/reject', [LeaveRequestController::class, 'reject'])->middleware('permission:leave.reject');
     Route::post('leave-requests/{leaveRequest}/cancel', [LeaveRequestController::class, 'cancel'])->middleware('permission:leave.cancel');
+
+    // index() requires view_all (tenant-wide list) — there's no
+    // "admin's own balance" concept the way there is for leave requests;
+    // self-service is exclusively through GET /me/leave-balances.
+    // update() requires leave_balances.adjust in addition, only when
+    // adjustment_days is present in the body — checked in the
+    // controller, not expressible as route middleware.
+    Route::get('leave-balances', [LeaveBalanceController::class, 'index'])->middleware('permission:leave_balances.view_all');
+    Route::post('leave-balances', [LeaveBalanceController::class, 'store'])->middleware('permission:leave_balances.create');
+    Route::get('leave-balances/{leaveBalance}', [LeaveBalanceController::class, 'show'])->middleware('permission:leave_balances.view');
+    Route::patch('leave-balances/{leaveBalance}', [LeaveBalanceController::class, 'update'])->middleware('permission:leave_balances.update');
 });

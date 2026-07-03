@@ -6,6 +6,7 @@ use App\Enums\LeaveTypeStatus;
 use App\Models\Tenant;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
+use Illuminate\Validation\Validator;
 
 /**
  * Deliberately has no employee_id field. This checkpoint's leave request
@@ -47,5 +48,24 @@ class StoreLeaveRequestRequest extends FormRequest
             'end_date' => ['required', 'date', 'after_or_equal:start_date'],
             'reason' => ['nullable', 'string', 'max:2000'],
         ];
+    }
+
+    /**
+     * Cross-year leave requests are rejected for now (Checkpoint 15,
+     * Option A) — the balance year rule uses the request's start_date
+     * year only; a request spanning two years would need its days split
+     * across two different leave_balances rows, which isn't built. See
+     * docs/security.md.
+     */
+    public function withValidator(Validator $validator): void
+    {
+        $validator->after(function (Validator $validator): void {
+            $startDate = $this->input('start_date');
+            $endDate = $this->input('end_date');
+
+            if ($startDate && $endDate && date('Y', strtotime($startDate)) !== date('Y', strtotime($endDate))) {
+                $validator->errors()->add('end_date', 'Leave requests cannot span more than one calendar year yet.');
+            }
+        });
     }
 }

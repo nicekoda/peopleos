@@ -99,6 +99,11 @@ class RoleSeeder extends Seeder
             // Manager hierarchy (Checkpoint 13) — both, per your
             // explicit suggested mapping.
             'employees.view_team', 'employees.update_manager',
+            // Leave balances (Checkpoint 15) — all, per your explicit
+            // suggested mapping ("HR Manager: all leave balance
+            // permissions").
+            'leave_balances.view', 'leave_balances.create', 'leave_balances.update',
+            'leave_balances.adjust', 'leave_balances.view_all',
         ]);
 
         $this->grantByKeys($roles['Employee'], [
@@ -130,12 +135,19 @@ class RoleSeeder extends Seeder
             // shown, same reasoning already applied to withholding
             // employees.link_user from HR Officer in Checkpoint 11.
             'employees.view_team',
+            // Leave balances (Checkpoint 15) — "view, view_all, create,
+            // update, adjust if appropriate" per your suggested mapping;
+            // granting all, consistent with HR Officer already holding
+            // broad policy/leave permissions elsewhere.
+            'leave_balances.view', 'leave_balances.create', 'leave_balances.update',
+            'leave_balances.adjust', 'leave_balances.view_all',
         ]);
 
         $this->grantByKeys($roles['Auditor'], [
             'policies.view', 'policies.view_acknowledgements',
             'leave.view', 'leave.view_all',
             'employees.view_team',
+            'leave_balances.view', 'leave_balances.view_all',
         ]);
 
         // Line Manager (Checkpoint 13: employees.view_team only).

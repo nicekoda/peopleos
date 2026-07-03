@@ -4,6 +4,8 @@ namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Controllers\Controller;
 use App\Http\Resources\EmployeeResource;
+use App\Http\Resources\LeaveBalanceResource;
+use App\Models\LeaveBalance;
 use App\Services\ManagerHierarchyService;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
@@ -50,5 +52,28 @@ class MeController extends Controller
         $reports = app(ManagerHierarchyService::class)->directReportsOf($employee);
 
         return EmployeeResource::collection($reports);
+    }
+
+    /**
+     * Self-service, no permission required — scoped exclusively to the
+     * caller's own linked employee's balances. A caller with no linked
+     * employee gets an empty list (200), same posture as
+     * directReports() above, not /me/employee's 404 — see
+     * docs/security.md.
+     */
+    public function leaveBalances(Request $request): AnonymousResourceCollection
+    {
+        $employee = $request->user()->employee;
+
+        if ($employee === null) {
+            return LeaveBalanceResource::collection(new LengthAwarePaginator([], 0, 15));
+        }
+
+        $balances = LeaveBalance::query()
+            ->where('employee_id', $employee->id)
+            ->orderByDesc('year')
+            ->paginate();
+
+        return LeaveBalanceResource::collection($balances);
     }
 }

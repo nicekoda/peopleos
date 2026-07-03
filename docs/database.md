@@ -393,6 +393,22 @@ and [`security.md`](security.md#user--employee-linking) for the full
 writeup. `Department`, `Location`, `Position`, `EmployeeDocument` were
 also checked and found correct.
 
+### Checkpoint 15 quality review — same fixes applied proactively, plus a new one
+
+`LeaveBalance` was built with the established fixes from the start:
+`employee_id`/`leave_type_id` validated via explicit tenant-scoped
+closures (not raw `Rule::exists()`), `leave_type_id` additionally
+excludes inactive/soft-deleted leave types, `used_days`/`pending_days`
+explicitly defaulted server-side before `create()` and structurally
+excluded from `UpdateLeaveBalanceRequest` entirely, every balance
+mutation wrapped in `DB::transaction()` with `lockForUpdate()`. One new
+issue found during implementation (not a repeat of an old one): see
+`architecture.md`'s note on the `LeaveRequestFactory`/`recycle()` test-
+fixture fix — a latent tenant-scoping gap in test fixtures, not
+production code, but the same underlying lesson (a relation silently
+scoped to the wrong tenant, found only once something finally
+dereferenced it for real).
+
 ### Checkpoint 12 quality review — no new issues, same fixes applied proactively
 
 Per your explicit instruction (given the `$fillable`/`Rule::exists()`/
@@ -413,6 +429,41 @@ found after the fact:
    `$fillable` from the start, with the same "trusted controller
    assignment, never accepted from request input" comment pattern used
    everywhere else.
+
+### `leave_balances`
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | ulid, primary key | |
+| `tenant_id` | ulid, FK → `tenants.id` `RESTRICT` | |
+| `employee_id` | ulid, FK → `employees.id` `CASCADE` | |
+| `leave_type_id` | ulid, FK → `leave_types.id` `RESTRICT` | Only leave types with `max_days_per_year` set ever get a balance row — see `security.md` |
+| `year` | unsigned smallint | Per the leave request's `start_date` year — see "Balance year rule" in `security.md` |
+| `entitlement_days` | decimal(6,2) | Seeded from `leave_types.max_days_per_year` on auto-creation; admin-editable via `PATCH` |
+| `used_days` | decimal(6,2), default `0` | Only ever set by `LeaveBalanceService`, never by request input |
+| `pending_days` | decimal(6,2), default `0` | Shared aggregate across every pending request for this employee/leave-type/year — not a per-request ledger, see `architecture.md` |
+| `carried_forward_days` | decimal(6,2), default `0` | Admin-editable; no carry-forward *automation* exists yet |
+| `adjustment_days` | decimal(6,2), default `0` | Admin-editable, gated by `leave_balances.adjust` specifically (not just `.update`); can be negative (a correction/debit) |
+| `created_by` / `updated_by` | bigint, nullable, FK → `users.id` `SET NULL` | |
+| `deleted_at` | timestamp, nullable | Soft delete |
+
+`decimal(6,2)` for every day-count field (not integer) — half-day leave
+isn't built this checkpoint, but this makes it a data-only change later
+rather than a schema migration too, per your explicit recommendation.
+
+**`available_days` is not a column.** Computed on read via
+`LeaveBalance::availableDays()`:
+`entitlement_days + carried_forward_days + adjustment_days - used_days
+- pending_days`. Deliberately not cached/stored, to avoid ever serving
+a stale value — see `security.md`.
+
+**Uniqueness is a partial index, not a plain composite unique
+constraint** — `UNIQUE (tenant_id, employee_id, leave_type_id, year)
+WHERE deleted_at IS NULL`, the same pattern already used for
+`roles.slug`'s platform-role uniqueness (see that migration). A plain
+composite unique would block recreating a balance after the original
+row was soft-deleted; the partial index excludes soft-deleted rows from
+the uniqueness check entirely.
 
 ### Checkpoint 13 — no schema change, existing field reused as-is
 

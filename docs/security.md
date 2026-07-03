@@ -1409,6 +1409,249 @@ knowing when writing new tests: assert `404` for `{model}`-bound routes,
 - Onboarding task assignment scoped to a new hire's manager.
 - Pagination/lazy-loading for `reporting-tree` beyond the depth cap.
 
+## Leave Balances Foundation
+
+Adds annual entitlement tracking so leave requests can be capped — see
+[`architecture.md`](architecture.md#leave-balances-foundation) and
+[`api.md`](api.md#leave-balances) for the design rationale and endpoint
+reference. No new leave-request endpoints; this layers enforcement onto
+the existing `submit()`/`approve()`/`reject()`/`cancel()` actions from
+Checkpoint 12.
+
+### Balance formula
+
+```
+available_days = entitlement_days + carried_forward_days + adjustment_days - used_days - pending_days
+```
+
+Computed on read (`LeaveBalance::availableDays()`), never stored, per
+your explicit instruction — avoids the exact "stale denormalized value"
+class of bug this app has otherwise been careful about (see
+`LeaveRequest::total_days` always being server-computed, never trusted
+from a cache or client input).
+
+### Balance year rule and the cross-year limitation
+
+The balance year is the leave request's `start_date` year — a request
+from `2027-08-10` to `2027-08-12` affects the `2027` balance row.
+**Cross-year leave requests are rejected outright** (`422`, Option A, as
+recommended) — `StoreLeaveRequestRequest`/`UpdateLeaveRequestRequest`
+both reject `start_date`/`end_date` falling in different calendar
+years. Splitting a single request's days across two different
+`leave_balances` rows isn't built; rejecting the request up front avoids
+having to guess an allocation.
+
+### Balance-controlled vs. unlimited leave types
+
+`leave_types.max_days_per_year` (Checkpoint 12 column, unused until now)
+is the switch:
+
+- **Set** → the leave type is balance-controlled. The first `submit()`
+  against it for a given employee/year auto-creates a `leave_balances`
+  row (`entitlement_days = max_days_per_year`), and every subsequent
+  `submit()`/`approve()`/`reject()`/`cancel()` enforces/updates it.
+- **`null`** → the leave type is **not balance-controlled at all**. No
+  balance row is ever created or consulted; `submit()` succeeds
+  regardless of how many days are requested. This is a per-leave-type
+  opt-in, not a tenant-wide setting — a tenant can have both capped
+  types (Annual Leave) and uncapped ones (e.g. Bereavement Leave) side
+  by side.
+
+### When balance is reserved/consumed/released — and why cancel() needs to know the prior status
+
+| Leave request event | Balance effect |
+|---|---|
+| Created (`draft`) | None — a draft never touches balance |
+| `submit()` (`draft → pending`) | Checks `available_days >= total_days`; reserves into `pending_days` if so, else `422` (leave request status unchanged) |
+| `approve()` (`pending → approved`) | Moves `total_days` from `pending_days` to `used_days` |
+| `reject()` (`pending → rejected`) | Releases `total_days` from `pending_days` |
+| `cancel()` from `pending` | Releases `total_days` from `pending_days` |
+| `cancel()` from `draft` | **None** — see below |
+| Cancelling an *approved* request | Not supported (unchanged from Checkpoint 12 — `approved` is a terminal status) |
+
+**`pending_days` is a shared aggregate per (employee, leave type, year)
+balance, not a per-request ledger.** An employee can have multiple
+pending requests against the same balance simultaneously, each having
+added its own `total_days` into the same `pending_days` field. This is
+exactly why `cancel()` must check whether the specific request being
+cancelled was actually `Pending` (i.e. it went through `submit()` and
+contributed to that aggregate) before calling `releasePending()` —
+cancelling a `Draft` request and releasing anyway would incorrectly
+subtract days from the aggregate that this request never added,
+corrupting a *different* pending request's reservation on the same
+balance. Tested directly
+(`test_cancel_draft_request_does_not_affect_balance`).
+
+### Idempotency against repeated/invalid actions (Refinement 1)
+
+Every balance mutation sits *after* `ensureTransitionAllowed()` in each
+controller action — an already-approved request re-submitted to
+`approve()` gets `409` before `consumePending()` is ever called, so
+balance can't be double-consumed by a retried or duplicate request.
+Tested directly: approving an already-`approved` request leaves
+`used_days` unchanged (`test_invalid_status_transition_does_not_change_balance`).
+This is the same `LeaveRequestStatus::canTransitionTo()` single
+enforcement point from Checkpoint 12, now also serving as the balance
+mutation's own idempotency guard — not a separate check.
+
+### Balance service verifies leave request state before mutation (Refinement 2)
+
+`LeaveBalanceService::consumePending()` is only ever called from
+`approve()`, which itself only runs after `ensureTransitionAllowed()`
+confirms the request is `Pending` — so `pending_days` reliably reflects
+this request's own `submit()`-time reservation before it's moved to
+`used_days`. The service methods themselves don't re-derive "was this
+actually pending" (that's the controller's job, already enforced) — they
+trust the calling discipline the same way every other internal helper
+in this app trusts its caller having already checked tenant ownership.
+
+### Transactions cover balance and leave request status together (Refinement 3)
+
+Every balance-affecting action (`submit()`/`approve()`/`reject()`/
+`cancel()`) wraps the balance lookup/lock, the balance mutation, the
+leave request's own status update, and both audit log writes in one
+`DB::transaction()`. A failure at any point — insufficient balance,
+a database error, anything — rolls back the whole thing: the leave
+request's status never changes if the balance operation didn't
+complete, and vice versa. Tested directly (Refinement 8):
+`test_submit_exceeding_available_balance_is_rejected` asserts the leave
+request is still `draft` after a rejected submission, not left in a
+half-updated state.
+
+### Locking — `lockForUpdate()`, not optimistic retry (concurrency)
+
+`LeaveBalanceService::findOrCreate()` locks the balance row
+(`lockForUpdate()`) before it's read for the `available_days >= days`
+decision, so two concurrent submits against the same balance serialize
+rather than both reading the same stale `available_days` and both
+succeeding (the classic overspend bug this pattern prevents). Tested
+directly: two draft requests for 3 days each against a 5-day balance —
+the first submit succeeds (reserves 3, 2 remain), the second correctly
+fails (`422`) rather than also reserving 3 and pushing the balance
+negative (`test_balance_reservation_uses_locking_and_prevents_overspend`).
+
+The one unavoidable race — two *first-ever* submits for the same
+employee/leave-type/year, before any balance row exists yet to lock —
+is handled by letting the partial unique index reject the losing
+`INSERT` and re-fetching (now lockable) instead of failing the whole
+request. See `LeaveBalanceService::findOrCreate()`.
+
+### Preventing negative balances (Refinement 6)
+
+- **Leave request submission**: `reservePending()` rejects (returns
+  `false`, no mutation) if `available_days < requested days` — never
+  clamps or allows a negative reservation.
+- **Manual admin `PATCH`**: `LeaveBalanceController::update()` computes
+  the *prospective* `available_days` from the merged (current +
+  proposed) values before saving, and rejects (`422`) any change that
+  would make it negative. No override/exception mechanism exists this
+  checkpoint — a deliberate, documented choice, not an oversight.
+
+### Permission mapping (as seeded in `RoleSeeder`)
+
+| Role | Permissions |
+|---|---|
+| Tenant Admin | All (automatic) |
+| HR Manager | All — `leave_balances.view`/`create`/`update`/`adjust`/`view_all`, per your explicit suggested mapping |
+| HR Officer | All five — same reasoning as HR Officer's broad leave/policy grants elsewhere |
+| Employee | None — self-service only via `/me/leave-balances`, no admin balance permission |
+| Line Manager | None this checkpoint |
+| Auditor | `leave_balances.view`, `leave_balances.view_all` |
+
+### `leave_balances.adjust` gates `adjustment_days` specifically
+
+`leave_balances.update` is the baseline for `PATCH` (covers
+`entitlement_days`/`carried_forward_days`); a request body that also
+includes `adjustment_days` additionally requires
+`leave_balances.adjust`, checked in the controller (route middleware
+can't inspect body field presence) — mirrors `policies.archive`
+requiring `policies.update` in addition (Checkpoint 10). This gives the
+two permissions genuinely distinct meaning: a holder of `update` alone
+can correct configuration-level fields; changing the ad-hoc
+adjustment ledger is a separately-gated action.
+
+### Employee self-service: `GET /me/leave-balances`
+
+No permission required — scoped exclusively to
+`$request->user()->employee`'s own balance rows. A caller with no
+linked employee gets an **empty list (`200`)**, the same posture as
+`/me/direct-reports` (Checkpoint 13), not `/me/employee`'s `404` — a
+list endpoint's natural "nothing to show" state. Never exposes another
+employee's or another tenant's balances — enforced by both the explicit
+`employee_id` filter and `BelongsToTenant`'s scope.
+
+### Audit events
+
+`leave_balance.created` (manual, via `POST /leave-balances`, **or**
+auto-created on first `submit()` against a balance-controlled type —
+same action name either way, distinguishable by whether the audit
+entry's actor matches an admin request or a leave-request submission
+flow), `leave_balance.updated`, `leave_balance.adjusted` (specifically
+when `adjustment_days` changes), `leave_balance.pending_reserved`,
+`leave_balance.pending_released`, `leave_balance.used_recorded`. The
+three workflow-triggered events are logged as a **separate** audit
+entry alongside the existing `leave_request.*` lifecycle event already
+written for that action — not merged into one entry, so a balance
+audit and a leave-request audit can each be searched/reasoned about
+independently.
+
+### Audit metadata (Refinement 4)
+
+```json
+{
+  "leave_balance_id": "01h...",
+  "leave_request_id": "01h...",
+  "employee_id": "01h...",
+  "leave_type_id": "01h...",
+  "year": 2027,
+  "days": 3.0,
+  "old_pending_days": 0.0,
+  "new_pending_days": 3.0
+}
+```
+
+IDs, the year, the day delta, and old/new `pending_days` — never
+employee names, `reason`, or `rejection_reason`. Confirmed directly with
+real free-text values ("Confidential medical procedure.", "Denied due
+to confidential HR matter.") asserted absent from the balance audit
+entry's metadata, and confirmed the keys `reason`/`rejection_reason`
+don't appear in that metadata at all (they're a `leave_request.*` audit
+concern, already masked there per the Checkpoint 12 rule — not
+duplicated here).
+
+### Current limitations
+
+- **No accrual engine** — entitlement is a flat annual figure, not
+  accumulated monthly/per-pay-period.
+- **No carry-forward automation** — `carried_forward_days` is
+  admin-editable but nothing computes or applies it at year-end.
+- **No half-day leave** — every day-count field supports decimals
+  (`decimal(6,2)`) for future readiness, but `LeaveRequest::total_days`
+  is still a whole number and no UI/validation for half-days exists.
+- **No public holiday calendar** — unchanged from Checkpoint 12;
+  `total_days` still counts weekends.
+- **No manager team-balance view** — `ManagerHierarchyService` exists
+  and could support this, but no endpoint surfaces it yet.
+- **Approving a request whose leave type became balance-controlled
+  *after* it was submitted (while still balance-controlled=false at
+  submit time) can consume balance that was never reserved** — a narrow
+  edge case (an admin changes `leave_types.max_days_per_year` from
+  `null` to a value between an employee's submit and approve) not
+  guarded against this checkpoint. Documented here rather than
+  engineered around, given how narrow and unlikely the window is;
+  revisit if it proves to matter in practice.
+
+### Future
+
+- Accrual engine (monthly/per-pay-period entitlement accumulation).
+- Carry-forward automation (year-end rollover with a configurable cap).
+- Half-day leave (schema already `decimal(6,2)`-ready on the balance
+  side; `LeaveRequest::total_days` and its validation would need to
+  follow).
+- Public holiday calendars / business-day calculation.
+- Manager team-balance view/dashboard.
+- Leave encashment.
+
 ## Local Demo Credentials
 
 **Local development only — these are not real secrets and only work against your own local database.** Password comes from `SEED_USER_PASSWORD` in `.env` (not committed; `.env.example` has an empty placeholder).
@@ -1447,6 +1690,7 @@ other 17 roles per tenant exist as empty placeholders for future modules.
 - `employee_document_id` on `policy_versions` requires an existing employee-owned document — see "Policy Management" above for the schema mismatch this carries.
 - **No self-linking / invitation-token flow, no employee profile self-update, no manager-approval linking workflow** — see [User ↔ Employee Linking](#user--employee-linking) above for the full list of what Checkpoint 11 deliberately left out.
 - No Payroll, Performance, or Onboarding modules yet.
-- **Leave Management has no balances/accrual, no notifications, no calendar integration** — see [Leave Management](#leave-management) above for the full list.
+- **Leave balances exist (Checkpoint 15) but have no accrual engine, no carry-forward automation, no half-day leave, no public holiday calendar, no manager team-balance view** — see [Leave Balances Foundation](#leave-balances-foundation) above for the full list.
+- **Leave Management still has no notifications or calendar integration** — see [Leave Management](#leave-management) above.
 - **Line Manager can now approve/reject leave, but direct reports only** (Checkpoint 14) — indirect (skip-level) approval is a deliberate future policy decision, not built. See [Manager-Hierarchy-Scoped Leave Approval](#manager-hierarchy-scoped-leave-approval) above.
 - **No org chart, manager self-service dashboard, or performance/probation review usage of the manager hierarchy** — see [Manager Hierarchy](#manager-hierarchy) above for the full list.

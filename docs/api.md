@@ -135,6 +135,79 @@ Validation errors return Laravel's standard 422 shape
 (`{"message": ..., "errors": {"field": ["message"]}}`) — no stack traces,
 no internal detail, regardless of `APP_DEBUG`.
 
+## Leave Balances
+
+| Method | Path | Permission | Notes |
+|---|---|---|---|
+| `GET` | `/api/v1/leave-balances` | `leave_balances.view_all` | Tenant-wide list — there's no "own balance" concept on this admin endpoint, self-service is via `/me/leave-balances` |
+| `POST` | `/api/v1/leave-balances` | `leave_balances.create` | Rejects duplicate (employee, leave type, year) with `422` |
+| `GET` | `/api/v1/leave-balances/{leaveBalance}` | `leave_balances.view` | 404 if the balance belongs to another tenant |
+| `PATCH` | `/api/v1/leave-balances/{leaveBalance}` | `leave_balances.update` (+ `leave_balances.adjust` if `adjustment_days` is present) | Only `entitlement_days`/`carried_forward_days`/`adjustment_days` are ever accepted; rejects a change that would make `available_days` negative (`422`) |
+| `GET` | `/api/v1/me/leave-balances` | *(none — self-service)* | Scoped to the caller's own linked employee only |
+
+**`tenant_id`/`used_days`/`pending_days`/`employee_id`/`leave_type_id`/
+`year` are never accepted on `PATCH`** — structurally absent from
+`UpdateLeaveBalanceRequest`, only ever mutated by the leave-request
+workflow (`submit`/`approve`/`reject`/`cancel`) or, for the identity
+fields, fixed at creation.
+
+### Validation rules (`POST /leave-balances`)
+
+| Field | Rules |
+|---|---|
+| `employee_id` | required, must exist, belong to the current tenant, not soft-deleted |
+| `leave_type_id` | required, must exist, belong to the current tenant, be `status: active`, not soft-deleted |
+| `year` | required, integer, 2000–2100; must not duplicate an existing (tenant, employee, leave type, year) combination |
+| `entitlement_days` | required, numeric, ≥ 0 |
+| `carried_forward_days` | nullable, numeric, ≥ 0 |
+| `adjustment_days` | nullable, numeric (can be negative — a correction/debit) |
+
+### Balance effects on the existing leave request workflow
+
+No new leave-request endpoints — `submit()`/`approve()`/`reject()`/
+`cancel()` (Checkpoint 12) now check/mutate balance for
+balance-controlled leave types (`leave_types.max_days_per_year` set):
+
+| Action | Balance effect |
+|---|---|
+| `POST .../submit` | Checks `available_days >= total_days`; reserves into `pending_days`, or `422` ("Insufficient leave balance available for the requested dates.") if not enough |
+| `POST .../approve` | Moves `total_days` from `pending_days` to `used_days` |
+| `POST .../reject` | Releases `total_days` from `pending_days` |
+| `POST .../cancel` | Releases `total_days` from `pending_days`, **only if the request was `pending`** — cancelling a `draft` never touches balance |
+
+A leave type with `max_days_per_year: null` is **not balance-controlled**
+— none of the above applies, no balance row is ever created for it.
+
+### Cross-year leave requests are rejected
+
+`POST /leave-requests`/`PATCH /leave-requests/{id}` now reject (`422`)
+any request where `start_date` and `end_date` fall in different
+calendar years — the balance year rule uses `start_date`'s year only;
+see `docs/security.md` for the full reasoning and future direction.
+
+### Response shape
+
+```json
+{
+  "data": {
+    "id": "01h...",
+    "employee_id": "01h...",
+    "leave_type_id": "01h...",
+    "year": 2027,
+    "entitlement_days": 20.0,
+    "used_days": 3.0,
+    "pending_days": 0.0,
+    "carried_forward_days": 0.0,
+    "adjustment_days": 0.0,
+    "available_days": 17.0,
+    "created_at": "2026-07-03T00:00:00+00:00"
+  }
+}
+```
+
+`available_days` is always computed, never a stored/cached value — see
+`docs/security.md`.
+
 ## Manager Hierarchy
 
 | Method | Path | Permission | Notes |
@@ -530,7 +603,7 @@ second `approve` call, etc.) returns `409`.
 |---|---|
 | `leave_type_id` | required, must exist, belong to the current tenant, and be `status: active` and not soft-deleted |
 | `start_date` | required, valid date |
-| `end_date` | required, valid date, ≥ `start_date` |
+| `end_date` | required, valid date, ≥ `start_date`, and **same calendar year as `start_date`** (Checkpoint 15 — cross-year requests rejected) |
 | `reason` | nullable, max 2000 characters |
 | `rejection_reason` (reject only) | required, max 2000 characters |
 
@@ -541,7 +614,8 @@ second `approve` call, etc.) returns `409`.
 - No `departments`/`locations`/`positions` CRUD endpoints — they exist only to support employee FK validation (unlike `document_categories`, which now has one).
 - No self-linking / invitation-token flow — linking a user to an employee is HR/admin-only, see `docs/security.md`.
 - No employee profile self-update endpoint — `/me/employee` is read-only.
-- No leave balances/accrual, no notifications, no calendar integration — see `docs/security.md#leave-management`.
+- Leave balances exist (Checkpoint 15) but have no accrual engine, carry-forward automation, half-day support, or public holiday calendar — see `docs/security.md#leave-balances-foundation`.
+- No leave notifications or calendar integration.
 - `reporting-tree` is depth-capped at 5 levels — no pagination/lazy-loading beyond it, no org chart UI.
 - Manager-scoped leave approval is direct-reports-only — a manager cannot approve/reject an indirect (skip-level) report's leave; see `docs/security.md#manager-hierarchy-scoped-leave-approval`.
 - No policy campaign automation, reminders, or escalations.
@@ -565,7 +639,8 @@ second `approve` call, etc.) returns `409`.
 - Employee profile self-update — `/me/employee` is read-only; no endpoint lets an employee edit their own record.
 - Indirect (skip-level) manager leave approval — `ManagerHierarchyService::isManagerOf()` already exists and could answer this; extending `resolveApprovalScope()` to use it is a deliberate future policy decision (see `docs/security.md`), not a technical blocker.
 - Org chart UI, manager self-service dashboard, performance/probation review usage of the manager hierarchy — `ManagerHierarchyService` is built to be reusable for these, none exist yet.
-- Leave balances / accrual engine, business-day calculation, weekend/holiday exclusion, half-day leave — `leave_types.max_days_per_year` already reserved.
+- Leave balance accrual engine, carry-forward automation, half-day leave, business-day calculation, weekend/holiday exclusion — leave balances themselves now exist (Checkpoint 15), see `docs/security.md#leave-balances-foundation` for what's still missing.
+- Manager team-balance view/dashboard — `ManagerHierarchyService` could support this, no endpoint exists yet.
 - Leave notifications, email approval, and calendar integration.
 - Policy campaigns (bulk-assign a policy to a whole department/location, scheduled/recurring re-acknowledgement cycles).
 - Email/notification reminders and escalations for overdue acknowledgements.

@@ -3500,6 +3500,113 @@ permission-prop check.
   onboarding, performance) rather than letting `DemoDataSeeder` grow
   unbounded — split into per-module seeders if it does.
 
+## Deployment & Production Hardening (Checkpoint 27)
+
+No new business module, no new permission, no new endpoint, and no
+middleware change this checkpoint — the whole job was reviewing what
+already exists against what a real production deployment requires, and
+writing down what was found. See `docs/deployment.md` for the full
+technical detail and `docs/production-readiness.md` for the checklist
+this section supports.
+
+### `TrustProxies` is not configured — a real gap, documented not silently patched
+
+`bootstrap/app.php` registers `ResolveTenant`, `HandleInertiaRequests`,
+and the `permission`/`tenant.matches` aliases, but no
+`Application::configure()->trustProxies(...)` call exists. If this app
+is ever deployed behind a reverse proxy or load balancer that
+terminates TLS (the request arrives at the PHP process as plain HTTP,
+with the original scheme carried in an `X-Forwarded-Proto` header),
+Laravel won't trust that header by default — `$request->isSecure()`
+can return `false` even though the original client connection was
+HTTPS, which affects secure-cookie behavior and any scheme-sensitive
+logic. This wasn't silently patched with a guessed proxy configuration
+(the real production topology — direct TLS termination on the app
+server vs. behind a load balancer, and if the latter, which IPs/ranges
+to trust — isn't something this checkpoint can know) — it's documented
+as a required production step in `docs/production-readiness.md`
+instead. No security regression exists in the current local/demo setup
+(Laragon's Apache terminates TLS directly, no intermediate proxy).
+
+### `SESSION_SECURE_COOKIE` needs an explicit production value
+
+`.env.example` didn't previously list `SESSION_SECURE_COOKIE`,
+`SESSION_HTTP_ONLY`, or `SESSION_SAME_SITE` at all, even though
+`config/session.php` already reads all three
+(`env('SESSION_SECURE_COOKIE')`, defaulting to `null`; the other two
+already had safe framework defaults — `http_only` defaults `true`,
+`same_site` defaults `'lax'`). Local/demo behavior is unaffected by
+adding these (the values now shown match what was already in effect by
+default), but a production `.env` must explicitly set
+`SESSION_SECURE_COOKIE=true` — see `docs/deployment.md` §3 for why an
+unset value is only "usually correct" (dependent on correct HTTPS
+scheme detection, which is exactly what the `TrustProxies` gap above
+can undermine behind a proxy).
+
+### The tenant-route audit becomes a real, committed, tested artifact instead of a re-derived script
+
+Every checkpoint since roughly Checkpoint 13 has re-run a hand-written
+scratch-directory PHP script confirming every `auth`-protected route
+also carries `tenant.matches` — useful, but it never lived in the
+repository, so it couldn't be run by anyone (or any future session)
+without reconstructing it from memory first. `php artisan
+route:audit-tenant-scoping` (new — `App\Console\Commands\AuditTenantRouteScoping`)
+formalizes exactly the same check directly against `Route::getRoutes()`
+(no intermediate JSON file, no scratch directory), and
+`AuditTenantRouteScopingCommandTest` runs it as a real regression test.
+This is read-only — it inspects already-registered routes and exits
+non-zero if anything is missing; it changes no middleware, no route,
+and no permission.
+
+### Storage, logging, and demo-seeder review confirmed existing practice, changed nothing
+
+- **Private storage**: confirmed (again) that no code path anywhere in
+  `app/` references the `public` disk — every document stays on the
+  private `local` disk, as established since Checkpoint 8.
+- **Logging vs. audit logging**: confirmed these remain two genuinely
+  separate systems (application logs for operators, `audit_logs` for
+  compliance/security review) — see `docs/deployment.md` §5 for the
+  reasoning, unchanged from prior checkpoints, just written down
+  explicitly for the first time here.
+- **Demo seeders**: `UserSeeder`'s demo logins and `DemoDataSeeder`
+  (Checkpoint 26) hold no elevated or bypass privilege — each demo
+  user has exactly its role's normal permission set. The production
+  rule (never run the full `DatabaseSeeder` chain against production;
+  seed `Tenant`/`Permission`/`Role` individually if needed at all) is
+  now explicit in `docs/production-readiness.md` rather than assumed.
+
+### What is not, and cannot be, tested by a JS runner
+
+Unchanged — no Jest/Vitest configured. Nothing in this checkpoint
+touched frontend behavior at all (documentation and one backend-only
+Artisan command), so this checkpoint needed no new frontend test
+regardless.
+
+### Current limitations
+
+- `TrustProxies` remains unconfigured — a real production deployment
+  behind a reverse proxy/load balancer must add this before going live
+  (see above). Not fixed this checkpoint because the correct
+  configuration depends on the actual production topology, which isn't
+  known yet.
+- No automated backup/restore tooling — `docs/deployment.md` documents
+  the practice (what to back up, in what combination), not an
+  automated backup mechanism. Purely operational guidance.
+- No CI pipeline still runs any of this automatically (route audit,
+  test suite, Pint, `tsc`) — all verification remains manual, run
+  locally before each checkpoint/deployment.
+
+### Future
+
+- Add real `trustProxies()` configuration once the actual production
+  hosting topology (direct TLS termination vs. behind a load balancer)
+  is known.
+- A CI pipeline that runs the full verification set (test suite, Pint,
+  `tsc`, `route:audit-tenant-scoping`, `npm run build`) on every push,
+  rather than relying on manual pre-checkpoint runs.
+- Automated backup tooling/runbooks, once a real hosting environment
+  exists to automate against.
+
 ## Local Demo Credentials
 
 **Local development only — these are not real secrets and only work against your own local database.** Password comes from `SEED_USER_PASSWORD` in `.env` (not committed; `.env.example` has an empty placeholder).
@@ -3561,3 +3668,6 @@ data these six `uesl` logins see (Checkpoint 26's `DemoDataSeeder`).
 - **Demo data (Checkpoint 26) only covers the `uesl` tenant** — `airpeace`/`ibom` still only have their Tenant Admin login and no employees/leave/documents/policies, by design (avoiding excessive seeded tenants).
 - **No RBAC role/permission editing UI, invitation flow, password reset UI, MFA, or SSO** for the three new demo logins or any other user — unchanged from Checkpoint 23's scope, see [Users & Access Management UI](#users--access-management-ui) above.
 - **The build-size advisory from Checkpoint 25 is resolved** (Checkpoint 26) via lazy per-page resolution in `app.tsx` — see [Demo Readiness & UI Polish](#demo-readiness--ui-polish-checkpoint-26) above and `docs/architecture.md` for detail. No further bundle work is planned unless a future module meaningfully grows the app again.
+- **`TrustProxies` is not configured** (Checkpoint 27) — required before deploying behind any reverse proxy/load balancer that terminates TLS; see [Deployment & Production Hardening](#deployment--production-hardening-checkpoint-27) above and `docs/production-readiness.md`.
+- **No CI pipeline** runs the verification suite (tests, Pint, `tsc`, route audit, build) automatically — every checkpoint's regression check remains a manual local run. See [Deployment & Production Hardening](#deployment--production-hardening-checkpoint-27) above.
+- **No automated backup/restore tooling** — `docs/deployment.md` documents the practice, not an automated mechanism, since no real hosting environment exists yet to automate against.

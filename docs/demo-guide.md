@@ -1,6 +1,7 @@
 # PeopleOS Demo Guide
 
-**Checkpoint 26.** This is the practical "how to run a demo" companion to
+**Checkpoint 26** (updated Checkpoint 27 with a reset-command warning).
+This is the practical "how to run a demo" companion to
 `docs/security.md`/`docs/architecture.md` — it doesn't restate the RBAC
 design or the tenant-isolation model, only how to log in, what to click,
 and what each role should (and shouldn't) be able to do. All data below
@@ -16,6 +17,18 @@ configured, get a fresh demo database with:
 ```bash
 ./artisan.bat migrate:fresh --seed
 ```
+
+> **⚠ Destructive command — local/demo environments only.**
+> `migrate:fresh` drops every table and rebuilds the schema from
+> scratch before seeding — **anything currently in that database is
+> gone**, with no confirmation prompt and no recovery. Only ever run
+> this against your own local development database
+> (`DB_DATABASE=peopleos_dev` by default). **Never run this — or any
+> `migrate:fresh` — against a production database.** See
+> `docs/production-readiness.md` "Admin & Demo Accounts" for the
+> production rule this backs: production seeding, if ever needed, runs
+> `TenantSeeder`/`PermissionSeeder`/`RoleSeeder` individually, never the
+> full `DatabaseSeeder` chain this command triggers.
 
 This runs `TenantSeeder` → `PermissionSeeder` → `RoleSeeder` →
 `UserSeeder` → `DemoDataSeeder`, in that order. `DemoDataSeeder` only

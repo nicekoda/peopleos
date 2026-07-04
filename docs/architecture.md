@@ -1306,3 +1306,30 @@ configured reference code — not the row's primary key.
 See [`README.md`](../README.md) for PHP extension scoping (CLI vs. Apache
 `mod_php`) and the local HTTPS/subdomain setup (mkcert wildcard cert,
 Laragon vhost split, hosts file requirements).
+
+## Deployment Topology (Checkpoint 27)
+
+Local development's subdomain-per-tenant resolution (`ResolveTenant`
+middleware, `config('tenancy.base_domain')` driven by `APP_DOMAIN`) is
+not Laragon-specific — it's the actual application architecture, and a
+production deployment needs the same shape at real-world scale:
+wildcard DNS for the real domain, a web server virtual host matching
+that wildcard, and a wildcard (or automated per-subdomain) TLS
+certificate. None of this is a code change — `ResolveTenant` already
+works purely off the `Host` header and `APP_DOMAIN`, so the same
+codebase serves both `*.peopleos.test` locally and `*.yourdomain.com`
+in production without modification, provided DNS/vhost/TLS are set up
+to match. Full operational detail (exact DNS/vhost/cert requirements,
+session-domain behavior, why `tenant.matches` remains the actual
+security boundary regardless of DNS/cookie configuration) lives in
+[`docs/deployment.md`](deployment.md) — this section only establishes
+that the *architecture* transfers unchanged, not the *procedure*.
+
+`php artisan route:audit-tenant-scoping` (new — see
+`app/Console/Commands/AuditTenantRouteScoping.php`) formalizes a check
+that used to be a scratch-directory script re-created by hand before
+every checkpoint: every `auth`-protected route must also carry
+`tenant.matches`. It reads Laravel's own registered route table
+directly (`Route::getRoutes()`), not a pre-generated JSON snapshot, so
+it stays correct automatically as routes are added — no maintenance
+step required when a future checkpoint adds a new authenticated route.

@@ -275,6 +275,22 @@ See `docs/architecture.md`/`docs/security.md`/`docs/api.md` for the full
 design, what's shared with the frontend (and what never is), and the
 future module rollout plan.
 
+## Deployment Readiness (Checkpoint 27)
+
+No new product feature — this checkpoint reviewed the app against what
+a real deployment requires and wrote it down: `.env.example` now
+documents every production-relevant variable inline (`APP_DEBUG`,
+`SESSION_SECURE_COOKIE`, etc.), two new docs cover the full setup-to-
+production path (`docs/deployment.md`, `docs/production-readiness.md`),
+and a real, tested Artisan command
+(`php artisan route:audit-tenant-scoping`) replaces a scratch script
+that used to be re-created by hand before every checkpoint. One real
+gap was found and documented (not silently patched, since the actual
+production hosting topology isn't known yet): no `TrustProxies`
+configuration exists in `bootstrap/app.php`, which matters only if this
+app is ever deployed behind a reverse proxy/load balancer that
+terminates TLS — see `docs/security.md` and `docs/production-readiness.md`.
+
 ## Documentation
 
 - [`docs/architecture.md`](docs/architecture.md) — multi-tenancy, tenant resolution, RBAC overview, internal-vs-public IDs, frontend architecture.
@@ -283,6 +299,8 @@ future module rollout plan.
 - [`docs/api.md`](docs/api.md) — `/api/v1` endpoint reference.
 - [`docs/testing.md`](docs/testing.md) — testing conventions and patterns.
 - [`docs/demo-guide.md`](docs/demo-guide.md) — demo users, login sequence, per-module demo flow, what each role should see, known limitations.
+- [`docs/deployment.md`](docs/deployment.md) — environment configuration, tenant/subdomain deployment, storage/logging/queue readiness, build & verification commands, deployment smoke test checklist.
+- [`docs/production-readiness.md`](docs/production-readiness.md) — production go/no-go checklist and security hardening checklist.
 
 ## Project Standards
 

@@ -949,6 +949,30 @@ necessary but not sufficient; the live smoke test's per-role page loads
 all across seven roles) is what actually confirmed every page still
 resolves and renders correctly under the new lazy-loading path.
 
+## A recurring manual check becomes a real, tested Artisan command (Checkpoint 27)
+
+The `tenant.matches`-coverage check ("every `auth`-protected route also
+carries `tenant.matches`") had been re-run by hand before roughly every
+checkpoint since Checkpoint 13, as a scratch-directory PHP script that
+read a pre-generated `route:list --json` snapshot. It worked, but it
+never lived in the repository — anyone (or any future session)
+resuming this project without that scratch directory's history would
+have had no way to run it without reconstructing the logic from
+scratch. `php artisan route:audit-tenant-scoping` (new —
+`App\Console\Commands\AuditTenantRouteScoping`) formalizes the same
+check directly against `Route::getRoutes()` (no intermediate file),
+and `AuditTenantRouteScopingCommandTest` runs it as a real, permanent
+regression test — `$this->artisan('route:audit-tenant-scoping')->assertExitCode(0)`.
+
+This is a generally useful pattern: a manual verification step repeated
+across enough checkpoints to become "an established practice" is a
+signal it should graduate from a scratch script into a committed,
+tested artifact — not because the manual version was wrong, but because
+"a script only I remember how to write" isn't durable operational
+knowledge. Worth applying the same judgment to any other
+scratch-directory script that's been reused three or more checkpoints
+in a row.
+
 ## Verifying against the real app, not just the test suite
 
 Because of the SQLite/Postgres split above, checkpoints in this project

@@ -2855,6 +2855,206 @@ every Settings page's shared props.
 - Frontend test tooling (Vitest + React Testing Library), if
   component-level testing becomes valuable.
 
+## Users & Access Management UI
+
+The first checkpoint whose backend models — `User` and `Role` — cannot
+rely on `BelongsToTenant`'s automatic tenant filtering. See
+[`architecture.md`](architecture.md#users--access-management-ui-checkpoint-23)
+for why that trait was never applied to these two models, and
+[`api.md`](api.md#users--access) for the endpoint reference.
+
+### The tenant boundary here is manual, and it is the *only* boundary
+
+Every query in `UserController`, `RoleController`, and
+`UserRoleController` explicitly filters:
+
+```php
+// Users
+User::query()->where('tenant_id', app(Tenant::class)->id)->where('is_platform_admin', false)
+
+// Roles
+Role::query()->where('tenant_id', app(Tenant::class)->id)->where('is_platform_role', false)
+```
+
+Unlike every prior module (where a missing explicit check would still
+be caught by `BelongsToTenant`'s global scope), a mistake here has no
+backstop from the model layer — this is why the test suite for this
+checkpoint puts unusually heavy weight on tenant-isolation and
+platform-scope tests specifically (`RoleApiTest`/`UserApiTest`'s
+tenant-A-cannot-see-tenant-B and platform-record-unreachable tests
+exist to prove the *primary* defense works, not a secondary one).
+
+`show()`/`update()`/role-assignment additionally repeat the check via
+an explicit `abort_if($target->is_platform_admin, 404)` (users) /
+`abort_if($target->is_platform_role, 404)` (roles) — even though the
+tenant_id filter alone already excludes platform records (their
+`tenant_id` is always `null`, which can never equal a real tenant's
+id), stating the platform-exclusion rule explicitly means a future
+refactor that changes how the tenant filter is expressed can't
+silently reopen this by accident.
+
+### `UserResource`/`RoleResource`: narrow by construction
+
+`UserResource` returns `id`, `name`, `email`, `status`,
+`is_platform_admin` (always `false` here, since this Resource never
+wraps a platform admin record), a safe `roles` summary
+(`id`/`name`/`slug` only — never the `user_role` pivot row), a safe
+`linked_employee` summary (`id`/`full_name` only — never the full
+employee record), `last_login_at`, and `created_at`. It never returns
+`password`/`remember_token` (already globally hidden on the model via
+`#[Hidden]`, and doubly so by this Resource simply never referencing
+them), `last_login_ip`, or `email_verified_at`. `RoleResource` returns
+`id`/`name`/`slug`/`description`/`is_platform_role`/a computed
+`permission_count` — never the raw `role_permission` pivot rows or a
+role's actual permission list. Confirmed directly
+(`test_user_api_does_not_expose_sensitive_fields`,
+`test_role_api_does_not_expose_raw_pivot_internals`).
+
+### Status update: one field, two safeguards
+
+`PATCH /api/v1/users/{user}` — `UpdateUserStatusRequest` validates
+exactly `status` (`active`/`inactive`/`suspended`). `name`, `email`,
+`password`, `tenant_id`, `is_platform_admin`, `email_verified_at`,
+`last_login_at`, `last_login_ip`, `remember_token`, roles, permissions,
+and employee-link fields are structurally absent from the rules — a
+request body containing any of them has those keys silently dropped
+before the controller ever sees them, never partially applied.
+Confirmed directly (`test_status_update_ignores_forbidden_fields` —
+sends `name`/`email`/`is_platform_admin`/`tenant_id`/`password`
+alongside a valid `status` change, only `status` takes effect).
+
+Gated by `users.deactivate` (not `users.update`, which stays seeded but
+unused this checkpoint — reserved for a future general profile-edit
+feature that isn't built).
+
+### "Never leave a tenant without an active Tenant Admin" — one rule, two dangerous paths, one method
+
+`TenantAdminProtectionService::wouldLeaveTenantWithoutAdmin(User $user)`
+answers exactly one question: does at least one *other* user in this
+tenant hold the `tenant-admin`-slugged role? Both dangerous actions
+check it before proceeding:
+
+- **Status update** (`UserController::update()`): if the target is
+  currently `active` and the requested status is not, and this method
+  returns `true`, the change is rejected with `409` — regardless of
+  who's making the change. This is deliberately broader than "cannot
+  deactivate *themselves*" (the literal instruction) — a second admin
+  deactivating the *other* sole remaining admin is exactly as
+  dangerous as doing it to yourself, so the check doesn't special-case
+  the actor.
+- **Role removal** (`UserRoleController::destroy()`): if the role
+  being removed has slug `tenant-admin` and this method returns `true`,
+  the removal is rejected with `409`.
+
+Both confirmed directly and from both angles — blocked when it's the
+last admin (`test_cannot_deactivate_last_active_tenant_admin`,
+`test_cannot_remove_last_tenant_admin_role`), allowed when another
+admin exists (`test_can_deactivate_tenant_admin_when_another_admin_exists`,
+`test_can_remove_tenant_admin_role_when_another_admin_exists`).
+
+### Role assignment: layered, not single-point
+
+`POST /api/v1/users/{user}/roles` — `AssignUserRoleRequest` validates
+`role_id` against `Rule::exists('roles', 'id')` scoped to
+`tenant_id = current tenant AND is_platform_role = false` (a `422` for
+a platform role or another tenant's role, before anything touches the
+model). `User::assignRole()` independently re-checks the identical
+scope rule and throws if violated — normally unreachable given the
+FormRequest layer, kept as a backstop regardless (the same "two layers,
+not one relying on the other" principle every module in this app
+follows). Both `assignRole()`/`removeRole()` already wrote
+`role.assigned`/`role.removed` audit logs since Checkpoint 4/5 — this
+checkpoint didn't add new audit logging here, just a UI and the
+Tenant-Admin-protection check on top.
+
+### Role mapping: management stays Tenant-Admin-only this checkpoint
+
+| Role | `users.view` | `users.deactivate`/`users.assign_role`/`roles.view`/`permissions.view` |
+|---|---|---|
+| Tenant Admin | yes (wildcard) | yes (wildcard) |
+| HR Manager | yes (existing, unchanged) | no |
+| Everyone else | no | no |
+
+No new grants were made this checkpoint. HR Manager already held
+`users.view` (a read-only capability from an earlier checkpoint) and
+keeps exactly that — status changes, role assignment/removal, and the
+role list stay Tenant-Admin-only, per your explicit "keep role/status
+management Tenant-Admin-only for now" instruction. This is
+deliberately the most conservative reading available: broadening any
+of these later is a low-risk, additive change; narrowing them after
+the fact (if a broader grant turned out to be a mistake) is not.
+
+### Employee linking: no new backend surface, just a picker
+
+The employee-link/unlink UI on the user detail page calls the existing
+`POST`/`DELETE /employees/{employee}/link-user`/`unlink-user`
+(Checkpoint 11) unchanged — cross-tenant rejection, terminated-employee
+rejection, already-linked-employee rejection, and already-linked-user
+rejection are all already enforced there and were not touched. The
+employee picker is a real `<select>` populated from
+`GET /api/v1/employees` (never free-text), filtered client-side to
+exclude `status: terminated` — it cannot also exclude *already-linked*
+employees, since `EmployeeResource` has no `user_id` field to check;
+picking one surfaces the backend's existing, clear validation error
+instead. Backend remains the authority regardless of what the picker
+does or doesn't pre-filter.
+
+### What is not, and cannot be, tested by a JS runner
+
+Same posture as every prior module UI checkpoint — no Jest/Vitest
+configured. Verified via `tsc --noEmit`, `npm run build`, and a live
+HTTPS smoke test: the status `<select>` and its confirmation prompt,
+the role-assign/remove buttons' visibility based on `useCan()`, the
+employee picker, and every success/error banner.
+
+What *is* backend-tested (`UserApiTest` 16, `RoleApiTest` 8,
+`UserRoleApiTest` 11, `UsersAccessUiTest` 9 — 44 new tests total):
+permission gating both directions on every endpoint and page, tenant
+isolation for both users and roles (list and single-record), platform
+admin/platform role unreachability, forbidden-field rejection on
+status update, the last-Tenant-Admin protection from both angles and
+both dangerous paths, role-assignment scope violations (platform role,
+cross-tenant role, cross-tenant user), audit logging for both role
+assignment and removal, and that no sensitive field or raw pivot
+internal appears anywhere in either resource's response.
+
+### Current limitations
+
+- No user invitation flow — users are still created only via
+  `UserSeeder`/`tinker`; no self-service signup or admin-driven invite
+  exists.
+- No password reset UI, MFA setup, or SSO configuration.
+- No direct permission grant UI — `GET /api/v1/permissions` is
+  read-only and unused by any write path this checkpoint; direct
+  grants (`UserPermission`, Checkpoint 4) remain API/tinker-only.
+- No temporary/time-boxed permission UI.
+- No access review workflows or segregation-of-duties engine.
+- No full audit UI — `/settings/security` remains the Checkpoint 22
+  placeholder.
+- No platform tenant management UI, bulk user import, or SCIM/directory
+  sync.
+- Role/status management stays Tenant-Admin-only — HR Manager and
+  every other role remain read-only (or entirely unable to reach
+  Users & Access) this checkpoint.
+
+### Future
+
+- A user invitation flow, once a real signup/onboarding story exists.
+- Password reset and MFA setup UI.
+- A direct permission grant UI, reusing `User::grantPermission()`/
+  `revokePermission()` (already built, Checkpoint 4).
+- Temporary/time-boxed permissions (an `expires_at` column on
+  `user_permissions`, already flagged as future work since Checkpoint 4).
+- Access review workflows and segregation-of-duties tooling.
+- A real audit log viewing UI, once a read endpoint exists.
+- SSO/SCIM directory sync, once an identity provider integration is
+  scoped.
+- Broadening role/status management beyond Tenant Admin, if a real
+  need for it is identified (e.g. HR Manager granted `users.assign_role`
+  for a narrow, well-justified reason).
+- Frontend test tooling (Vitest + React Testing Library), if
+  component-level testing becomes valuable.
+
 ## Local Demo Credentials
 
 **Local development only — these are not real secrets and only work against your own local database.** Password comes from `SEED_USER_PASSWORD` in `.env` (not committed; `.env.example` has an empty placeholder).
@@ -2897,10 +3097,11 @@ other 17 roles per tenant exist as empty placeholders for future modules.
 - **Leave Management still has no notifications or calendar integration** — see [Leave Management](#leave-management) above.
 - **Line Manager can now approve/reject leave, but direct reports only** (Checkpoint 14) — indirect (skip-level) approval is a deliberate future policy decision, not built. See [Manager-Hierarchy-Scoped Leave Approval](#manager-hierarchy-scoped-leave-approval) above.
 - **No org chart, manager self-service dashboard, or performance/probation review usage of the manager hierarchy** — see [Manager Hierarchy](#manager-hierarchy) above for the full list.
-- **Employee Records, Leave Management, (employee-scoped) Document Repository, Policy Management, the Dashboard, and Settings all have real UIs now (Checkpoints 17/18/19/20/21/22); the top-level `/documents` route is still a permission-gated placeholder (no tenant-wide document centre yet — see [Document Repository UI](#document-repository-ui) above)** — see [Employee Records UI](#employee-records-ui), [Leave Management UI](#leave-management-ui), [Document Repository UI](#document-repository-ui), [Policy Management UI](#policy-management-ui), [Dashboard Foundation](#dashboard-foundation), and [Settings Foundation](#settings-foundation) above.
+- **Employee Records, Leave Management, (employee-scoped) Document Repository, Policy Management, the Dashboard, Settings, and Users & Access all have real UIs now (Checkpoints 17/18/19/20/21/22/23); the top-level `/documents` route is still a permission-gated placeholder (no tenant-wide document centre yet — see [Document Repository UI](#document-repository-ui) above)** — see [Employee Records UI](#employee-records-ui), [Leave Management UI](#leave-management-ui), [Document Repository UI](#document-repository-ui), [Policy Management UI](#policy-management-ui), [Dashboard Foundation](#dashboard-foundation), [Settings Foundation](#settings-foundation), and [Users & Access Management UI](#users--access-management-ui) above.
 - **Leave Management UI has no balance/leave-type admin UI, calendar view, or notification integration** — see [Leave Management UI](#leave-management-ui) above.
 - **Document Repository UI has no tenant-wide document centre, approval workflow UI, eSignature, document generation, or file preview** — see [Document Repository UI](#document-repository-ui) above.
 - **Policy Management UI has no campaign automation, reminders/escalations, dashboard/compliance reporting, template library, bulk/department-wide assignment, or admin-recorded-on-behalf-of acknowledgement UI** — see [Policy Management UI](#policy-management-ui) above.
 - **Dashboard has no charts, tenant-wide document cards, platform-level dashboard, or notifications** — see [Dashboard Foundation](#dashboard-foundation) above.
-- **Settings has no full user/RBAC management UI, document category or leave type admin UI, real audit log viewing, integrations, or billing/subscription management — only the tenant name is editable** — see [Settings Foundation](#settings-foundation) above.
+- **Settings has no document category or leave type admin UI, real audit log viewing, integrations, or billing/subscription management — only the tenant name is editable** — see [Settings Foundation](#settings-foundation) above.
+- **Users & Access has no invitation flow, password reset/MFA/SSO UI, direct/temporary permission grants, access review workflow, or full audit UI — role/status management stays Tenant-Admin-only** — see [Users & Access Management UI](#users--access-management-ui) above.
 - **No JS/TS unit test runner configured** — frontend verification relies on `tsc --noEmit`, `vite build`, and backend feature tests asserting Inertia response shape/shared-prop safety.

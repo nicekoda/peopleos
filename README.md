@@ -203,6 +203,22 @@ data fetched. Platform Super Admins get a safe static Settings page and
 are blocked from `/api/v1/tenant` with a clean `403`. See
 `docs/security.md`.
 
+**Users & Access Management UI** (Checkpoint 23) — `/settings/access`
+is now a real hub linking to `/settings/access/users` (list),
+`/settings/access/users/{id}` (status changes, role assignment,
+employee linking), and `/settings/access/roles` (read-only). Backed by
+new `User`/`Role`/`Permission` APIs — the first tenant-scoped models in
+this app that don't use `BelongsToTenant` (login must work before a
+tenant is known, and Platform Super Admins need cross-tenant
+visibility), so every query in the new controllers manually filters by
+tenant — the primary defense here, not a backstop on top of a global
+scope. A tenant can never be left without an active Tenant Admin: any
+status change or role removal that would do so is rejected with `409`,
+regardless of who performs it. Role/status management stays
+Tenant-Admin-only this checkpoint; HR Manager keeps its existing
+read-only `users.view`. Employee linking reuses the existing
+Checkpoint 11 endpoints unchanged. See `docs/security.md`.
+
 See `docs/architecture.md`/`docs/security.md`/`docs/api.md` for the full
 design, what's shared with the frontend (and what never is), and the
 future module rollout plan.

@@ -989,15 +989,81 @@ at all, just a static, unlinked card on the landing page — inventing a
 placeholder route with no content and no specific permission would have
 been the "broken link" your instructions explicitly warned against.
 
-**"Users & Access" and "Roles & Permissions" share one destination
-page.** The checkpoint's own suggested optional-page list included
-`/settings/access` but not a separate `/settings/roles` — rather than
-inventing an unlisted route, both cards link to `/settings/access`,
-gated by `users.view` (currently held only by Tenant Admin and HR
-Manager, both of whom also hold `roles.view` via the same grants — so
-this doesn't currently under- or over-expose anything, but is worth
-revisiting if a future role is ever granted `roles.view` without
-`users.view`).
+**"Users & Access" and "Roles & Permissions" originally shared one
+placeholder destination page** — superseded in Checkpoint 23, which
+turned `/settings/access` into a real hub linking to dedicated
+`/settings/access/users` and `/settings/access/roles` pages. See
+"Users & Access Management UI" below.
+
+## Users & Access Management UI (Checkpoint 23)
+
+The first checkpoint to build against models that structurally cannot
+rely on the tenant-isolation pattern every other module uses — see
+[`security.md`](security.md#users--access-management-ui) for the full
+security model.
+
+**`User` and `Role` don't use `BelongsToTenant` — a pre-existing,
+deliberate design decision (Checkpoint 3/4), not something introduced
+here.** Login has to identify a user by email before any tenant context
+exists for that request, and Platform Super Admins need cross-tenant
+visibility for future platform tooling — a global scope that
+auto-filtered every query by the currently-resolved tenant would break
+both. The consequence for this checkpoint: `UserController`/`RoleController`/
+`UserRoleController` cannot lean on a global scope as their tenant
+boundary at all — every single query manually adds
+`where('tenant_id', app(Tenant::class)->id)` (plus, for `User`,
+`where('is_platform_admin', false)`; for `Role`,
+`where('is_platform_role', false)`). This is the *primary* defense in
+these three controllers, not defense-in-depth layered on top of
+something else — a mistake here would be a real cross-tenant or
+platform-admin data leak, not a redundant safeguard failing. Every
+`show()`/mutation additionally repeats the check via an explicit
+`abort_if($target->is_platform_admin, 404)` /
+`abort_if($target->is_platform_role, 404)` guard, so even a future
+refactor that accidentally weakens the query filter still can't reach a
+platform-scoped record through a tenant route.
+
+**The hard part — role assignment's own safety rules — already
+existed.** `User::assignRole()`/`removeRole()` (Checkpoint 4/5) already
+reject platform-vs-tenant scope mismatches and cross-tenant role
+assignment, and already write `role.assigned`/`role.removed` audit
+logs. `UserRoleController` doesn't reimplement any of this — it adds
+exactly one new safeguard on top (`TenantAdminProtectionService`) and
+otherwise just calls the existing, already-tested model methods. This
+is why the new controller is thin: the security-critical logic was
+mostly already built for a different reason (Checkpoint 4's original
+RBAC foundation), and this checkpoint's job was building a safe UI on
+top of it, not inventing new authorization logic from scratch.
+
+**One rule, one method, two call sites.** "Never leave a tenant without
+an active Tenant Admin" is checked identically whether the dangerous
+action is a status change (deactivating/suspending the last admin) or
+a role removal (stripping the `tenant-admin` role from the last
+holder) — both call `TenantAdminProtectionService::wouldLeaveTenantWithoutAdmin()`,
+which asks one question: "does at least one *other* user in this
+tenant hold the `tenant-admin`-slugged role?" Deliberately broader than
+the literal "cannot deactivate *themselves*" instruction — a second
+admin (or a bug) deactivating the *other* sole remaining admin is
+exactly as dangerous, so the check applies regardless of who's
+performing the action. Identified by the fixed, seeded role slug
+`tenant-admin`, not a permission-count heuristic — this app has exactly
+one canonical "admin" role per tenant by construction (`RoleSeeder`),
+so there's a real, stable concept to check against rather than an
+inferred one.
+
+**Employee linking UI adds no new backend surface at all.** `POST`/`DELETE
+/employees/{employee}/link-user`/`unlink-user` (Checkpoint 11) already
+enforce every rule this checkpoint needed (cross-tenant rejection,
+terminated-employee rejection, already-linked-employee rejection,
+already-linked-user rejection) — the User detail page's link/unlink UI
+is a pure frontend addition reusing those exact endpoints. The employee
+picker filters out `terminated` employees client-side (a real,
+available `EmployeeResource` field) but can't filter out
+*already-linked* employees, since `EmployeeResource` doesn't expose
+`user_id` — picking an already-linked employee simply surfaces the
+existing backend validation's clear error message instead, which is
+the correct place for that check to live regardless (backend remains
+authority, per Refinement 9).
 
 ## Internal IDs vs. Public-Facing References
 

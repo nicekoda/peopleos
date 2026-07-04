@@ -6,6 +6,7 @@ use App\Http\Controllers\EmployeeUiController;
 use App\Http\Controllers\LeaveUiController;
 use App\Http\Controllers\PolicyUiController;
 use App\Http\Controllers\SettingsController;
+use App\Http\Controllers\UsersAccessUiController;
 use Illuminate\Support\Facades\Route;
 use Inertia\Inertia;
 
@@ -110,6 +111,19 @@ Route::middleware(['auth', 'tenant.matches'])->group(function () {
     // not a new permission invented for a page with zero content yet.
     Route::get('settings/access', fn () => Inertia::render('Settings/Access'))
         ->middleware('permission:users.view')->name('settings.access');
+
+    // Users & Access Management UI (Checkpoint 23) — thin page routes;
+    // user/role data is fetched client-side from the new
+    // /api/v1/users|roles|permissions endpoints, never passed through
+    // as an Inertia prop (except the tenant-checked userId on the
+    // detail page). 'settings/access/users' must be registered before
+    // 'settings/access/users/{user}' so Laravel doesn't collide the two.
+    Route::get('settings/access/users', [UsersAccessUiController::class, 'users'])
+        ->middleware('permission:users.view')->name('settings.access.users');
+    Route::get('settings/access/users/{user}', [UsersAccessUiController::class, 'show'])
+        ->middleware('permission:users.view')->name('settings.access.users.show');
+    Route::get('settings/access/roles', [UsersAccessUiController::class, 'roles'])
+        ->middleware('permission:roles.view')->name('settings.access.roles');
     Route::get('settings/document-categories', fn () => Inertia::render('Settings/DocumentCategories'))
         ->middleware('permission:document_categories.view')->name('settings.document-categories');
     Route::get('settings/leave-types', fn () => Inertia::render('Settings/LeaveTypes'))

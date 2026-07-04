@@ -145,6 +145,78 @@ Platform Super Admins always get `403` from this endpoint —
 `tenant.view`/`tenant.update` are tenant-scoped permissions they can
 never hold. See `docs/architecture.md#settings-foundation-checkpoint-22`.
 
+## Users & Access
+
+`User` and `Role` do not use `BelongsToTenant` (see
+`docs/architecture.md#users--access-management-ui-checkpoint-23`) —
+every endpoint below manually filters by tenant and excludes
+platform-scoped records; this is the primary tenant boundary here, not
+a backstop.
+
+| Method | Path | Permission | Notes |
+|---|---|---|---|
+| `GET` | `/api/v1/users` | `users.view` | Paginated, tenant users only (never platform admins) |
+| `GET` | `/api/v1/users/{user}` | `users.view` | `404` if cross-tenant or a platform admin |
+| `PATCH` | `/api/v1/users/{user}` | `users.deactivate` | Body: `{"status": "active"\|"inactive"\|"suspended"}` — **only** `status` is accepted; `409` if this would leave the tenant with no active Tenant Admin |
+| `GET` | `/api/v1/roles` | `roles.view` | Paginated, tenant roles only (never platform roles) |
+| `GET` | `/api/v1/permissions` | `permissions.view` | Paginated, read-only catalog (tenant-scoped permission definitions only) |
+| `POST` | `/api/v1/users/{user}/roles` | `users.assign_role` | Body: `{"role_id": 1}` — must be a tenant role belonging to the caller's own tenant |
+| `DELETE` | `/api/v1/users/{user}/roles/{role}` | `users.assign_role` | `409` if this is the tenant's last `tenant-admin`-role holder |
+
+### Response shapes
+
+```json
+// GET /api/v1/users/{user}
+{
+  "data": {
+    "id": 7,
+    "name": "Jane Doe",
+    "email": "jane@example.com",
+    "status": "active",
+    "is_platform_admin": false,
+    "roles": [{ "id": 3, "name": "HR Manager", "slug": "hr-manager" }],
+    "linked_employee": { "id": "01h...", "full_name": "Jane Doe" },
+    "last_login_at": "2026-07-01T00:00:00+00:00",
+    "created_at": "2026-01-01T00:00:00+00:00"
+  }
+}
+
+// GET /api/v1/roles
+{
+  "data": [
+    {
+      "id": 3,
+      "name": "HR Manager",
+      "slug": "hr-manager",
+      "description": null,
+      "is_platform_role": false,
+      "permission_count": 25,
+      "created_at": "2026-01-01T00:00:00+00:00",
+      "updated_at": "2026-01-01T00:00:00+00:00"
+    }
+  ]
+}
+```
+
+Never returned: `password`, `remember_token`, `last_login_ip`,
+`email_verified_at`, raw `user_role`/`role_permission` pivot rows, or a
+role's actual permission list (only a computed count).
+
+### The "last Tenant Admin" rule
+
+Any action that would leave the tenant with zero active holders of the
+seeded `tenant-admin`-slugged role is rejected with `409` — whether
+that's a status change away from `active`, or removing the role
+itself — regardless of who performs the action. See
+`docs/security.md#users--access-management-ui` for the full design.
+
+### Employee linking
+
+The Users & Access UI's link/unlink actions reuse the existing
+`POST`/`DELETE /employees/{employee}/link-user`/`unlink-user`
+(Checkpoint 11, documented under "User ↔ Employee Linking" above)
+unchanged — no new backend surface for linking exists this checkpoint.
+
 ## Employees
 
 | Method | Path | Permission | Notes |
@@ -328,7 +400,10 @@ served through the `web` middleware group, session-based auth same as
 | `GET` | `/policies/{policy}/acknowledgements` | `auth`, `tenant.matches`, `permission:policies.view_acknowledgements` | Acknowledgement records list |
 | `GET` | `/settings` | `auth`, `tenant.matches` | Real UI (Checkpoint 22) — explicit `tenant.settings.view`-or-platform-admin check in the controller (no blanket `permission:` middleware, same reason as `/dashboard` — see `docs/security.md#settings-foundation`); each section card independently permission-gated |
 | `GET` | `/settings/company` | `auth`, `tenant.matches`, `permission:tenant.view` | Real UI — view/edit, fetched client-side from `/api/v1/tenant` |
-| `GET` | `/settings/access` | `auth`, `tenant.matches`, `permission:users.view` | Placeholder — shared destination for both "Users & Access" and "Roles & Permissions" cards |
+| `GET` | `/settings/access` | `auth`, `tenant.matches`, `permission:users.view` | Real hub UI (Checkpoint 23) — cards linking to Users and Roles pages |
+| `GET` | `/settings/access/users` | `auth`, `tenant.matches`, `permission:users.view` | Real UI — list, fetched client-side from `/api/v1/users` |
+| `GET` | `/settings/access/users/{user}` | `auth`, `tenant.matches`, `permission:users.view` | Detail — passes only `userId` as a prop, never user data; `404` if the user belongs to another tenant or is a platform admin |
+| `GET` | `/settings/access/roles` | `auth`, `tenant.matches`, `permission:roles.view` | Real UI — read-only list, fetched client-side from `/api/v1/roles` |
 | `GET` | `/settings/document-categories` | `auth`, `tenant.matches`, `permission:document_categories.view` | Placeholder |
 | `GET` | `/settings/leave-types` | `auth`, `tenant.matches`, `permission:leave_types.view` | Placeholder |
 | `GET` | `/settings/security` | `auth`, `tenant.matches`, `permission:audit.view` | Placeholder |
@@ -376,6 +451,13 @@ reaching `/settings`; every section card is independently gated by its
 own permission. Platform Super Admins see a safe static Settings page
 and are blocked from `/api/v1/tenant` with a clean `403`. See
 `docs/security.md#settings-foundation`.
+
+**Users & Access Management UI (Checkpoint 23)** reuses the new
+`/api/v1/users`/`/api/v1/roles`/`/api/v1/permissions` endpoints
+documented above, plus the existing Checkpoint 11
+`link-user`/`unlink-user` endpoints for employee linking. Role/status
+management stays Tenant-Admin-only this checkpoint. See
+`docs/security.md#users--access-management-ui`.
 
 ### Shared props (every Inertia response)
 

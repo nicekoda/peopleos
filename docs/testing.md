@@ -747,6 +747,66 @@ this test tries and confirms fails silently (the field is simply
 absent from `UpdateTenantRequest`'s rules, so it never reaches
 `$tenant->fill()` at all).
 
+## Users & Access: testing the primary defense, not a backstop (Checkpoint 23)
+
+Every prior module's tenant-isolation tests were, strictly speaking,
+testing a *second* layer — `BelongsToTenant`'s global scope was always
+the first, and the explicit controller check was defense-in-depth on
+top. `User`/`Role` have no such scope (see
+`docs/security.md#users--access-management-ui`), so
+`UserApiTest`/`RoleApiTest`'s tenant-isolation and platform-scope tests
+(`test_tenant_a_cannot_view_tenant_b_users_via_list`,
+`test_platform_admin_is_not_reachable_through_tenant_user_list_or_show`,
+`test_platform_roles_are_not_reachable_through_tenant_role_list`, and
+their Role equivalents) are proving the *only* line of defense holds,
+not a redundant one. Worth remembering for any future model that also
+skips `BelongsToTenant` for a deliberate reason (see `docs/architecture.md`
+for why `User`/`Role` do): its tests need to be written with the
+assumption that a missing filter is a real leak, not just a
+theoretical one a scope would have caught anyway.
+
+### A test-helper bug caught by the first full run, not by writing the test
+
+`UserApiTest`'s `tenantAdminUser()` helper originally created a *new*
+`Role::factory()` with slug `tenant-admin` on every call. The first two
+tests that called it once each passed fine; the first test that called
+it *twice for the same tenant*
+(`test_can_deactivate_tenant_admin_when_another_admin_exists`, which
+needs two separate Tenant-Admin-role holders) failed with a raw SQLite
+unique-constraint violation on `(tenant_id, slug)` — the seeded-role
+uniqueness rule doing exactly its job, just against a test fixture
+rather than production data. Fixed by switching the helper to
+`Role::query()->firstOrCreate(['tenant_id' => ..., 'slug' => 'tenant-admin'], [...])`,
+so repeated calls for the same tenant share one role. A second,
+unrelated bug surfaced in the same first run: the same helper granted
+`users.deactivate` but not `users.view`, so a test asserting a Tenant
+Admin could `GET` a user (which needs `users.view`) got a `403` instead
+of `200` — fixed by granting both permissions the helper's name
+implies a Tenant Admin would actually hold. Both were caught by running
+the new test file once, immediately after writing it, rather than
+trusting the code review alone — consistent with this project's
+standing rule that every checkpoint runs the real test suite before
+considering anything done.
+
+### Testing "last Tenant Admin" from both directions, for both dangerous paths
+
+Four dedicated tests exist, not two — one pair per dangerous path
+(status update, role removal), each pair proving both the block *and*
+its absence when safe:
+`test_cannot_deactivate_last_active_tenant_admin`/
+`test_can_deactivate_tenant_admin_when_another_admin_exists` for
+status, `test_cannot_remove_last_tenant_admin_role`/
+`test_can_remove_tenant_admin_role_when_another_admin_exists` for role
+removal. Testing only the "blocked" half would leave a real risk
+undetected: a rule implemented too broadly (e.g. accidentally blocking
+*any* status change for *any* Tenant Admin, not just the last one)
+would still pass a block-only test suite while silently breaking a
+legitimate action every day. `test_cannot_deactivate_last_active_tenant_admin`
+also deliberately uses a *different* actor than the target user (not
+self-service) — proving Refinement 4's "applies even if the actor is
+another admin, not just the user themself" holds, not just the
+easier-to-reach self-deactivation case.
+
 ## Verifying against the real app, not just the test suite
 
 Because of the SQLite/Postgres split above, checkpoints in this project

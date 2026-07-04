@@ -11,8 +11,12 @@ use App\Http\Controllers\Api\V1\LeaveBalanceController;
 use App\Http\Controllers\Api\V1\LeaveRequestController;
 use App\Http\Controllers\Api\V1\LeaveTypeController;
 use App\Http\Controllers\Api\V1\MeController;
+use App\Http\Controllers\Api\V1\PermissionController;
 use App\Http\Controllers\Api\V1\PolicyController;
+use App\Http\Controllers\Api\V1\RoleController;
 use App\Http\Controllers\Api\V1\TenantController;
+use App\Http\Controllers\Api\V1\UserController;
+use App\Http\Controllers\Api\V1\UserRoleController;
 use Illuminate\Support\Facades\Route;
 
 /*
@@ -53,6 +57,18 @@ Route::middleware(['auth', 'tenant.matches'])->prefix('api/v1')->group(function 
     // adds an explicit is_platform_admin check too, as defense in depth.
     Route::get('tenant', [TenantController::class, 'show'])->middleware('permission:tenant.view');
     Route::patch('tenant', [TenantController::class, 'update'])->middleware('permission:tenant.update');
+
+    // Checkpoint 23 — Users & Access. User and Role do NOT use
+    // BelongsToTenant (see docs/security.md) — every query in these
+    // controllers manually filters by tenant_id; this is the primary
+    // tenant boundary here, not defense-in-depth on top of a scope.
+    Route::get('users', [UserController::class, 'index'])->middleware('permission:users.view');
+    Route::get('users/{user}', [UserController::class, 'show'])->middleware('permission:users.view');
+    Route::patch('users/{user}', [UserController::class, 'update'])->middleware('permission:users.deactivate');
+    Route::post('users/{user}/roles', [UserRoleController::class, 'store'])->middleware('permission:users.assign_role');
+    Route::delete('users/{user}/roles/{role}', [UserRoleController::class, 'destroy'])->middleware('permission:users.assign_role');
+    Route::get('roles', [RoleController::class, 'index'])->middleware('permission:roles.view');
+    Route::get('permissions', [PermissionController::class, 'index'])->middleware('permission:permissions.view');
 
     Route::get('employees', [EmployeeController::class, 'index'])->middleware('permission:employees.view');
     Route::post('employees', [EmployeeController::class, 'store'])->middleware('permission:employees.create');

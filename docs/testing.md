@@ -807,6 +807,42 @@ self-service) — proving Refinement 4's "applies even if the actor is
 another admin, not just the user themself" holds, not just the
 easier-to-reach self-deactivation case.
 
+## Audit Log Viewing UI: a fixture side effect caught two count assertions off by one (Checkpoint 24)
+
+`AuditLogApiTest`'s `userWithPermissions()` helper (the same pattern
+used across every UI test file) calls `$user->assignRole($role)` to
+grant the throwaway permission — which itself, correctly, writes a
+`role.assigned` audit log entry (Checkpoint 4's `HasPermissions` trait
+audits every role assignment, test fixtures included). Two tests that
+assumed a freshly-created tenant would have exactly the audit logs the
+test explicitly created
+(`test_user_with_audit_view_can_list_audit_logs`,
+`test_tenant_a_cannot_list_tenant_b_audit_logs`) failed with an
+off-by-one count on the first run — not because tenant isolation was
+broken, but because the fixture setup itself is not audit-log-neutral.
+Fixed by reading the actual baseline count immediately after building
+the test user, before creating the logs the test cares about, and
+asserting against `$baselineCount + N` rather than a hardcoded `N`.
+Worth remembering for any future test that counts audit log rows
+against a tenant that already had *any* setup performed via a method
+that itself triggers `AuditLogger` — role assignment, permission
+grants, and (as of Checkpoint 22) tenant updates all do.
+
+### Testing "structurally read-only" by inspecting the route table, not just by absence of a controller method
+
+`test_no_audit_log_write_routes_exist` doesn't just check that
+`AuditLogController` lacks `store()`/`update()`/`destroy()` methods —
+it inspects Laravel's actual registered route list
+(`Route::getRoutes()`) for any route whose URI starts with
+`api/v1/audit-logs` and asserts none of them allow `POST`/`PUT`/
+`PATCH`/`DELETE`. This is a stronger claim than "the controller I wrote
+has no write methods" — it would also catch a future route
+accidentally added pointing at a *different* controller, or a typo
+that registered a write verb pointing at an existing read method.
+Combined with `AuditLog::save()`/`delete()` throwing at the model layer
+(Checkpoint 5), this checkpoint's "audit logs are read-only" claim is
+backed by two independent, differently-shaped tests rather than one.
+
 ## Verifying against the real app, not just the test suite
 
 Because of the SQLite/Postgres split above, checkpoints in this project

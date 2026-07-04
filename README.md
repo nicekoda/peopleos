@@ -219,6 +219,23 @@ Tenant-Admin-only this checkpoint; HR Manager keeps its existing
 read-only `users.view`. Employee linking reuses the existing
 Checkpoint 11 endpoints unchanged. See `docs/security.md`.
 
+**Audit Log Viewing UI** (Checkpoint 24) — `/settings/security` now
+links to `/settings/security/audit-logs` (list, with `module`/`action`/
+`severity`/date-range filters) and `/settings/security/audit-logs/{id}`
+(detail), backed by new read-only `GET /api/v1/audit-logs` and
+`GET /api/v1/audit-logs/{auditLog}` endpoints. `AuditLog`, like
+`User`/`Role` (Checkpoint 23), doesn't use `BelongsToTenant` — every
+query manually filters by tenant. A new `AuditValueSanitizer` masks
+sensitive keys (passwords, tokens, secrets, bank/salary/medical values,
+leave/rejection reasons, storage paths, and more) in `metadata`/
+`old_values`/`new_values` before they ever leave the API — genuinely
+new protection for `metadata`, which was never masked before this
+checkpoint, and defense-in-depth for `old_values`/`new_values`, which
+were already masked at write time. `ip_address`/`user_agent` are
+omitted from the API response entirely. No create/update/delete audit
+routes exist — audit logs remain append-only, enforced independently
+at the model layer since Checkpoint 5. See `docs/security.md`.
+
 See `docs/architecture.md`/`docs/security.md`/`docs/api.md` for the full
 design, what's shared with the frontend (and what never is), and the
 future module rollout plan.

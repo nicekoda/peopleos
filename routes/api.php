@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\Api\V1\AuditLogController;
 use App\Http\Controllers\Api\V1\DashboardController;
 use App\Http\Controllers\Api\V1\DocumentCategoryController;
 use App\Http\Controllers\Api\V1\EmployeeController;
@@ -69,6 +70,16 @@ Route::middleware(['auth', 'tenant.matches'])->prefix('api/v1')->group(function 
     Route::delete('users/{user}/roles/{role}', [UserRoleController::class, 'destroy'])->middleware('permission:users.assign_role');
     Route::get('roles', [RoleController::class, 'index'])->middleware('permission:roles.view');
     Route::get('permissions', [PermissionController::class, 'index'])->middleware('permission:permissions.view');
+
+    // Checkpoint 24 — read-only. AuditLog does NOT use BelongsToTenant
+    // (see docs/security.md) — every query manually filters by
+    // tenant_id; this is the primary tenant boundary, not
+    // defense-in-depth on top of a scope. No store/update/destroy
+    // route exists anywhere — audit logs are append-only, enforced at
+    // both the model layer (AuditLog::save()/delete() throw) and by
+    // simply never registering a write route here.
+    Route::get('audit-logs', [AuditLogController::class, 'index'])->middleware('permission:audit.view');
+    Route::get('audit-logs/{auditLog}', [AuditLogController::class, 'show'])->middleware('permission:audit.view');
 
     Route::get('employees', [EmployeeController::class, 'index'])->middleware('permission:employees.view');
     Route::post('employees', [EmployeeController::class, 'store'])->middleware('permission:employees.create');

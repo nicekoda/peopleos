@@ -3029,8 +3029,6 @@ internal appears anywhere in either resource's response.
   grants (`UserPermission`, Checkpoint 4) remain API/tinker-only.
 - No temporary/time-boxed permission UI.
 - No access review workflows or segregation-of-duties engine.
-- No full audit UI — `/settings/security` remains the Checkpoint 22
-  placeholder.
 - No platform tenant management UI, bulk user import, or SCIM/directory
   sync.
 - Role/status management stays Tenant-Admin-only — HR Manager and
@@ -3046,12 +3044,200 @@ internal appears anywhere in either resource's response.
 - Temporary/time-boxed permissions (an `expires_at` column on
   `user_permissions`, already flagged as future work since Checkpoint 4).
 - Access review workflows and segregation-of-duties tooling.
-- A real audit log viewing UI, once a read endpoint exists.
 - SSO/SCIM directory sync, once an identity provider integration is
   scoped.
 - Broadening role/status management beyond Tenant Admin, if a real
   need for it is identified (e.g. HR Manager granted `users.assign_role`
   for a narrow, well-justified reason).
+- Frontend test tooling (Vitest + React Testing Library), if
+  component-level testing becomes valuable.
+
+## Audit Log Viewing UI
+
+The first checkpoint to read from `audit_logs`, not just write to it —
+see
+[`architecture.md`](architecture.md#audit-log-viewing-ui-checkpoint-24)
+for the "structurally read-only, and structurally already was" design,
+and [`api.md`](api.md#audit-logs) for the endpoint reference.
+
+### The tenant boundary here is manual, same weight as Checkpoint 23
+
+`AuditLog` does not use `BelongsToTenant` (a Checkpoint 5 design
+decision — audit events happen in contexts where an ambient bound
+tenant would be unreliable). `AuditLogController::index()`/`show()`
+manually filter `where('tenant_id', app(Tenant::class)->id)` as the
+*primary* tenant boundary, not a backstop — the same weight of concern,
+and the same weight of testing, as `User`/`Role` in Checkpoint 23.
+`show()` additionally repeats the check via explicit
+`abort_unless($auditLog->tenant_id === app(Tenant::class)->id, 404)` —
+a platform-level log (`tenant_id: null`) can never match a real
+tenant's id, so this also naturally rejects those without a separate
+check. Confirmed directly
+(`test_tenant_a_cannot_list_tenant_b_audit_logs`,
+`test_tenant_a_cannot_view_tenant_b_audit_log_by_guessed_id`,
+`test_platform_level_audit_log_is_not_reachable_through_tenant_api`).
+
+### Platform Super Admin: blocked at the API, same as Checkpoint 23's pattern
+
+`audit.view` is a tenant-scoped permission a platform role can never be
+assigned — `permission:audit.view` middleware alone already returns
+`403` for a Platform Super Admin hitting either endpoint.
+`AuditLogController` additionally opens both methods with
+`abort_if($user->is_platform_admin, 403, ...)` as defense in depth,
+for the identical reason as `DashboardController`/`TenantController`/
+`UserController`: `app(Tenant::class)` is never bound for a platform
+admin, so an unfiltered query here would otherwise span every tenant
+in the system. Confirmed directly
+(`test_platform_super_admin_is_blocked_from_tenant_audit_api`) and
+live. Unlike the top-level `/settings` landing page (which has a
+special platform-admin-safe-message exemption), `/settings/security`
+and every audit sub-page use ordinary `permission:audit.view`
+middleware and correctly `403` a platform admin — consistent with
+every other Settings *sub-page* (Company, Access, Document Categories,
+Leave Types), where only the landing page itself gets the exemption.
+
+### `AuditValueSanitizer`: new protection for `metadata`, defense-in-depth for the rest
+
+`AuditLogger`'s existing write-time masking (Checkpoint 5/12) only ever
+covered `old_values`/`new_values` — `metadata` was deliberately left
+unmasked, under the assumption that callers would only ever put small,
+safe contextual tags there. `AuditValueSanitizer::sanitize()` is a new,
+broader pass applied at the `Resource` layer to all three fields
+uniformly, regardless of whatever masking already happened at write
+time:
+
+```php
+private const SENSITIVE_KEY_PATTERNS = [
+    'password', 'token', 'secret', 'key', 'authorization', 'cookie',
+    'session', 'remember', 'reset', 'bank', 'iban', 'salary', 'medical',
+    'reason', 'rejection_reason', 'storage_path', 'stored_filename',
+    'file_path', 'private_path', 'ip_address', 'user_agent',
+];
+```
+
+Matched case-insensitively, by substring — the same technique
+`AuditLogger` already used, just with a fuller list. This is
+deliberately broader than strictly necessary: a value like
+`permission_key` (from `role.assigned`/`permission.granted` audit
+entries, Checkpoint 4) gets masked purely because it contains `key` —
+an accepted false positive, not a bug. Over-masking a few harmless
+fields is the correct tradeoff for a sanitizer whose job is catching
+values nobody explicitly reviewed for this exact purpose. Confirmed
+directly with real seeded values for every category — `password`,
+`api_key`, `bank_account_number`, `reason` (a realistic free-text
+medical-sounding string), `storage_path`, and `ip_address`-as-a-metadata-key
+all masked; a plain `employee_id` value passed through unmasked
+(`test_audit_log_resource_masks_sensitive_metadata_keys`,
+`test_audit_log_resource_masks_sensitive_old_values_keys`,
+`test_audit_log_resource_masks_sensitive_new_values_keys`).
+
+### `ip_address`/`user_agent`: omitted entirely, not just optional
+
+Per your explicit "if unsure, omit entirely" instruction,
+`AuditLogResource` never returns `ip_address`/`user_agent` at all —
+not on the list, not on the detail view, regardless of severity or
+context. Confirmed directly
+(`test_audit_log_resource_never_exposes_ip_address_or_user_agent` —
+seeds a log with a real IP and a distinctive user-agent string,
+asserts both the key names and the actual values are absent from the
+full serialized response).
+
+### Filters: validated against known values, applied after the tenant filter
+
+`module`/`action`/`actor_user_id`/`target_user_id` are plain scalar
+filters; `severity` is validated against the three values actually
+used anywhere in this codebase (`info`/`warning`/`critical` —
+confirmed by grepping every `AuditLogger::log()`/`logFor()` call site
+during research for this checkpoint, not guessed); `date_from`/`date_to`
+are validated as real dates, with `date_to` required to be
+`after_or_equal:date_from`. Every filter is applied via Eloquent's
+`when()` *after* the mandatory `where('tenant_id', ...)` clause already
+exists — a filter can narrow the result set, but nothing about the
+filter mechanism itself provides a path around the tenant boundary
+(there's no `tenant_id` filter key exposed to accept from the request
+in the first place). Confirmed directly
+(`test_module_filter_is_tenant_scoped` — two matching-module logs
+exist, one in the caller's tenant and one in a different tenant; only
+the caller's own is returned).
+
+### Actor/target names: resolved client-side, reusing an existing endpoint
+
+`AuditLogResource` returns only `actor_user_id`/`target_user_id` as
+plain integers — no name, no new backend join. The Audit Logs list and
+detail pages each fetch `GET /api/v1/users` (Checkpoint 23, already
+tenant-scoped and tested) once and build a client-side ID→name lookup
+(`formatActorRef()` in `resources/js/lib/format.ts`), falling back to
+`System` for system-actor entries (`actor_user_id: null`) or a plain
+`User #N` reference if a name can't be resolved. No cross-tenant lookup
+risk — the endpoint being reused was already tenant-scoped for its own
+reasons, and this checkpoint adds no new query.
+
+### Rendering: sanitized values as clean rows, never a debug dump
+
+The detail page's `KeyValueList` component renders each sanitized
+`metadata`/`old_values`/`new_values` entry as a plain, escaped
+key-value row via ordinary JSX text interpolation — never
+`dangerouslySetInnerHTML`, never a raw `JSON.stringify()` styled like a
+debug panel. Values are already safe by the time this component
+receives them (server-side sanitisation already happened); this
+component's only job is displaying text cleanly, not a second line of
+defense.
+
+### Structurally read-only, confirmed by inspecting the route table itself
+
+No `store()`/`update()`/`destroy()` exists on `AuditLogController`, and
+no `POST`/`PUT`/`PATCH`/`DELETE` route is registered for any
+`audit-logs` URI — confirmed not by absence of code, but by a test that
+inspects Laravel's actual registered route list and asserts no write
+method exists on any matching route
+(`test_no_audit_log_write_routes_exist`). This is in addition to
+`AuditLog::save()`/`delete()` already throwing at the model layer
+(Checkpoint 5) if either were ever somehow reached — two independent
+reasons this can never become writable by accident.
+
+### What is not, and cannot be, tested by a JS runner
+
+Same posture as every prior module UI checkpoint — no Jest/Vitest
+configured. Verified via `tsc --noEmit`, `npm run build`, and a live
+HTTPS smoke test: the filter form, the actor/target name lookup
+rendering, and the sanitized key-value list layout on the detail page.
+
+What *is* backend-tested (`AuditLogApiTest` 17, `AuditLogUiTest` 7 — 24
+new tests): permission gating both directions on API and UI, tenant
+isolation for list and single-record (the primary defense), platform-level-log
+and Platform-Super-Admin unreachability, sanitisation of all three
+JSON fields with real sensitive values, `ip_address`/`user_agent`
+omission, filter validation and tenant-scoping, pagination, cross-tenant
+`404`, IDs-only UI props, and the structural no-write-route test.
+
+### Current limitations
+
+- No audit export, reporting, or compliance report generation.
+- No SIEM integration or alerting.
+- No anomaly detection.
+- No advanced search — only the basic filters listed above.
+- No saved filters.
+- No platform-wide (cross-tenant) audit dashboard for Platform Super
+  Admin.
+- No retention/archival controls — logs accumulate indefinitely (no
+  deletion path exists at all, by design, but also no automated
+  pruning).
+- Actor/target names depend on `/api/v1/users`, which excludes
+  soft-deleted users by default — a since-deleted user's historical
+  actions show as `User #N` rather than their name.
+- No JS/TS unit test runner — see above.
+
+### Future
+
+- Audit export and compliance reporting, building on the same
+  sanitized data.
+- SIEM integration, once a real integration target is identified.
+- Alerting/anomaly detection for unusual audit patterns.
+- Advanced search and saved filters.
+- A genuine platform-level audit dashboard for Platform Super Admin,
+  architecturally separate from this tenant-scoped endpoint.
+- Retention/archival policy controls, once a real compliance
+  requirement is scoped.
 - Frontend test tooling (Vitest + React Testing Library), if
   component-level testing becomes valuable.
 
@@ -3097,11 +3283,12 @@ other 17 roles per tenant exist as empty placeholders for future modules.
 - **Leave Management still has no notifications or calendar integration** — see [Leave Management](#leave-management) above.
 - **Line Manager can now approve/reject leave, but direct reports only** (Checkpoint 14) — indirect (skip-level) approval is a deliberate future policy decision, not built. See [Manager-Hierarchy-Scoped Leave Approval](#manager-hierarchy-scoped-leave-approval) above.
 - **No org chart, manager self-service dashboard, or performance/probation review usage of the manager hierarchy** — see [Manager Hierarchy](#manager-hierarchy) above for the full list.
-- **Employee Records, Leave Management, (employee-scoped) Document Repository, Policy Management, the Dashboard, Settings, and Users & Access all have real UIs now (Checkpoints 17/18/19/20/21/22/23); the top-level `/documents` route is still a permission-gated placeholder (no tenant-wide document centre yet — see [Document Repository UI](#document-repository-ui) above)** — see [Employee Records UI](#employee-records-ui), [Leave Management UI](#leave-management-ui), [Document Repository UI](#document-repository-ui), [Policy Management UI](#policy-management-ui), [Dashboard Foundation](#dashboard-foundation), [Settings Foundation](#settings-foundation), and [Users & Access Management UI](#users--access-management-ui) above.
+- **Employee Records, Leave Management, (employee-scoped) Document Repository, Policy Management, the Dashboard, Settings, Users & Access, and Audit Log Viewing all have real UIs now (Checkpoints 17/18/19/20/21/22/23/24); the top-level `/documents` route is still a permission-gated placeholder (no tenant-wide document centre yet — see [Document Repository UI](#document-repository-ui) above)** — see [Employee Records UI](#employee-records-ui), [Leave Management UI](#leave-management-ui), [Document Repository UI](#document-repository-ui), [Policy Management UI](#policy-management-ui), [Dashboard Foundation](#dashboard-foundation), [Settings Foundation](#settings-foundation), [Users & Access Management UI](#users--access-management-ui), and [Audit Log Viewing UI](#audit-log-viewing-ui) above.
 - **Leave Management UI has no balance/leave-type admin UI, calendar view, or notification integration** — see [Leave Management UI](#leave-management-ui) above.
 - **Document Repository UI has no tenant-wide document centre, approval workflow UI, eSignature, document generation, or file preview** — see [Document Repository UI](#document-repository-ui) above.
 - **Policy Management UI has no campaign automation, reminders/escalations, dashboard/compliance reporting, template library, bulk/department-wide assignment, or admin-recorded-on-behalf-of acknowledgement UI** — see [Policy Management UI](#policy-management-ui) above.
 - **Dashboard has no charts, tenant-wide document cards, platform-level dashboard, or notifications** — see [Dashboard Foundation](#dashboard-foundation) above.
-- **Settings has no document category or leave type admin UI, real audit log viewing, integrations, or billing/subscription management — only the tenant name is editable** — see [Settings Foundation](#settings-foundation) above.
-- **Users & Access has no invitation flow, password reset/MFA/SSO UI, direct/temporary permission grants, access review workflow, or full audit UI — role/status management stays Tenant-Admin-only** — see [Users & Access Management UI](#users--access-management-ui) above.
+- **Settings has no document category or leave type admin UI, integrations, or billing/subscription management — only the tenant name is editable** — see [Settings Foundation](#settings-foundation) above.
+- **Users & Access has no invitation flow, password reset/MFA/SSO UI, direct/temporary permission grants, or access review workflow — role/status management stays Tenant-Admin-only** — see [Users & Access Management UI](#users--access-management-ui) above.
+- **Audit Log Viewing UI has no export, SIEM integration, alerting, anomaly detection, advanced search, saved filters, platform-wide dashboard, or retention controls** — see [Audit Log Viewing UI](#audit-log-viewing-ui) above.
 - **No JS/TS unit test runner configured** — frontend verification relies on `tsc --noEmit`, `vite build`, and backend feature tests asserting Inertia response shape/shared-prop safety.

@@ -15,3 +15,22 @@ export function formatEmployeeRef(employeeId: string, viewerEmployeeId: string |
 
     return `Employee record (ID ending •••${employeeId.slice(-4)})`;
 }
+
+/**
+ * AuditLogResource returns only actor_user_id/actor_type (Checkpoint
+ * 24, Refinement 7) — never a name, since resolving one server-side
+ * would mean adding a new join the audit endpoint doesn't need for
+ * anything else. Name resolution happens client-side instead, from a
+ * lookup map built off the existing, already-tested, tenant-scoped
+ * GET /api/v1/users (Checkpoint 23) — never a new backend call, never
+ * a cross-tenant lookup. Falls back to "System" for system-actor
+ * entries, or a truncated numeric reference if a user can't be
+ * resolved (e.g. since soft-deleted, so absent from that list).
+ */
+export function formatActorRef(userId: number | null, usersById: Map<number, string>): string {
+    if (userId === null) {
+        return 'System';
+    }
+
+    return usersById.get(userId) ?? `User #${userId}`;
+}

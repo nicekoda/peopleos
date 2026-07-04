@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\AuditLogUiController;
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\EmployeeDocumentUiController;
 use App\Http\Controllers\EmployeeUiController;
@@ -130,6 +131,16 @@ Route::middleware(['auth', 'tenant.matches'])->group(function () {
         ->middleware('permission:leave_types.view')->name('settings.leave-types');
     Route::get('settings/security', fn () => Inertia::render('Settings/Security'))
         ->middleware('permission:audit.view')->name('settings.security');
+
+    // Audit Log Viewing UI (Checkpoint 24) — thin page routes; audit log
+    // data is fetched client-side from the new /api/v1/audit-logs
+    // endpoints, never passed through as an Inertia prop (except the
+    // tenant-checked auditLogId on the detail page). No write route
+    // exists anywhere — audit logs are read-only.
+    Route::get('settings/security/audit-logs', [AuditLogUiController::class, 'index'])
+        ->middleware('permission:audit.view')->name('settings.security.audit-logs');
+    Route::get('settings/security/audit-logs/{auditLog}', [AuditLogUiController::class, 'show'])
+        ->middleware('permission:audit.view')->name('settings.security.audit-logs.show');
     // No dedicated "integrations.*" permission exists, and none is
     // invented for a page with no real content — falls back to the
     // same umbrella check as the landing page itself.

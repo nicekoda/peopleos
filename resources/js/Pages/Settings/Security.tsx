@@ -1,13 +1,13 @@
 import { Head, Link } from '@inertiajs/react';
 import AppLayout from '@/Layouts/AppLayout';
 import PageHeader from '@/Components/PageHeader';
-import EmptyState from '@/Components/EmptyState';
+import Card from '@/Components/Card';
+import PermissionGate from '@/Components/PermissionGate';
 
 /**
- * Placeholder only (Checkpoint 22) — reachable with audit.view. No
- * audit log viewing endpoint exists yet (audit logging is write-only —
- * see docs/security.md), so nothing is fetched or shown here. A real
- * audit UI is explicitly out of scope this checkpoint.
+ * Real hub page (Checkpoint 24) — replaces the Checkpoint 22
+ * placeholder. Links to the real, read-only Audit Logs list; no other
+ * security settings exist yet, so this stays a single-card hub for now.
  */
 export default function SettingsSecurity() {
     return (
@@ -15,17 +15,26 @@ export default function SettingsSecurity() {
             <Head title="Security & Audit" />
             <PageHeader
                 title="Security & Audit"
-                description="Review security settings and audit activity."
+                description="Review audit log activity for this tenant."
                 actions={
                     <Link href="/settings" className="text-sm font-medium text-indigo-600 hover:text-indigo-500">
                         Back to Settings
                     </Link>
                 }
             />
-            <EmptyState
-                title="Security and audit review is coming later"
-                description="This section will let you review audit log activity and security-related settings for this tenant."
-            />
+
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                <PermissionGate permission="audit.view">
+                    <Link href="/settings/security/audit-logs" className="block hover:opacity-80">
+                        <Card>
+                            <p className="font-medium text-slate-900">Audit Logs</p>
+                            <p className="mt-1 text-sm text-slate-500">
+                                View a read-only history of security-relevant activity in this tenant.
+                            </p>
+                        </Card>
+                    </Link>
+                </PermissionGate>
+            </div>
         </AppLayout>
     );
 }

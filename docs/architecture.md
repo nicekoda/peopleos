@@ -1065,6 +1065,77 @@ existing backend validation's clear error message instead, which is
 the correct place for that check to live regardless (backend remains
 authority, per Refinement 9).
 
+## Audit Log Viewing UI (Checkpoint 24)
+
+The first checkpoint to build a *read* surface on top of data that has
+existed since Checkpoint 5 — `audit_logs` has been written to on every
+sensitive action since the very first RBAC checkpoint, with nothing
+reading it back until now. See
+[`security.md`](security.md#audit-log-viewing-ui) for the full security
+model.
+
+**`AuditLog` joins `User`/`Role` as a model that structurally cannot
+rely on `BelongsToTenant`** — audit events happen in contexts (login,
+CLI, seeders) where an ambient bound tenant would be unreliable, so
+`AuditLogger` always takes an explicit `tenant_id` instead (a design
+decision from Checkpoint 5, unchanged here). `AuditLogController`
+follows the exact same pattern established in Checkpoint 23: manual
+`where('tenant_id', app(Tenant::class)->id)` filtering as the *primary*
+tenant boundary, plus an explicit `abort_if($user->is_platform_admin, ...)`
+guard as defense in depth against the same failure mode (an unbound
+`Tenant` silently producing an unscoped query for a platform admin).
+
+**"Read-only" was mostly already true before this checkpoint — this
+just adds the read.** `AuditLog::save()` on an existing row and
+`delete()` both throw `RuntimeException` at the model layer
+(Checkpoint 5) — there was never a way to make audit logs mutable, this
+checkpoint didn't need to add any new safeguard for that. What's new is
+purely additive: `index()`/`show()`, no `store()`/`update()`/`destroy()`
+anywhere, confirmed by a structural test
+(`test_no_audit_log_write_routes_exist`) that inspects the registered
+route list itself for any `POST`/`PUT`/`PATCH`/`DELETE` method on an
+`audit-logs` URI, rather than just trusting that none were written.
+
+**A masking gap that existed for three checkpoints, closed here, not
+there.** `AuditLogger::mask()` (Checkpoint 5, extended in Checkpoint 12)
+only ever scrubbed `old_values`/`new_values` at write time —
+`metadata` was deliberately left unmasked, on the stated assumption
+that callers would only ever put "small, safe contextual tags" there.
+That assumption mostly held (reviewed across every module's audit call
+sites while researching this checkpoint), but "mostly" isn't a security
+boundary — a single future call site putting something sensitive into
+`metadata` would have shipped unmasked with nothing to catch it. Rather
+than retroactively auditing every historical `AuditLogger::log()` call
+site for compliance (fragile, and wouldn't protect against the *next*
+one either), `AuditValueSanitizer` masks `metadata` the same way
+`old_values`/`new_values` already were, applied uniformly at the
+read/`Resource` layer — this protects every future metadata value too,
+not just the ones already reviewed.
+
+**A deliberately broader pattern list than `AuditLogger`'s own,
+accepting false positives on purpose.** `AuditValueSanitizer`'s pattern
+list includes `key`, `session`, `cookie`, `authorization`, `iban`,
+`medical`, and more that `AuditLogger` never needed. This does mean a
+harmless field like `permission_key` (from `role.assigned`/
+`permission.granted` audit entries, Checkpoint 4) gets masked purely
+because it contains the substring `key` — a known, accepted false
+positive, not a bug. Preferring to over-mask a handful of harmless
+fields is the correct tradeoff for a sanitizer whose entire job is
+catching values nobody explicitly reviewed.
+
+**Actor/target names are resolved client-side, reusing an existing
+endpoint, not a new backend join.** `AuditLogResource` returns only
+`actor_user_id`/`target_user_id` (plain integers) — no name, no
+enrichment query. The frontend fetches the already-existing,
+already-tested `GET /api/v1/users` (Checkpoint 23) once per page load
+and builds an ID→name lookup map client-side (`formatActorRef()`,
+mirroring the `formatEmployeeRef()` pattern from Checkpoint 18) —
+falling back to `System` for system-actor entries or a plain `User #N`
+reference if a name can't be resolved (e.g. a since soft-deleted user,
+absent from that endpoint's default query). No new backend surface,
+no cross-tenant lookup risk, since `/api/v1/users` was already
+tenant-scoped for its own reasons.
+
 ## Internal IDs vs. Public-Facing References
 
 Internal database IDs may remain bigint (see

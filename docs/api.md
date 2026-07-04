@@ -217,6 +217,69 @@ The Users & Access UI's link/unlink actions reuse the existing
 (Checkpoint 11, documented under "User ↔ Employee Linking" above)
 unchanged — no new backend surface for linking exists this checkpoint.
 
+## Audit Logs
+
+Read-only (Checkpoint 24) — no create/update/delete route exists
+anywhere for this resource; `AuditLog` is also structurally append-only
+at the model layer (`save()` on an existing row and `delete()` both
+throw). `AuditLog` does not use `BelongsToTenant` (see
+`docs/architecture.md#audit-log-viewing-ui-checkpoint-24`) — every
+query below manually filters by tenant; this is the primary tenant
+boundary, not a backstop.
+
+| Method | Path | Permission | Notes |
+|---|---|---|---|
+| `GET` | `/api/v1/audit-logs` | `audit.view` | Paginated, tenant-scoped only (platform-level entries with `tenant_id: null` are never included); ordered `created_at desc` |
+| `GET` | `/api/v1/audit-logs/{auditLog}` | `audit.view` | `404` if cross-tenant or a platform-level entry |
+
+### Filters (all optional, all tenant-scoped)
+
+| Filter | Validation |
+|---|---|
+| `module` | string |
+| `action` | string |
+| `severity` | one of `info`, `warning`, `critical` |
+| `actor_user_id` | integer |
+| `target_user_id` | integer |
+| `date_from` | valid date |
+| `date_to` | valid date, `after_or_equal:date_from` |
+
+### Response shape
+
+```json
+{
+  "data": {
+    "id": 42,
+    "tenant_id": "01h...",
+    "actor_user_id": 7,
+    "actor_type": "user",
+    "action": "role.assigned",
+    "module": "rbac",
+    "auditable_type": "App\\Models\\Role",
+    "auditable_id": "3",
+    "target_user_id": 12,
+    "description": "Role 'HR Manager' assigned to user #12.",
+    "severity": "info",
+    "created_at": "2026-07-01T00:00:00+00:00",
+    "metadata": { "role_id": 3, "role_slug": "hr-manager" },
+    "old_values": null,
+    "new_values": { "role_id": 3, "role_slug": "hr-manager" }
+  }
+}
+```
+
+Never returned: `ip_address`, `user_agent`. `metadata`/`old_values`/
+`new_values` are passed through `AuditValueSanitizer` before leaving
+the Resource — any key matching a sensitive pattern (`password`,
+`token`, `secret`, `key`, `bank`, `salary`, `medical`, `reason`,
+`storage_path`, and more — see `docs/security.md#audit-log-viewing-ui`
+for the full list) is replaced with `***MASKED***`, regardless of
+whatever masking already happened at write time in `AuditLogger`.
+
+Platform Super Admins always get `403` from both endpoints —
+`audit.view` is a tenant-scoped permission they can never hold. See
+`docs/architecture.md#audit-log-viewing-ui-checkpoint-24`.
+
 ## Employees
 
 | Method | Path | Permission | Notes |
@@ -406,7 +469,9 @@ served through the `web` middleware group, session-based auth same as
 | `GET` | `/settings/access/roles` | `auth`, `tenant.matches`, `permission:roles.view` | Real UI — read-only list, fetched client-side from `/api/v1/roles` |
 | `GET` | `/settings/document-categories` | `auth`, `tenant.matches`, `permission:document_categories.view` | Placeholder |
 | `GET` | `/settings/leave-types` | `auth`, `tenant.matches`, `permission:leave_types.view` | Placeholder |
-| `GET` | `/settings/security` | `auth`, `tenant.matches`, `permission:audit.view` | Placeholder |
+| `GET` | `/settings/security` | `auth`, `tenant.matches`, `permission:audit.view` | Real hub UI (Checkpoint 24) — links to Audit Logs |
+| `GET` | `/settings/security/audit-logs` | `auth`, `tenant.matches`, `permission:audit.view` | Real UI — list with filters, fetched client-side from `/api/v1/audit-logs` |
+| `GET` | `/settings/security/audit-logs/{auditLog}` | `auth`, `tenant.matches`, `permission:audit.view` | Detail — passes only `auditLogId` as a prop, never audit data; `404` if cross-tenant |
 | `GET` | `/settings/integrations` | `auth`, `tenant.matches`, `permission:tenant.settings.view` | Placeholder — no dedicated permission exists yet, falls back to the same umbrella check as the landing page |
 
 **Leave Management UI (Checkpoint 18)** reuses `resources/js/lib/api.ts`
@@ -458,6 +523,13 @@ documented above, plus the existing Checkpoint 11
 `link-user`/`unlink-user` endpoints for employee linking. Role/status
 management stays Tenant-Admin-only this checkpoint. See
 `docs/security.md#users--access-management-ui`.
+
+**Audit Log Viewing UI (Checkpoint 24)** reuses the new
+`GET /api/v1/audit-logs`/`GET /api/v1/audit-logs/{auditLog}` endpoints
+documented above, plus the existing `GET /api/v1/users` (Checkpoint 23)
+for client-side actor/target name resolution — no new enrichment
+endpoint was built. Read-only end to end. See
+`docs/security.md#audit-log-viewing-ui`.
 
 ### Shared props (every Inertia response)
 

@@ -334,6 +334,22 @@ smoke test this project has always run by hand is **not** automated
 have) — it remains a documented required manual step after CI passes.
 See `docs/quality-gate.md` for the full reference.
 
+## GitHub Remote & CI Verification (Checkpoint 30)
+
+This repository is now pushed to a **private** GitHub repository and
+runs on **GitHub Free** — a confirmed business constraint: nothing in
+this project's CI/deployment/operations design assumes a paid GitHub
+plan. The first real GitHub Actions run surfaced one CI-only bug (no
+product code affected): the workflow ran the backend test suite
+*before* the frontend build, so every test rendering a real Inertia
+page failed on a missing `public/build/manifest.json` — fixed by
+reordering the workflow to build first. `.github/workflows/ci.yml` also
+now cancels superseded runs on the same branch and caches Composer
+dependencies, keeping it well within GitHub Free's 2,000 Actions
+minutes/month for private repos. See `docs/quality-gate.md` §5 for the
+full GitHub Free reasoning and what would trigger reconsidering a paid
+plan later.
+
 ## Documentation
 
 - [`docs/architecture.md`](docs/architecture.md) — multi-tenancy, tenant resolution, RBAC overview, internal-vs-public IDs, frontend architecture.

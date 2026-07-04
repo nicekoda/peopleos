@@ -191,3 +191,78 @@ full version of this list this section summarizes.
 - Load testing, accessibility auditing, dependency vulnerability
   scanning, or security static analysis — none of these exist yet in
   this project, CI or otherwise.
+
+## 5. GitHub Free — Current Plan and When to Reconsider
+
+**Business constraint (confirmed Checkpoint 30): PeopleOS will run on
+GitHub Free for the next few years.** Nothing in this project's
+CI/deployment/operations design should assume a paid GitHub plan.
+Concretely, that means:
+
+- **This repository is private, on GitHub Free.** Free private repos
+  get unlimited collaborators, unlimited repos, Issues/PRs/Releases
+  with no restriction, and **2,000 Actions minutes/month** (Linux
+  runners, the only kind this workflow uses, count at the standard 1×
+  rate — no multiplier).
+- **GitHub is source-code/docs/CI infrastructure only, never
+  production infrastructure.** No production files, uploaded employee
+  documents, database backups, `.env` files, secrets, private
+  certificates, or customer data are ever committed here — see
+  `docs/deployment.md`/`docs/production-readiness.md` for where those
+  actually live (a real database, real private storage, a real secrets
+  manager — none of them GitHub). GitHub Actions provisions a fresh,
+  throwaway PostgreSQL container per CI run for testing only; it is
+  never a production database.
+- **This workflow is already lightweight, deliberately:** a single
+  `ubuntu-latest` job (no OS/PHP/Node version matrix), Composer and npm
+  dependency caching (`actions/cache`, `actions/setup-node`'s built-in
+  `cache: npm`) so unchanged dependencies aren't re-downloaded every
+  run, and `concurrency: cancel-in-progress` so a quick follow-up push
+  cancels the now-superseded run already in progress rather than
+  letting both finish. A typical run (from the first real GitHub
+  Actions execution, Checkpoint 30) takes roughly 1-2 minutes — at that
+  rate, 2,000 minutes/month comfortably covers well over 1,000 CI runs,
+  far more than a small team pushes in a month.
+- **No paid-tier-only feature is used or assumed anywhere in this
+  project**: no GitHub Enterprise/Team-only branch protection rules, no
+  required-reviewers-with-code-owners enforcement, no self-hosted
+  runners, no GitHub Packages/Container Registry usage, no Git LFS, no
+  advanced security features (secret scanning push protection is
+  actually free for public repos and available but not required here
+  for private ones), no larger/GPU runners.
+
+### When to reconsider a paid GitHub plan
+
+None of these apply today — this is a forward-looking list, not a
+current gap:
+
+- **Actions minutes usage approaching 2,000/month.** Realistic
+  triggers: significantly more contributors pushing frequently, a
+  matrix build (multiple PHP/Node versions) added to CI, or new,
+  slower jobs (e.g. a future end-to-end/browser test suite) added
+  alongside this one. Check usage under
+  `github.com/settings/billing` before it becomes a problem, not
+  after a run gets throttled.
+- **Needing more than one job's worth of parallelism regularly** (e.g.
+  splitting backend/frontend checks into separate concurrent jobs to
+  cut wall-clock time) — GitHub Free still allows this, but it burns
+  minutes faster (multiple jobs running in parallel still each consume
+  their own minutes), so watch the same budget.
+- **Needing GitHub-hosted deployment targets** (Pages for a paid tier's
+  custom domain/bandwidth needs, or GitHub-hosted container registry
+  storage beyond the free allowance) — this project deploys elsewhere
+  entirely (see `docs/deployment.md`), so this is unlikely to apply
+  unless that changes.
+- **Needing enterprise governance features** — SAML SSO, required
+  code owner reviews with organization-wide enforcement, IP allow
+  lists, or audit log retention beyond what Free provides — typically
+  driven by a compliance requirement (e.g. SOC 2) rather than
+  engineering need. Revisit if/when PeopleOS itself pursues a
+  compliance certification that requires this of its own tooling.
+- **Team size outsized for informal coordination** — GitHub Free
+  already supports unlimited private-repo collaborators, so this is
+  about process (needing enforced review policies, protected-branch
+  rules beyond what Free supports), not a hard technical ceiling.
+
+**For now: GitHub Free is confirmed sufficient**, and every CI/tooling
+decision in this project is made to keep it that way.

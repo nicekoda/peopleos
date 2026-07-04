@@ -163,3 +163,7 @@ one place for a pre-launch security review:
       audit, TypeScript check, and frontend build all pass automatically.
       CI does not run the live HTTPS smoke test above — that remains a
       required manual step; see `docs/quality-gate.md`.
+- [ ] GitHub Free remains sufficient for current Actions-minutes usage
+      (Checkpoint 30 — confirmed business constraint, see
+      `docs/quality-gate.md` §5 for reconsideration triggers). No
+      production data, secrets, or files are ever stored on GitHub.

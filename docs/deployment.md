@@ -81,6 +81,13 @@ established practice every checkpoint) is what verifies that. See
 local equivalents. See `docs/quality-gate.md` for the full local/CI
 reference — CI still does not replace the live smoke test below.
 
+**This repository lives on GitHub Free** (Checkpoint 30 — a confirmed
+business constraint, see `docs/quality-gate.md` §5) — a single
+lightweight CI job, well within the 2,000 Actions minutes/month free
+tier gives private repos. GitHub itself is source/docs/CI only, never
+a production dependency — see "File Storage Readiness" and "Backup /
+Restore Basics" below for where real data actually lives.
+
 ## 3. Tenant / Subdomain Deployment
 
 **Local/demo**, tenant resolution is subdomain-based

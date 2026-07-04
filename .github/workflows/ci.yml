@@ -21,6 +21,16 @@ on:
   pull_request:
     branches: [main, master]
 
+# GitHub Free gives private repos 2,000 Actions minutes/month — this
+# single ubuntu-latest job is already cheap (a few minutes per run),
+# but cancelling a superseded run on the same branch (e.g. a quick
+# follow-up push) avoids paying for a run whose result no longer
+# matters. See docs/quality-gate.md "GitHub Free" for the full
+# reasoning and what would trigger reconsidering a paid plan.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   quality:
     runs-on: ubuntu-latest
@@ -59,6 +69,16 @@ jobs:
           node-version-file: '.nvmrc'
           cache: npm
 
+      # Cheap way to cut minutes on GitHub Free's per-run billing:
+      # skip re-downloading unchanged PHP dependencies. Node deps are
+      # already cached via actions/setup-node's cache: npm above.
+      - name: Cache Composer dependencies
+        uses: actions/cache@v4
+        with:
+          path: vendor
+          key: composer-${{ runner.os }}-${{ hashFiles('composer.lock') }}
+          restore-keys: composer-${{ runner.os }}-
+
       - name: Install PHP dependencies
         run: composer install --no-interaction --prefer-dist --no-progress
 
@@ -75,6 +95,23 @@ jobs:
           # Credentials" for why a real value never appears in any
           # committed file, CI included.
           SEED_USER_PASSWORD: ci-only-not-a-real-password
+
+      - name: TypeScript check
+        run: npm run typecheck
+
+      # Must run before "Backend test suite" below, not after — any
+      # test that renders a real Inertia page (Inertia::render() ->
+      # resources/views/app.blade.php -> the @vite directive) needs
+      # public/build/manifest.json to exist. A fresh CI checkout has no
+      # public/build/ at all until this step creates it; running the
+      # test suite first (this workflow's original order) failed 62
+      # page-rendering tests on "Vite manifest not found" while the 505
+      # pure-JSON API tests passed regardless. Found via the first real
+      # GitHub Actions run (Checkpoint 30) — local runs never surfaced
+      # this because a manifest already exists locally from prior
+      # manual `npm run build`s.
+      - name: Frontend build
+        run: npm run build
 
       - name: Run migrations against PostgreSQL
         run: php artisan migrate --force
@@ -105,9 +142,3 @@ jobs:
 
       - name: Pint (code style)
         run: vendor/bin/pint --test
-
-      - name: TypeScript check
-        run: npm run typecheck
-
-      - name: Frontend build
-        run: npm run build

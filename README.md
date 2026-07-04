@@ -196,12 +196,15 @@ design as the Dashboard. `/settings/company` is the one fully real
 section: view/edit backed by a new singleton `GET`/`PATCH /api/v1/tenant`
 endpoint (no `{id}` — always the caller's own tenant), editing only
 `name`; `subdomain`/`status`/`tenant_id` and any future billing/security
-field can never be changed through it. Every other section
-(Users & Access, Document Categories, Leave Types, Security & Audit,
-Integrations) is a permission-gated "coming later" placeholder with no
-data fetched. Platform Super Admins get a safe static Settings page and
-are blocked from `/api/v1/tenant` with a clean `403`. See
-`docs/security.md`.
+field can never be changed through it. At the time this checkpoint
+shipped, every other section (Users & Access, Document Categories,
+Leave Types, Security & Audit, Integrations) was a permission-gated
+"coming later" placeholder with no data fetched — Users & Access,
+Document Categories, Leave Types, and Security & Audit were built out
+in Checkpoints 23–25 (only Integrations, and the static Billing &
+Subscription card, remain placeholders — see Checkpoint 26 below).
+Platform Super Admins get a safe static Settings page and are blocked
+from `/api/v1/tenant` with a clean `403`. See `docs/security.md`.
 
 **Users & Access Management UI** (Checkpoint 23) — `/settings/access`
 is now a real hub linking to `/settings/access/users` (list),
@@ -249,6 +252,25 @@ blank fields" form convention: a blank `max_days_per_year` is sent as
 an explicit `null`, not omitted — otherwise a capped leave type could
 never be turned back into an unlimited one. See `docs/security.md`.
 
+**Demo Readiness & UI Polish** (Checkpoint 26) — no new module; this
+checkpoint made the ten existing modules demo-ready. Fixed two stale
+rough edges found during review: the Settings nav link was still gated
+on `employees.update` instead of `tenant.settings.view` (so HR Officer/
+Auditor couldn't see the link despite already having page access), and
+the Settings hub still showed "Coming later" on five sections
+(Users & Access, Roles & Permissions, Document Categories, Leave Types,
+Security & Audit) that were fully built in Checkpoints 23–25. Added a
+new `DemoDataSeeder` (realistic UESL-tenant employees/leave/documents/
+policies) and three new demo logins (`hr.officer@`/`line.manager@`/
+`auditor@uesl.peopleos.test`) so every role in a live demo has a real,
+permanent seeded account. Resolved the Checkpoint 25 bundle-size
+advisory by switching `app.tsx`'s Inertia page resolver from an eager
+to a lazy `import.meta.glob` (standard `laravel-vite-plugin/inertia-helpers`
+pattern) — main chunk dropped from 500.41 kB to 321.57 kB gzip, no
+custom code-splitting added. See `docs/demo-guide.md` for the full demo
+walkthrough and `docs/security.md`/`docs/architecture.md` for the
+technical detail.
+
 See `docs/architecture.md`/`docs/security.md`/`docs/api.md` for the full
 design, what's shared with the frontend (and what never is), and the
 future module rollout plan.
@@ -260,6 +282,7 @@ future module rollout plan.
 - [`docs/security.md`](docs/security.md) — authentication, RBAC design, local demo credentials, frontend security model, known limitations.
 - [`docs/api.md`](docs/api.md) — `/api/v1` endpoint reference.
 - [`docs/testing.md`](docs/testing.md) — testing conventions and patterns.
+- [`docs/demo-guide.md`](docs/demo-guide.md) — demo users, login sequence, per-module demo flow, what each role should see, known limitations.
 
 ## Project Standards
 

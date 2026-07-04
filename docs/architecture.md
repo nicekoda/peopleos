@@ -603,6 +603,25 @@ page yet — deliberately left off the sidebar rather than linking
 somewhere that 404s. Add them to `Sidebar.tsx`'s `links` array once
 their pages exist, not before.
 
+**Page resolution is lazy, one chunk per page (Checkpoint 26).**
+`resources/js/app.tsx`'s `createInertiaApp({ resolve })` originally used
+`import.meta.glob('./Pages/**/*.tsx', { eager: true })` — every single
+page component, across every module, eagerly bundled into one main JS
+chunk regardless of which page was actually requested. That eager glob
+was the direct cause of the >500kB build-size advisory reported at the
+end of Checkpoint 25, not anything inherent to the app's size. Switched
+to `laravel-vite-plugin/inertia-helpers`'s `resolvePageComponent()` with
+a lazy glob (no `eager: true`), the standard Inertia+Vite pattern: each
+page becomes its own chunk, fetched only when its route is actually
+visited. Result: the main chunk dropped from 500.41 kB to 321.57 kB
+(gzip 137.67 kB → 101.23 kB), and Vite's "chunk larger than 500 kB"
+warning is gone. No custom code-splitting logic, no route-level
+`React.lazy()` calls scattered through page code — one change, in one
+file. See `docs/testing.md` for how this was verified (build output +
+`tsc --noEmit` + the full live smoke test, since async component
+resolution is a real runtime behavior change, not just a build-config
+tweak).
+
 ## Employee Records UI (Checkpoint 17)
 
 The first real module screen — `/employees`, `/employees/create`,
@@ -1192,6 +1211,84 @@ by reading `LeaveTypeController::update()` — it only ever calls
 text ("Changing this does not affect leave balances already issued")
 is purely informational, documenting a guarantee that was already true,
 not a new safeguard being added.
+
+## Demo Readiness & UI Polish (Checkpoint 26)
+
+No new business module — this checkpoint's entire job was making the
+ten already-built modules (Dashboard, Employees, Leave, Documents,
+Policies, Settings, Users & Access, Security & Audit, Document
+Categories, Leave Types) feel complete and demo-ready, plus fixing two
+concrete, pre-existing rough edges a systematic review turned up.
+
+**Two real bugs found and fixed, not manufactured busywork.** A
+targeted review across headers/back-links/badges/empty/loading/error
+states/table mobile-wrapping/responsive grids found the app already
+consistent (expected, since every page across Checkpoints 17–25 was
+built with the same shared component set and conventions) — except for
+two things:
+
+1. **`Sidebar.tsx`'s "Settings" nav link was still gated on
+   `employees.update`**, a permission that predates Checkpoint 22's
+   introduction of `tenant.settings.view` as the actual gate for
+   reaching `/settings`. HR Officer and Auditor both hold
+   `tenant.settings.view` (and, for Auditor, `audit.view`) but never
+   held `employees.update` — so both roles could reach `/settings` by
+   URL (the real, unchanged server-side gate) but the sidebar never
+   showed them the link. Fixed by changing the nav link's permission
+   check to `tenant.settings.view`, matching the actual route gate.
+   Server-side security was never the problem here and nothing about
+   it changed — this was purely the nav's own visibility hint being
+   stale.
+2. **The Settings hub (`Settings/Index.tsx`) still marked Users &
+   Access, Roles & Permissions, Document Categories, Leave Types, and
+   Security & Audit as "Coming later"**, even though all five were
+   fully built in Checkpoints 23–25. Only Integrations (and the static,
+   unlinked Billing & Subscription card) are genuinely not built yet.
+   Left uncorrected, every demo of the Settings hub would visually
+   undersell finished work as unfinished. Fixed by flipping
+   `comingLater` to `false` on the five sections that already exist.
+
+**`DemoDataSeeder` (new) adds realistic, non-excessive UESL-tenant
+data** — departments/positions/locations, 12 employees (four linked to
+real login accounts, a full manager tree, one Inactive example), 3 leave
+types with consistent balances and a pending/approved/rejected leave
+request (the pending one deliberately belongs to the Line Manager demo
+account's direct report, so the live smoke test's "Line Manager can
+approve only direct-report leave" check has a real row to exercise), 3
+document categories with a normal/sensitive/expiry-required/expiring-soon
+document set, and 3 policies covering all five required acknowledgement
+states (draft, published-unassigned, and one published+assigned policy
+carrying both a pending and an acknowledged row). Every row is plain
+Eloquent creation via `firstOrCreate`/`updateOrCreate` — idempotent, and
+writes no audit log itself (audit entries come from `UserSeeder`'s real
+`assignRole()` calls, plus whatever a live login naturally generates
+during the demo — see `docs/demo-guide.md`). Called from
+`DatabaseSeeder` after `UserSeeder`; `airpeace`/`ibom` are untouched, so
+the tenant count doesn't grow.
+
+**`UserSeeder` gained three demo logins** —
+`hr.officer@uesl.peopleos.test`, `line.manager@uesl.peopleos.test`,
+`auditor@uesl.peopleos.test` — closing a real gap every prior
+checkpoint's live smoke test had to work around with a throwaway
+`tinker`-created account that `migrate:fresh --seed` then discarded.
+`admin@uesl.peopleos.test` (the pre-existing Tenant Admin login) was
+kept as-is rather than duplicated under a different email, since the
+checkpoint's own instructions explicitly allow "whatever convention
+already exists in the project" and creating a second Tenant Admin
+account under a new address would have been exactly the kind of
+duplicate-user situation the checkpoint asked to avoid.
+
+**The build-size advisory is resolved, not just documented as
+acceptable** — see "Page resolution is lazy, one chunk per page" above.
+Root cause was `app.tsx`'s eager glob, not genuine app bulk; the fix is
+the standard Inertia+Vite lazy-resolution pattern, verified by `tsc
+--noEmit`, `vite build`, and the full live smoke test (since this is an
+async runtime behavior change, not just a build config number).
+
+**`docs/demo-guide.md` (new)** is the practical companion to this
+section — local setup, demo users/roles, a suggested login sequence, a
+per-module demo flow, what each role should see, known limitations, and
+what not to demo yet.
 
 ## Internal IDs vs. Public-Facing References
 

@@ -43,7 +43,7 @@ const sections: Section[] = [
         description: 'Manage user accounts and access.',
         href: '/settings/access',
         permission: 'users.view',
-        comingLater: true,
+        comingLater: false,
     },
     {
         key: 'roles',
@@ -51,7 +51,7 @@ const sections: Section[] = [
         description: 'Manage roles and permission grants.',
         href: '/settings/access',
         permission: 'roles.view',
-        comingLater: true,
+        comingLater: false,
     },
     {
         key: 'document_categories',
@@ -59,7 +59,7 @@ const sections: Section[] = [
         description: 'Manage the document category catalog.',
         href: '/settings/document-categories',
         permission: 'document_categories.view',
-        comingLater: true,
+        comingLater: false,
     },
     {
         key: 'leave_types',
@@ -67,7 +67,7 @@ const sections: Section[] = [
         description: 'Manage leave types and entitlements.',
         href: '/settings/leave-types',
         permission: 'leave_types.view',
-        comingLater: true,
+        comingLater: false,
     },
     {
         key: 'security',
@@ -75,7 +75,7 @@ const sections: Section[] = [
         description: 'Review security and audit settings.',
         href: '/settings/security',
         permission: 'audit.view',
-        comingLater: true,
+        comingLater: false,
     },
     {
         key: 'integrations',

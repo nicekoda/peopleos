@@ -877,6 +877,78 @@ whenever a checkpoint deliberately breaks its own established pattern
 for one specific field — the exception is exactly the part regression
 would most easily reintroduce by "fixing" it back to the general rule.
 
+## Demo seed data needs its own tests: idempotency and coverage, not just "it ran" (Checkpoint 26)
+
+`DemoDataSeeder` (new) is exercised by three tests
+(`DemoDataSeederTest`), each checking something a "did the seeder throw
+an exception" smoke check wouldn't catch:
+
+- **Coverage** — the seeder's whole point is guaranteeing specific
+  demo scenarios exist (a pending/approved/rejected leave request each,
+  a sensitive document, an expiry-dated document, draft/published/
+  assigned policies). A test asserting these states are actually
+  present after seeding is what makes `docs/demo-guide.md`'s claims
+  ("the pending leave request is already seeded") trustworthy rather
+  than aspirational.
+- **No orphaned foreign keys** — `whereDoesntHave('manager')`/
+  `whereDoesntHave('department')`/`whereDoesntHave('employee')` checks
+  directly, rather than trusting that "it didn't throw" means every
+  relationship resolved correctly (a wrong-order seed step can silently
+  write a non-existent ID if the referenced row hasn't been created yet
+  when the FK is set).
+- **Idempotency** — seeds twice in the same test, asserts the second
+  run doesn't change row counts. This matters because `DemoDataSeeder`
+  is called from `DatabaseSeeder` unconditionally; `migrate:fresh --seed`
+  never exercises the "already-seeded" path (fresh tables every time),
+  so without this test, a bare `db:seed` re-run against an
+  already-seeded database silently duplicating rows would go unnoticed
+  until it broke unique constraints in practice.
+
+### A permission-gating fix that a PHP test can't fully verify, and what it can verify instead
+
+The Settings nav link's permission check lives entirely in
+`Sidebar.tsx` (client-side JSX, no JS/TS test runner configured — see
+"What a JS-runner-free frontend checkpoint can and cannot claim to
+test," Checkpoint 17). `SettingsNavPermissionTest` can't execute that
+component, so it tests one level down instead: the shared
+`auth.user.permissions` Inertia prop the component reads
+(`HandleInertiaRequests` → `User::permissionKeys()`) contains/omits
+`tenant.settings.view` for the right roles, plus a direct re-assertion
+that `/settings` itself still rejects a user holding only the old,
+no-longer-relevant `employees.update` permission. This is the same
+"test the fact the untestable UI logic depends on, not the UI logic
+itself" approach used throughout this project's frontend checkpoints
+— it can't prove the sidebar link renders correctly, but it can prove
+the *data* the link's visibility decision is based on is what it
+should be, and it directly guards against a future permission-grant
+change silently breaking the nav again without anyone noticing.
+
+### Live smoke tests can finally use real seeded logins instead of disposable `tinker` accounts
+
+Every prior checkpoint's live smoke test needed at least one role
+(HR Officer, Line Manager, or Auditor) that had no seeded login yet, so
+each one created a throwaway account by hand
+(`smoke.hrofficer.ck25@uesl.peopleos.test`, etc.) that the next
+`migrate:fresh --seed` discarded — meaning the exact account used for
+one checkpoint's smoke test never existed for the next. Checkpoint 26's
+`UserSeeder` additions (`hr.officer@`/`line.manager@`/`auditor@uesl.peopleos.test`)
+close this gap: the Checkpoint 26 smoke-test script
+(`scratchpad/smoke_ck26.php`) is the first one that logs in as all six
+`uesl` roles using only permanent, seeded accounts, and it can be
+re-run unchanged after any future `migrate:fresh --seed`.
+
+### Verifying an async resolver change needs a runtime check, not just `tsc`/`vite build`
+
+Switching `app.tsx`'s Inertia `resolve` callback from a synchronous
+eager-glob lookup to `resolvePageComponent()` (async, lazy glob) is a
+real runtime behavior change — a mistake here (e.g. a glob type
+mismatch) would compile and build fine while still failing to load any
+page in a real browser. `tsc --noEmit` and `npm run build` passing is
+necessary but not sufficient; the live smoke test's per-role page loads
+(`/dashboard`, `/settings`, `/employees`, `/leave`, `/policies`, etc.,
+all across seven roles) is what actually confirmed every page still
+resolves and renders correctly under the new lazy-loading path.
+
 ## Verifying against the real app, not just the test suite
 
 Because of the SQLite/Postgres split above, checkpoints in this project

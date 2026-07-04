@@ -62,7 +62,7 @@ const links: NavLink[] = [
     { label: 'Leave', href: '/leave', routeName: 'leave.index', icon: 'leave', permission: 'leave.view' },
     { label: 'Documents', href: '/documents', routeName: 'documents.index', icon: 'documents', permission: 'documents.view' },
     { label: 'Policies', href: '/policies', routeName: 'policies.index', icon: 'policies', permission: 'policies.view' },
-    { label: 'Settings', href: '/settings', routeName: 'settings.index', icon: 'settings', permission: 'employees.update' },
+    { label: 'Settings', href: '/settings', routeName: 'settings.index', icon: 'settings', permission: 'tenant.settings.view' },
 ];
 
 export default function Sidebar({ onNavigate }: { onNavigate?: () => void }) {

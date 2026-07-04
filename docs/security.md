@@ -3374,6 +3374,132 @@ permission-gating boundary once per module at the API level.
 - Frontend test tooling (Vitest + React Testing Library), if
   component-level testing becomes valuable.
 
+## Demo Readiness & UI Polish (Checkpoint 26)
+
+No new business module, no new permission, and no new endpoint this
+checkpoint — the whole job was making the ten already-built modules
+demo-ready, plus fixing two concrete rough edges a systematic review
+found. See
+[`architecture.md`](architecture.md#demo-readiness--ui-polish-checkpoint-26)
+for the full technical writeup; this section covers the security-review
+angle specifically.
+
+### The Sidebar fix changed a UI hint, not a security boundary
+
+`Sidebar.tsx`'s "Settings" nav link checked `employees.update` — a
+permission that predates `tenant.settings.view` (Checkpoint 22), the
+permission that actually gates the `/settings` route server-side. HR
+Officer and Auditor both hold `tenant.settings.view` but not
+`employees.update`, so both could already reach `/settings` directly by
+URL; the sidebar just never told them the link existed. Fixed by
+pointing the nav check at `tenant.settings.view`, matching the real
+gate. `SettingsController`'s server-side check
+(`tenant.settings.view` middleware) was never touched — this was
+purely correcting which permission the *hint* reads, the same
+"frontend decides what to render, backend decides what's allowed" rule
+this app has followed since its first frontend checkpoint. Confirmed
+directly (new `SettingsNavPermissionTest` — asserts the shared
+`auth.user.permissions` prop includes/excludes `tenant.settings.view`
+correctly per role, and separately re-asserts `/settings` itself still
+403s for a user holding only the old `employees.update`) and live
+(HR Officer and Auditor both reached `/settings` in the smoke test;
+Employee, who holds neither permission, was still blocked).
+
+### The Settings hub's stale "Coming later" labels were a documentation bug, not a security issue
+
+Five of `Settings/Index.tsx`'s section cards (Users & Access, Roles &
+Permissions, Document Categories, Leave Types, Security & Audit) were
+still flagged `comingLater: true` from before their real pages existed
+(Checkpoints 23–25 built all five). Each card's actual gate is its own
+`useCan(section.permission)` check, unrelated to the `comingLater`
+label — so this never granted or hid access to anything; it only made
+finished work look unfinished. Fixed by flipping the flag on the five
+sections that are real. Integrations and the static Billing &
+Subscription card correctly remain marked "Coming later" — neither has
+a page.
+
+### `DemoDataSeeder`: realistic data, the same trust boundary as every other seeder
+
+Everything `DemoDataSeeder` creates is plain Eloquent
+`firstOrCreate`/`updateOrCreate` against models that already enforce
+their own tenant scoping (`BelongsToTenant` on Employee/LeaveType/
+DocumentCategory/Policy/etc.) — the seeder runs with the same trust
+level `DatabaseSeeder` always has, not a new privileged path. No public
+storage disk is used for the four seeded documents (`local` disk only,
+matching `EmployeeDocumentFactory`'s existing safe pattern); no
+hardcoded bypass user, disabled middleware, exposed hidden ID, or
+platform-admin-with-tenant-permissions was introduced. `DemoDataSeeder`
+only seeds the `uesl` tenant — the tenant count doesn't grow, and
+`airpeace`/`ibom` remain exactly as `TenantSeeder`/`UserSeeder` already
+set them up. Idempotency (`test_demo_data_seeder_is_idempotent_on_a_second_run`)
+and orphaned-FK absence
+(`test_demo_data_seeder_has_no_orphaned_foreign_keys`) are both
+directly tested, alongside a coverage test confirming every required
+demo scenario (pending/approved/rejected leave, sensitive/expiry
+documents, draft/published/assigned policies) actually exists after
+seeding.
+
+### Three new demo logins, same role/permission sets — no new grants
+
+`hr.officer@uesl.peopleos.test`, `line.manager@uesl.peopleos.test`, and
+`auditor@uesl.peopleos.test` are new *users*, assigned their role's
+pre-existing, unchanged permission set (Checkpoint 4/5's
+`assignRole()`, which already writes its own `role.assigned` audit log
+entry — this is where this checkpoint's naturally-arising audit trail
+comes from, not a fabricated entry). No permission was added, widened,
+or removed on any role to accommodate these accounts.
+
+### Build-size fix: a lazy-loading config change, not a security-relevant change
+
+See `architecture.md` for the technical detail (`app.tsx`'s resolver
+switched from an eager to a lazy `import.meta.glob`). Worth noting here
+only because it's a genuine runtime behavior change (component
+resolution is now asynchronous) rather than a pure build-config number
+— verified via `tsc --noEmit`, `npm run build`, and the full live
+smoke test across all seven roles to confirm every page still renders
+correctly under the new resolution path. No route, middleware,
+permission check, or Resource was touched by this change.
+
+### What is not, and cannot be, tested by a JS runner
+
+Same posture as every prior module UI checkpoint — no Jest/Vitest
+configured. The Settings nav link's actual visibility (i.e., that
+`Sidebar.tsx` correctly hides/shows the link based on the permission
+array) cannot be exercised by a PHP test; what can be, and is, tested
+is the underlying fact the nav logic depends on — the shared
+`auth.user.permissions` prop's contents per role (`SettingsNavPermissionTest`).
+Actual link visibility was confirmed by inspecting the built
+`Sidebar.tsx` change directly and by the live smoke test's per-role
+permission-prop check.
+
+### Current limitations
+
+- Demo users have no invitation flow, self-registration, password
+  reset UI, MFA, or SSO — they are pre-seeded accounts only.
+- No RBAC role/permission *editing* UI — the Users & Access module
+  remains view/assign-only (Checkpoint 23), unchanged this checkpoint.
+- Seeded documents use safe fake file contents on the private `local`
+  disk — there is no real file content to preview, only metadata.
+- Leave balances are a fixed, consistent seeded snapshot, not the
+  output of a running accrual engine (none exists yet — see Leave
+  Balances Foundation above).
+- No frontend test runner still — see "What is not, and cannot be,
+  tested by a JS runner" above.
+
+### Future
+
+- Frontend test tooling (Vitest + React Testing Library), if
+  component-level testing becomes valuable — this checkpoint's
+  Settings-nav gap (a stale permission check with no test catching it
+  for several checkpoints) is a concrete example of the kind of bug
+  such tooling would catch earlier.
+- A lint rule or CI check that a `Sidebar.tsx` nav link's permission
+  matches its destination route's actual gate, so this specific class
+  of drift can't recur silently.
+- Revisit demo data realism as new modules are added (payroll,
+  onboarding, performance) rather than letting `DemoDataSeeder` grow
+  unbounded — split into per-module seeders if it does.
+
 ## Local Demo Credentials
 
 **Local development only — these are not real secrets and only work against your own local database.** Password comes from `SEED_USER_PASSWORD` in `.env` (not committed; `.env.example` has an empty placeholder).
@@ -3385,12 +3511,18 @@ permission-gating boundary once per module at the API level.
 | `admin@airpeace.peopleos.test` | Air Peace Tenant Admin | All tenant-level permissions (37) |
 | `admin@ibom.peopleos.test` | Ibom Air Tenant Admin | All tenant-level permissions (37) |
 | `hr.manager@uesl.peopleos.test` | UESL HR Manager | Employee/document/leave/announcement management, not roles/tenant settings |
+| `hr.officer@uesl.peopleos.test` | UESL HR Officer (Checkpoint 26) | Leave approval, policy authoring, `tenant.settings.view` — no user/role management |
+| `line.manager@uesl.peopleos.test` | UESL Line Manager (Checkpoint 26) | Direct-report leave approval only — no tenant-wide visibility |
+| `auditor@uesl.peopleos.test` | UESL Auditor (Checkpoint 26) | `audit.view` + tenant-wide read access, no admin writes |
 | `employee@uesl.peopleos.test` | UESL Employee | Self-service basics, plus a direct-grant example (`documents.download`) |
 
 Every demo tenant gets the full 20-role catalog seeded (see `security.md`
-→ RBAC), but only Tenant Admin / HR Manager / Employee have real
-permission sets attached for `airpeace`/`ibom`/`uesl` respectively — the
-other 17 roles per tenant exist as empty placeholders for future modules.
+→ RBAC), but only Tenant Admin / HR Manager / HR Officer / Line Manager /
+Employee / Auditor have real permission sets attached (all on `uesl`;
+`airpeace`/`ibom` still only have their Tenant Admin) — the remaining
+roles per tenant exist as empty placeholders for future modules. See
+`docs/demo-guide.md` for the full seeded-employee/leave/document/policy
+data these six `uesl` logins see (Checkpoint 26's `DemoDataSeeder`).
 
 ## Known Limitations / Follow-up
 
@@ -3421,8 +3553,11 @@ other 17 roles per tenant exist as empty placeholders for future modules.
 - **Document Repository UI has no tenant-wide document centre, approval workflow UI, eSignature, document generation, or file preview** — see [Document Repository UI](#document-repository-ui) above.
 - **Policy Management UI has no campaign automation, reminders/escalations, dashboard/compliance reporting, template library, bulk/department-wide assignment, or admin-recorded-on-behalf-of acknowledgement UI** — see [Policy Management UI](#policy-management-ui) above.
 - **Dashboard has no charts, tenant-wide document cards, platform-level dashboard, or notifications** — see [Dashboard Foundation](#dashboard-foundation) above.
-- **Settings has no document category or leave type admin UI, integrations, or billing/subscription management — only the tenant name is editable** — see [Settings Foundation](#settings-foundation) above.
+- **Settings has no integrations or billing/subscription management yet — only the tenant name is editable on the Company Profile card** (Document Category and Leave Type admin UIs were added in Checkpoint 25, and their Settings-hub cards no longer say "Coming later" as of Checkpoint 26) — see [Settings Foundation](#settings-foundation) above.
 - **Users & Access has no invitation flow, password reset/MFA/SSO UI, direct/temporary permission grants, or access review workflow — role/status management stays Tenant-Admin-only** — see [Users & Access Management UI](#users--access-management-ui) above.
 - **Audit Log Viewing UI has no export, SIEM integration, alerting, anomaly detection, advanced search, saved filters, platform-wide dashboard, or retention controls** — see [Audit Log Viewing UI](#audit-log-viewing-ui) above.
 - **Document Categories & Leave Types admin UI has no bulk import/export, department/location/job-title admin, payroll configuration, or configuration-change notifications** — see [Document Categories & Leave Types Admin UI](#document-categories--leave-types-admin-ui) above.
 - **No JS/TS unit test runner configured** — frontend verification relies on `tsc --noEmit`, `vite build`, and backend feature tests asserting Inertia response shape/shared-prop safety.
+- **Demo data (Checkpoint 26) only covers the `uesl` tenant** — `airpeace`/`ibom` still only have their Tenant Admin login and no employees/leave/documents/policies, by design (avoiding excessive seeded tenants).
+- **No RBAC role/permission editing UI, invitation flow, password reset UI, MFA, or SSO** for the three new demo logins or any other user — unchanged from Checkpoint 23's scope, see [Users & Access Management UI](#users--access-management-ui) above.
+- **The build-size advisory from Checkpoint 25 is resolved** (Checkpoint 26) via lazy per-page resolution in `app.tsx` — see [Demo Readiness & UI Polish](#demo-readiness--ui-polish-checkpoint-26) above and `docs/architecture.md` for detail. No further bundle work is planned unless a future module meaningfully grows the app again.

@@ -105,6 +105,58 @@ class UserSeeder extends Seeder
             if ($downloadPermission = Permission::query()->where('key', 'documents.download')->first()) {
                 $employee->grantPermission($downloadPermission, $hrManager, 'Needs to download signed onboarding documents.');
             }
+
+            // Checkpoint 26: HR Officer / Line Manager / Auditor demo
+            // users, so every role in the live smoke test has a real
+            // seeded login instead of an ad-hoc tinker-created one that
+            // gets wiped on the next migrate:fresh --seed.
+            $hrOfficer = User::query()->updateOrCreate(
+                ['email' => 'hr.officer@uesl.peopleos.test'],
+                [
+                    'name' => 'UESL HR Officer',
+                    'password' => $password,
+                    'tenant_id' => $uesl->id,
+                    'is_platform_admin' => false,
+                    'status' => User::STATUS_ACTIVE,
+                    'email_verified_at' => now(),
+                ],
+            );
+
+            if ($hrOfficerRole = Role::query()->where('slug', 'hr-officer')->where('tenant_id', $uesl->id)->first()) {
+                $hrOfficer->assignRole($hrOfficerRole);
+            }
+
+            $lineManager = User::query()->updateOrCreate(
+                ['email' => 'line.manager@uesl.peopleos.test'],
+                [
+                    'name' => 'UESL Line Manager',
+                    'password' => $password,
+                    'tenant_id' => $uesl->id,
+                    'is_platform_admin' => false,
+                    'status' => User::STATUS_ACTIVE,
+                    'email_verified_at' => now(),
+                ],
+            );
+
+            if ($lineManagerRole = Role::query()->where('slug', 'line-manager')->where('tenant_id', $uesl->id)->first()) {
+                $lineManager->assignRole($lineManagerRole);
+            }
+
+            $auditor = User::query()->updateOrCreate(
+                ['email' => 'auditor@uesl.peopleos.test'],
+                [
+                    'name' => 'UESL Auditor',
+                    'password' => $password,
+                    'tenant_id' => $uesl->id,
+                    'is_platform_admin' => false,
+                    'status' => User::STATUS_ACTIVE,
+                    'email_verified_at' => now(),
+                ],
+            );
+
+            if ($auditorRole = Role::query()->where('slug', 'auditor')->where('tenant_id', $uesl->id)->first()) {
+                $auditor->assignRole($auditorRole);
+            }
         }
     }
 }

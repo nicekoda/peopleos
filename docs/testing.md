@@ -843,6 +843,40 @@ Combined with `AuditLog::save()`/`delete()` throwing at the model layer
 (Checkpoint 5), this checkpoint's "audit logs are read-only" claim is
 backed by two independent, differently-shaped tests rather than one.
 
+## Document Categories & Leave Types: proving a Resource change is safe *before* making it, not after (Checkpoint 25)
+
+Removing `created_by`/`updated_by` from `DocumentCategoryResource`/
+`LeaveTypeResource` touched two Resources that had existed since
+Checkpoints 9 and 12 — a real risk of breaking something nobody
+remembered depended on them. Rather than remove the fields and see what
+broke, the check ran the other way: grep the entire test suite first
+for any assertion on these two field names in either module's response
+shape, confirm none exist (the one `created_by` hit,
+`LeaveTypeApiTest::test_user_with_permission_can_create_leave_type`,
+turned out to check `assertDatabaseHas()` — the database row, not the
+API response), *then* make the change, *then* re-run both modules'
+existing suites to confirm nothing broke. This ordering — verify safety
+before changing, not just after — is worth repeating any time a
+checkpoint touches a Resource or model that predates it by several
+checkpoints, since "grep first" is cheap and "revert after a surprise
+failure" isn't.
+
+### Testing a deliberate exception to an established convention, not just the convention itself
+
+`test_max_days_per_year_can_be_cleared_to_null` doesn't test the
+general "optional fields can be updated" behavior every other Leave
+Type field already gets implicit coverage for via
+`LeaveTypeApiTest`'s existing update tests — it specifically tests the
+one field that behaves *differently* from every other optional field
+in this app's forms (explicit `null` vs. omit-if-blank). Seeds a leave
+type with a real numeric cap (`21`), sends an explicit `null`, and
+asserts both the JSON response *and* the database row reflect the
+clear — a test that only checked the response could still pass if the
+value silently failed to persist. Worth writing this kind of test
+whenever a checkpoint deliberately breaks its own established pattern
+for one specific field — the exception is exactly the part regression
+would most easily reintroduce by "fixing" it back to the general rule.
+
 ## Verifying against the real app, not just the test suite
 
 Because of the SQLite/Postgres split above, checkpoints in this project

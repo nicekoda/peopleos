@@ -467,8 +467,12 @@ served through the `web` middleware group, session-based auth same as
 | `GET` | `/settings/access/users` | `auth`, `tenant.matches`, `permission:users.view` | Real UI — list, fetched client-side from `/api/v1/users` |
 | `GET` | `/settings/access/users/{user}` | `auth`, `tenant.matches`, `permission:users.view` | Detail — passes only `userId` as a prop, never user data; `404` if the user belongs to another tenant or is a platform admin |
 | `GET` | `/settings/access/roles` | `auth`, `tenant.matches`, `permission:roles.view` | Real UI — read-only list, fetched client-side from `/api/v1/roles` |
-| `GET` | `/settings/document-categories` | `auth`, `tenant.matches`, `permission:document_categories.view` | Placeholder |
-| `GET` | `/settings/leave-types` | `auth`, `tenant.matches`, `permission:leave_types.view` | Placeholder |
+| `GET` | `/settings/document-categories` | `auth`, `tenant.matches`, `permission:document_categories.view` | Real UI (Checkpoint 25) — list, fetched client-side from `/api/v1/document-categories` |
+| `GET` | `/settings/document-categories/create` | `auth`, `tenant.matches`, `permission:document_categories.create` | Create form |
+| `GET` | `/settings/document-categories/{documentCategory}/edit` | `auth`, `tenant.matches`, `permission:document_categories.update` | Edit form — passes only `documentCategoryId` as a prop; `404` if cross-tenant |
+| `GET` | `/settings/leave-types` | `auth`, `tenant.matches`, `permission:leave_types.view` | Real UI (Checkpoint 25) — list, fetched client-side from `/api/v1/leave-types` |
+| `GET` | `/settings/leave-types/create` | `auth`, `tenant.matches`, `permission:leave_types.create` | Create form |
+| `GET` | `/settings/leave-types/{leaveType}/edit` | `auth`, `tenant.matches`, `permission:leave_types.update` | Edit form — passes only `leaveTypeId` as a prop; `404` if cross-tenant |
 | `GET` | `/settings/security` | `auth`, `tenant.matches`, `permission:audit.view` | Real hub UI (Checkpoint 24) — links to Audit Logs |
 | `GET` | `/settings/security/audit-logs` | `auth`, `tenant.matches`, `permission:audit.view` | Real UI — list with filters, fetched client-side from `/api/v1/audit-logs` |
 | `GET` | `/settings/security/audit-logs/{auditLog}` | `auth`, `tenant.matches`, `permission:audit.view` | Detail — passes only `auditLogId` as a prop, never audit data; `404` if cross-tenant |
@@ -530,6 +534,13 @@ documented above, plus the existing `GET /api/v1/users` (Checkpoint 23)
 for client-side actor/target name resolution — no new enrichment
 endpoint was built. Read-only end to end. See
 `docs/security.md#audit-log-viewing-ui`.
+
+**Document Categories & Leave Types Admin UI (Checkpoint 25)** reuses
+the existing `/api/v1/document-categories` (Checkpoint 9) and
+`/api/v1/leave-types` (Checkpoint 12) endpoints unchanged apart from
+the `created_by`/`updated_by` removal documented above — no new backend
+endpoint was needed for this checkpoint at all. See
+`docs/security.md#document-categories--leave-types-admin-ui`.
 
 ### Shared props (every Inertia response)
 
@@ -707,6 +718,11 @@ UI's upload form needs this list to show category names, sensitivity
 indicators, and expiry-date requirements; `create`/`update`/`delete`
 remain Tenant-Admin-only. See `docs/security.md#document-repository-ui`.
 
+**`created_by`/`updated_by` were removed from the response as of
+Checkpoint 25** — no consumer used them, and they had no place in the
+new admin UI at `/settings/document-categories`. See
+`docs/security.md#document-categories--leave-types-admin-ui`.
+
 ### Validation rules
 
 | Field | Rules |
@@ -857,6 +873,16 @@ no route parameter, no permission middleware required.
 | `GET` | `/api/v1/leave-types/{leaveType}` | `leave_types.view` | 404 if the type belongs to another tenant |
 | `PATCH` | `/api/v1/leave-types/{leaveType}` | `leave_types.update` | Partial update |
 | `DELETE` | `/api/v1/leave-types/{leaveType}` | `leave_types.delete` | Soft delete only |
+
+**`created_by`/`updated_by` were removed from `LeaveTypeResource` as of
+Checkpoint 25** — same reasoning as Document Categories above. A new
+admin UI exists at `/settings/leave-types` (list/create/edit) — see
+`docs/security.md#document-categories--leave-types-admin-ui`, including
+the one deliberate exception to this app's "omit blank fields" form
+convention: a blank `max_days_per_year` on the Edit form is sent as an
+explicit `null`, not omitted, so a capped leave type can be turned back
+into unlimited.
+
 | `GET` | `/api/v1/leave-requests` | `leave.view` | Scope depends on what else the caller holds — see "Visibility scope" below |
 | `POST` | `/api/v1/leave-requests` | `leave.request` | Self-service only — see below |
 | `GET` | `/api/v1/leave-requests/{leaveRequest}` | `leave.view` | See "Visibility scope" below; `404` if out of scope |

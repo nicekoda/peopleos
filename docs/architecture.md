@@ -1136,6 +1136,63 @@ absent from that endpoint's default query). No new backend surface,
 no cross-tenant lookup risk, since `/api/v1/users` was already
 tenant-scoped for its own reasons.
 
+## Document Categories & Leave Types Admin UI (Checkpoint 25)
+
+The first checkpoint since the Dashboard (Checkpoint 21) to need no new
+backend endpoint at all — both APIs (Checkpoint 9, Checkpoint 12) were
+already complete, tested, and using the standard, well-established
+tenant-isolation pattern (`BelongsToTenant` global scope + an explicit
+controller check), not the "manual filtering is the primary defense"
+situation `User`/`Role`/`AuditLog` needed in Checkpoints 23/24. This
+checkpoint's entire job was building an admin UI on top of what already
+existed, plus one small, deliberate Resource tightening.
+
+**`created_by`/`updated_by` removed from two Resources that had carried
+them since their original checkpoints.** `DocumentCategoryResource`
+(Checkpoint 9) and `LeaveTypeResource` (Checkpoint 12) both returned raw
+numeric user IDs for these two fields — harmless at the time (no
+consumer used them), but exactly the kind of "internal field with no
+UI purpose" this checkpoint's instructions asked to drop. Checked before
+removing: no existing test asserted either field's presence in a JSON
+response (the one `created_by` reference anywhere in the test suite,
+`LeaveTypeApiTest`, asserts the *database row*, not the API response) —
+safe to remove, confirmed by re-running both modules' full existing
+test suites unchanged afterward.
+
+**List + Create + Edit, no detail page — a genuine simplification, not
+a shortcut.** Unlike Employees/Leave/Documents/Policies (each complex
+enough to need a bare-metadata detail view before actions), a document
+category or leave type has so few fields that the Edit form already
+shows everything worth showing. Building a third page that mostly
+duplicates Edit's own field list would be pure ceremony.
+
+**`max_days_per_year`'s null-handling is the one place this checkpoint
+deliberately breaks its own established form convention.** Every other
+optional field in every Create/Edit form across this app follows the
+same rule: if the user leaves it blank, omit the key entirely (meaning
+"don't change this"). `max_days_per_year` on the Leave Type Edit form
+is the sole exception — a blank value is sent as an *explicit* `null`,
+because `StoreLeaveTypeRequest`/`UpdateLeaveTypeRequest`'s
+`'max_days_per_year' => ['nullable', 'integer', ...]` rule (no
+`sometimes`) means an *absent* key leaves whatever value was already
+there untouched, while an *explicit* `null` genuinely clears it. Without
+this special case, a leave type that was ever given a numeric cap could
+never be turned back into "unlimited" again through this UI — a subtle
+but real one-way door that the Create form doesn't share (a brand-new
+leave type has no old value to accidentally preserve, so its blank
+`max_days_per_year` is simply omitted, letting the database column's
+own default apply, which is already `null`).
+
+**Editing a leave type's configuration never touches existing
+`LeaveBalance` rows — this is a property of the schema, not something
+this checkpoint had to enforce.** `leave_types` and `leave_balances` are
+separate tables with no cascading update trigger between them (confirmed
+by reading `LeaveTypeController::update()` — it only ever calls
+`$leaveType->save()`, nothing balance-related). The Edit form's helper
+text ("Changing this does not affect leave balances already issued")
+is purely informational, documenting a guarantee that was already true,
+not a new safeguard being added.
+
 ## Internal IDs vs. Public-Facing References
 
 Internal database IDs may remain bigint (see

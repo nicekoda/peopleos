@@ -2,8 +2,10 @@
 
 use App\Http\Controllers\AuditLogUiController;
 use App\Http\Controllers\DashboardController;
+use App\Http\Controllers\DocumentCategoryUiController;
 use App\Http\Controllers\EmployeeDocumentUiController;
 use App\Http\Controllers\EmployeeUiController;
+use App\Http\Controllers\LeaveTypeUiController;
 use App\Http\Controllers\LeaveUiController;
 use App\Http\Controllers\PolicyUiController;
 use App\Http\Controllers\SettingsController;
@@ -125,10 +127,28 @@ Route::middleware(['auth', 'tenant.matches'])->group(function () {
         ->middleware('permission:users.view')->name('settings.access.users.show');
     Route::get('settings/access/roles', [UsersAccessUiController::class, 'roles'])
         ->middleware('permission:roles.view')->name('settings.access.roles');
-    Route::get('settings/document-categories', fn () => Inertia::render('Settings/DocumentCategories'))
+    // Document Categories Admin UI (Checkpoint 25) — thin page routes;
+    // category data is fetched client-side from the existing
+    // /api/v1/document-categories endpoints (Checkpoint 9), never
+    // passed through as an Inertia prop. 'create' must be registered
+    // before '{documentCategory}/edit' so Laravel doesn't collide the two.
+    Route::get('settings/document-categories', [DocumentCategoryUiController::class, 'index'])
         ->middleware('permission:document_categories.view')->name('settings.document-categories');
-    Route::get('settings/leave-types', fn () => Inertia::render('Settings/LeaveTypes'))
+    Route::get('settings/document-categories/create', [DocumentCategoryUiController::class, 'create'])
+        ->middleware('permission:document_categories.create')->name('settings.document-categories.create');
+    Route::get('settings/document-categories/{documentCategory}/edit', [DocumentCategoryUiController::class, 'edit'])
+        ->middleware('permission:document_categories.update')->name('settings.document-categories.edit');
+
+    // Leave Types Admin UI (Checkpoint 25) — same thin-page-route
+    // pattern, fetched client-side from the existing /api/v1/leave-types
+    // endpoints (Checkpoint 12).
+    Route::get('settings/leave-types', [LeaveTypeUiController::class, 'index'])
         ->middleware('permission:leave_types.view')->name('settings.leave-types');
+    Route::get('settings/leave-types/create', [LeaveTypeUiController::class, 'create'])
+        ->middleware('permission:leave_types.create')->name('settings.leave-types.create');
+    Route::get('settings/leave-types/{leaveType}/edit', [LeaveTypeUiController::class, 'edit'])
+        ->middleware('permission:leave_types.update')->name('settings.leave-types.edit');
+
     Route::get('settings/security', fn () => Inertia::render('Settings/Security'))
         ->middleware('permission:audit.view')->name('settings.security');
 

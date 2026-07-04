@@ -236,6 +236,19 @@ omitted from the API response entirely. No create/update/delete audit
 routes exist — audit logs remain append-only, enforced independently
 at the model layer since Checkpoint 5. See `docs/security.md`.
 
+**Document Categories & Leave Types Admin UI** (Checkpoint 25) —
+`/settings/document-categories` and `/settings/leave-types` are now
+real list/create/edit UIs (replacing the Checkpoint 22 placeholders),
+built entirely on the existing, already-tested APIs from Checkpoints 9
+and 12 — no new backend endpoints were needed. `DocumentCategoryResource`/
+`LeaveTypeResource` were tightened to drop `created_by`/`updated_by`,
+which had no use in an admin UI. Delete actions are labelled "Archive"
+throughout, since both `destroy()` methods are soft-delete-only. Leave
+Type editing has one deliberate exception to this app's usual "omit
+blank fields" form convention: a blank `max_days_per_year` is sent as
+an explicit `null`, not omitted — otherwise a capped leave type could
+never be turned back into an unlimited one. See `docs/security.md`.
+
 See `docs/architecture.md`/`docs/security.md`/`docs/api.md` for the full
 design, what's shared with the frontend (and what never is), and the
 future module rollout plan.

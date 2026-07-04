@@ -5,6 +5,14 @@ namespace App\Http\Resources;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 
+/**
+ * Deliberately never returns `tenant_id`/`created_by`/`updated_by`/
+ * `deleted_at` (Checkpoint 25, Refinement 1) — internal/administrative
+ * fields with no use in the Leave Types admin UI. Nothing here is a
+ * substitute for the tenant scoping already enforced by
+ * `BelongsToTenant` + the controller's explicit ownership check; this
+ * is just keeping the response narrow.
+ */
 class LeaveTypeResource extends JsonResource
 {
     /**
@@ -22,8 +30,6 @@ class LeaveTypeResource extends JsonResource
             'requires_document' => $this->requires_document,
             'max_days_per_year' => $this->max_days_per_year,
             'status' => $this->status->value,
-            'created_by' => $this->created_by,
-            'updated_by' => $this->updated_by,
             'created_at' => $this->created_at?->toIso8601String(),
             'updated_at' => $this->updated_at?->toIso8601String(),
         ];

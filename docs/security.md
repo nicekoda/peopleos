@@ -2827,10 +2827,6 @@ every Settings page's shared props.
   placeholder only.
 - No full RBAC (roles/permissions) management UI — same placeholder,
   shared with Users & Access (see `docs/architecture.md` for why).
-- No document category or leave type management UI — both APIs already
-  exist (Checkpoints 9/12) but have no admin UI yet.
-- No real audit log viewing UI — `/settings/security` is a placeholder;
-  audit logging remains write-only.
 - No integrations, billing/subscription, or platform-wide tenant
   management — none of these have any backend to build a UI on yet.
 - Only `name` is editable on the tenant profile — `subdomain`/`status`
@@ -3241,6 +3237,143 @@ omission, filter validation and tenant-scoping, pagination, cross-tenant
 - Frontend test tooling (Vitest + React Testing Library), if
   component-level testing becomes valuable.
 
+## Document Categories & Leave Types Admin UI
+
+The first module UI checkpoint that needed no new backend endpoint at
+all — see
+[`architecture.md`](architecture.md#document-categories--leave-types-admin-ui-checkpoint-25)
+for why, and [`api.md`](api.md#document-categories) /
+[`api.md`](api.md#leave-types) for the (unchanged) endpoint reference.
+
+### Tenant isolation: the standard pattern, not the Checkpoint 23/24 exception
+
+Both `DocumentCategory` and `LeaveType` already use `BelongsToTenant` —
+the same two-layer defense every module before Checkpoint 23 relies on
+(global scope, plus the controller's own explicit
+`ensureBelongsToCurrentTenant()` check as defense in depth). Confirmed
+directly (`test_cross_tenant_document_category_id_returns_404_on_edit_page`,
+`test_cross_tenant_leave_type_id_returns_404_on_edit_page`) and live —
+a cross-tenant ID returns `404`, the same pre-existing status-code
+nuance documented under Checkpoint 13 (route-model-binding's tenant
+scope resolves before `tenant.matches` would otherwise return `403`
+for a genuinely reused cross-tenant session).
+
+### Resource tightening: `created_by`/`updated_by` removed, not just hidden
+
+`DocumentCategoryResource`/`LeaveTypeResource` no longer return
+`created_by`/`updated_by` (Refinement 1) — both fields existed since
+their original checkpoints (9 and 12) with no consumer using them.
+Removed rather than left in "just in case," per your explicit
+instruction and this app's general preference against carrying unused
+surface area. Verified safe to remove by checking first: no test in
+either module's existing suite asserted these fields' presence in a
+JSON response (the sole `created_by` reference,
+`LeaveTypeApiTest::test_user_with_permission_can_create_leave_type`,
+checks the database row via `assertDatabaseHas()`, not the API
+response) — confirmed by re-running both suites unchanged immediately
+after the removal, before writing anything new on top.
+`tenant_id`/`deleted_at` were never returned by either Resource in the
+first place.
+
+### Delete is "Archive" everywhere in the UI, because that's what the backend actually does
+
+Both `destroy()` methods (Checkpoints 9/12) are soft-delete-only — there
+is no hard-delete code path in either API. The list page's action is
+labelled "Archive," not "Delete," and its confirmation dialog states
+plainly what will happen ("no longer selectable for new document
+uploads / leave requests"). No optimistic removal — the row disappears
+only after a full refetch confirms the backend actually archived it
+(Refinement 5), same pattern as every other module's delete/archive
+action since Checkpoint 17.
+
+### Sensitive and expiry-required categories: badges reflect data already returned, not a new rule
+
+The Document Categories list shows a "Sensitive" badge for
+`is_sensitive: true` and an "Expiry required" badge for
+`requires_expiry_date: true` — purely reflecting fields the API already
+returned since Checkpoint 9. No new enforcement exists or is needed
+here: `EmployeeDocumentController`'s existing sensitive-document
+exclusion (Checkpoint 8) and `StoreEmployeeDocumentRequest`'s existing
+expiry-date requirement (Checkpoint 8/9) are completely unchanged —
+this UI only ever *labels* categories consistently with rules the
+backend already enforces elsewhere.
+
+### `max_days_per_year`: the one form field that breaks this app's usual "omit if blank" rule
+
+Every other optional field in every Create/Edit form in this app
+follows the same convention: blank means "don't send this key at all,"
+which the backend then correctly interprets as "don't change this
+value." `max_days_per_year` on the **Leave Type Edit** form is the
+deliberate exception (Refinement 4): a blank value is sent as an
+*explicit* `null`, because `UpdateLeaveTypeRequest`'s validation rule
+for this field has no `sometimes` — an *absent* key leaves the existing
+value untouched forever, while an explicit `null` genuinely clears it
+to "unlimited." Without this exception, any leave type ever given a
+numeric cap could never be turned back into unlimited through this UI.
+Confirmed directly
+(`test_max_days_per_year_can_be_cleared_to_null` — creates a leave type
+with `max_days_per_year: 21`, sends an explicit `null` via `PATCH`,
+asserts the database row is genuinely `null` afterward) and live. The
+**Create** form doesn't need this exception — a brand-new leave type
+has no old value to accidentally preserve, so a blank field there is
+simply omitted, and the database column's own default (`null`) applies
+either way.
+
+### Editing configuration never rewrites existing balances — a schema property, not new enforcement
+
+`leave_types` and `leave_balances` are separate tables with no
+cascading update between them; `LeaveTypeController::update()` only
+ever calls `$leaveType->save()`. Changing a leave type's
+`max_days_per_year` (or any other field) after employees already have
+`LeaveBalance` rows referencing it does not retroactively touch those
+rows — this was already true before this checkpoint and required no
+new code to preserve. The Edit form's helper text stating this is
+purely informational.
+
+### What is not, and cannot be, tested by a JS runner
+
+Same posture as every prior module UI checkpoint — no Jest/Vitest
+configured. Verified via `tsc --noEmit`, `npm run build`, and a live
+HTTPS smoke test: the create/edit forms' checkboxes and status
+dropdown, the archive confirmation dialog, and the sensitive/expiry
+badges' rendering.
+
+What *is* backend-tested (`DocumentCategoryUiTest` 12,
+`LeaveTypeUiTest` 13 — 25 new tests): permission gating both directions
+on list/create/edit routes for both modules, tenant isolation (the
+standard two-layer pattern), IDs-only props on the edit pages, that
+neither Resource exposes `created_by`/`updated_by`/`deleted_at`/
+`tenant_id`, and the `max_days_per_year`-to-`null` behavior specifically.
+Delete/archive permission gating and the full create/update/archive
+API behavior remain covered by each module's own pre-existing API test
+suite (`DocumentCategoryApiTest`, `LeaveTypeApiTest`, Checkpoints 9/12)
+— this checkpoint didn't duplicate that coverage, only re-asserted the
+permission-gating boundary once per module at the API level.
+
+### Current limitations
+
+- No bulk import/export of categories or leave types.
+- No advanced configuration audit reports (beyond the existing generic
+  Audit Log viewer, Checkpoint 24, which already records every create/
+  update/archive here under the `documents`/`leave` modules).
+- No department/location/job-title admin, payroll configuration,
+  accrual engine beyond existing leave balance behavior, document
+  approval workflow, or policy category admin.
+- No notification templates or workflow rules tied to configuration
+  changes.
+- No JS/TS unit test runner — see above.
+
+### Future
+
+- Bulk import/export for categories and leave types, if a real need
+  emerges.
+- Department/location/job-title admin screens, following this same
+  pattern once those models exist.
+- Configuration-change-triggered notifications, once a notification
+  system exists at all.
+- Frontend test tooling (Vitest + React Testing Library), if
+  component-level testing becomes valuable.
+
 ## Local Demo Credentials
 
 **Local development only — these are not real secrets and only work against your own local database.** Password comes from `SEED_USER_PASSWORD` in `.env` (not committed; `.env.example` has an empty placeholder).
@@ -3283,7 +3416,7 @@ other 17 roles per tenant exist as empty placeholders for future modules.
 - **Leave Management still has no notifications or calendar integration** — see [Leave Management](#leave-management) above.
 - **Line Manager can now approve/reject leave, but direct reports only** (Checkpoint 14) — indirect (skip-level) approval is a deliberate future policy decision, not built. See [Manager-Hierarchy-Scoped Leave Approval](#manager-hierarchy-scoped-leave-approval) above.
 - **No org chart, manager self-service dashboard, or performance/probation review usage of the manager hierarchy** — see [Manager Hierarchy](#manager-hierarchy) above for the full list.
-- **Employee Records, Leave Management, (employee-scoped) Document Repository, Policy Management, the Dashboard, Settings, Users & Access, and Audit Log Viewing all have real UIs now (Checkpoints 17/18/19/20/21/22/23/24); the top-level `/documents` route is still a permission-gated placeholder (no tenant-wide document centre yet — see [Document Repository UI](#document-repository-ui) above)** — see [Employee Records UI](#employee-records-ui), [Leave Management UI](#leave-management-ui), [Document Repository UI](#document-repository-ui), [Policy Management UI](#policy-management-ui), [Dashboard Foundation](#dashboard-foundation), [Settings Foundation](#settings-foundation), [Users & Access Management UI](#users--access-management-ui), and [Audit Log Viewing UI](#audit-log-viewing-ui) above.
+- **Employee Records, Leave Management, (employee-scoped) Document Repository, Policy Management, the Dashboard, Settings, Users & Access, Audit Log Viewing, and Document Categories/Leave Types admin all have real UIs now (Checkpoints 17/18/19/20/21/22/23/24/25); the top-level `/documents` route is still a permission-gated placeholder (no tenant-wide document centre yet — see [Document Repository UI](#document-repository-ui) above)** — see [Employee Records UI](#employee-records-ui), [Leave Management UI](#leave-management-ui), [Document Repository UI](#document-repository-ui), [Policy Management UI](#policy-management-ui), [Dashboard Foundation](#dashboard-foundation), [Settings Foundation](#settings-foundation), [Users & Access Management UI](#users--access-management-ui), [Audit Log Viewing UI](#audit-log-viewing-ui), and [Document Categories & Leave Types Admin UI](#document-categories--leave-types-admin-ui) above.
 - **Leave Management UI has no balance/leave-type admin UI, calendar view, or notification integration** — see [Leave Management UI](#leave-management-ui) above.
 - **Document Repository UI has no tenant-wide document centre, approval workflow UI, eSignature, document generation, or file preview** — see [Document Repository UI](#document-repository-ui) above.
 - **Policy Management UI has no campaign automation, reminders/escalations, dashboard/compliance reporting, template library, bulk/department-wide assignment, or admin-recorded-on-behalf-of acknowledgement UI** — see [Policy Management UI](#policy-management-ui) above.
@@ -3291,4 +3424,5 @@ other 17 roles per tenant exist as empty placeholders for future modules.
 - **Settings has no document category or leave type admin UI, integrations, or billing/subscription management — only the tenant name is editable** — see [Settings Foundation](#settings-foundation) above.
 - **Users & Access has no invitation flow, password reset/MFA/SSO UI, direct/temporary permission grants, or access review workflow — role/status management stays Tenant-Admin-only** — see [Users & Access Management UI](#users--access-management-ui) above.
 - **Audit Log Viewing UI has no export, SIEM integration, alerting, anomaly detection, advanced search, saved filters, platform-wide dashboard, or retention controls** — see [Audit Log Viewing UI](#audit-log-viewing-ui) above.
+- **Document Categories & Leave Types admin UI has no bulk import/export, department/location/job-title admin, payroll configuration, or configuration-change notifications** — see [Document Categories & Leave Types Admin UI](#document-categories--leave-types-admin-ui) above.
 - **No JS/TS unit test runner configured** — frontend verification relies on `tsc --noEmit`, `vite build`, and backend feature tests asserting Inertia response shape/shared-prop safety.

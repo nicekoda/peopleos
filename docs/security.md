@@ -3607,6 +3607,141 @@ regardless.
 - Automated backup tooling/runbooks, once a real hosting environment
   exists to automate against.
 
+## RBAC Role & Permission Management UI (Checkpoint 28)
+
+`/settings/access/roles` gains create/edit/permission-assignment on top
+of Checkpoint 23's read-only list — but only for **custom** roles. See
+[`architecture.md`](architecture.md#rbac-role--permission-management-ui-checkpoint-28)
+for the technical writeup; this section covers the security design.
+
+### The built-in/custom distinction didn't exist — added deliberately, with your approval
+
+The `roles` table had no column distinguishing a seeded role (Tenant
+Admin, HR Manager, etc.) from an admin-created one. Rather than infer
+this from something indirect (e.g. "was this role created before the
+oldest employee record" — fragile and wrong), a new `is_system_role`
+boolean column was added, backfilled `true` for every pre-existing row,
+and `RoleSeeder` now sets it explicitly (`true`) on every role it
+creates. Any role created through the new `POST /api/v1/roles`
+endpoint is always `is_system_role: false` — set by the controller from
+trusted context, never accepted from request input.
+
+### Safer MVP: system roles are fully view-only, not "carefully editable"
+
+Rather than build logic to decide "would removing this permission from
+Tenant Admin leave the tenant without an effective admin path" (complex,
+and wrong in a way that's hard to fully test), this checkpoint takes
+the simpler, safer route you approved: **a system role can never be
+mutated through this feature at all** — no name/description edit, no
+permission add/remove. This makes a Tenant-Admin-lockout scenario
+structurally impossible, not just runtime-checked
+(`test_built_in_tenant_admin_role_cannot_be_made_unsafe` proves this
+directly against a role literally named/slugged `tenant-admin`). Only
+custom, admin-created roles support the full create/edit/permission-
+assignment flow. No role deletion exists this checkpoint at all — for
+any role, system or custom — which is the simplest possible guarantee
+that "Tenant Admin role protected from deletion" holds, since there is
+no delete path for anything yet.
+
+### `permissions.assign`, not `roles.assign_permission` — the existing catalog entry, wired up
+
+`roles` => `[view, create, update, delete]` and
+`permissions` => `[view, assign, grant_direct, revoke_direct]` already
+existed in `PermissionSeeder`'s catalog before this checkpoint —
+`permissions.assign` was seeded but never used by any code path. This
+checkpoint wires it up for exactly the purpose its name already
+suggested (assigning a permission — to a role, in this case) rather
+than inventing a new `roles.assign_permission` key that doesn't exist
+in this app's actual catalog. Tenant Admin already holds it via the
+existing "all non-platform permissions" wildcard grant
+(`RoleSeeder::seedTenantRoles()`); no other seeded role gained it this
+checkpoint.
+
+### Every mutation re-checks tenant/platform/system-role server-side, not just at the request-validation layer
+
+`RoleController`/`RolePermissionController` both call
+`ensureBelongsToCurrentTenant()` (404 for platform role or cross-tenant
+role — same pattern as `UserController`/`UserRoleController` since
+Role, like User, doesn't use `BelongsToTenant`) and, for any mutation,
+`ensureNotSystemRole()` (403 — the role genuinely exists and is
+viewable, just protected). `AssignRolePermissionRequest`'s
+`Rule::exists()` independently rejects a platform-only permission
+(422) before the controller even runs — and `Role::givePermissionTo()`'s
+existing scope-mismatch guard (`RuntimeException` if
+`is_platform_role !== is_platform_permission`) is a third, model-layer
+backstop underneath that. A forged request bypassing the frontend
+entirely (no UI at all, just a raw HTTP client) still hits all three
+layers — proven directly by `RolePermissionApiTest`, which never uses
+the frontend, only raw JSON requests.
+
+### Audit logging: a new pair of methods, deliberately separate from the seeder's bulk grant path
+
+`Role::assignPermission()`/`removePermission()` (new) write
+`role.permission_assigned`/`role.permission_removed` audit entries;
+`Role::givePermissionTo()` (existing, used only by `RoleSeeder`'s bulk
+seeding) deliberately does not. Audit-logging every one of
+`RoleSeeder`'s roughly 100+ bulk permission grants on every
+`migrate:fresh --seed` would flood the audit log with seeding noise
+that has nothing to do with a real administrative action — the
+distinction here is "was this one deliberate action a human took,"
+which the seeder's bulk catalog-building loop never is.
+
+### `RoleResource`'s `permissions` field: eager-loaded only, never a query-time surprise
+
+`index()` never loads the `permissions` relationship, so
+`RoleResource`'s `$this->whenLoaded('permissions')` correctly omits
+the field there — the list endpoint's response shape is unchanged from
+Checkpoint 23. `show()`/`store()`/the permission assign/remove
+responses all explicitly eager-load it, so the detail page gets the
+full grouped list. No raw pivot table name, no guard/internal
+implementation detail, appears in any response — confirmed directly
+(`test_role_detail_does_not_expose_raw_pivot_internals`).
+
+### What is not, and cannot be, tested by a JS runner
+
+Same posture as every prior module UI checkpoint — no Jest/Vitest
+configured. The "Remove" button only appearing for a custom role, and
+the "System roles are protected" message rendering for a system role,
+are client-side conditionals this project's test suite can't execute
+directly — what's tested instead is the fact the UI's disabling
+conditional and every button's underlying action both depend on:
+`is_system_role`'s value in the API response, and the API's
+independent rejection of the same action regardless of what the UI
+shows.
+
+### Current limitations
+
+- No role deletion — for any role, system or custom. A deliberate
+  choice this checkpoint (see "Safer MVP" above), not an oversight.
+- No direct user permission grants added or changed this checkpoint —
+  unchanged from Checkpoint 4/5's existing `grantPermission()`/
+  `revokePermission()`, which this feature doesn't touch.
+- System roles cannot have their permissions edited at all through this
+  UI — including genuinely safe-looking changes (e.g. adding
+  `documents.view` to HR Officer). A future checkpoint could allow
+  editing non-critical built-in roles' permissions if a real need
+  emerges and a careful "would this break the only admin path" check is
+  designed — deliberately not attempted this checkpoint.
+- No role import/export, no access review workflow, no approval
+  workflow for permission changes, no segregation-of-duties engine, no
+  permission risk scoring.
+- No platform-wide RBAC management — Platform Super Admin gets the
+  same safe, blocked-from-tenant-APIs behavior as every other tenant-
+  scoped feature (confirmed live: `GET /api/v1/roles` as a platform
+  admin returns `403`, unchanged from Checkpoint 23).
+
+### Future
+
+- A genuine access-review/approval workflow for permission changes, if
+  compliance requirements ever call for one.
+- Allow careful, checked editing of specific non-critical built-in
+  roles' permissions, once a real "would this break the only admin
+  path" safeguard is designed (see Current limitations above).
+- Role deletion, with the same last-admin-path protection
+  `TenantAdminProtectionService` already provides for user-level role
+  removal (Checkpoint 23), extended to cover "deleting the tenant's
+  only role with a given critical permission."
+
 ## Local Demo Credentials
 
 **Local development only — these are not real secrets and only work against your own local database.** Password comes from `SEED_USER_PASSWORD` in `.env` (not committed; `.env.example` has an empty placeholder).
@@ -3661,13 +3796,16 @@ data these six `uesl` logins see (Checkpoint 26's `DemoDataSeeder`).
 - **Policy Management UI has no campaign automation, reminders/escalations, dashboard/compliance reporting, template library, bulk/department-wide assignment, or admin-recorded-on-behalf-of acknowledgement UI** — see [Policy Management UI](#policy-management-ui) above.
 - **Dashboard has no charts, tenant-wide document cards, platform-level dashboard, or notifications** — see [Dashboard Foundation](#dashboard-foundation) above.
 - **Settings has no integrations or billing/subscription management yet — only the tenant name is editable on the Company Profile card** (Document Category and Leave Type admin UIs were added in Checkpoint 25, and their Settings-hub cards no longer say "Coming later" as of Checkpoint 26) — see [Settings Foundation](#settings-foundation) above.
-- **Users & Access has no invitation flow, password reset/MFA/SSO UI, direct/temporary permission grants, or access review workflow — role/status management stays Tenant-Admin-only** — see [Users & Access Management UI](#users--access-management-ui) above.
+- **Users & Access has no invitation flow, password reset/MFA/SSO UI, direct/temporary permission grants, or access review workflow — role/status management stays Tenant-Admin-only** — see [Users & Access Management UI](#users--access-management-ui) above. Custom-role RBAC management (create/edit/permission assignment) was added in Checkpoint 28 — see below.
 - **Audit Log Viewing UI has no export, SIEM integration, alerting, anomaly detection, advanced search, saved filters, platform-wide dashboard, or retention controls** — see [Audit Log Viewing UI](#audit-log-viewing-ui) above.
 - **Document Categories & Leave Types admin UI has no bulk import/export, department/location/job-title admin, payroll configuration, or configuration-change notifications** — see [Document Categories & Leave Types Admin UI](#document-categories--leave-types-admin-ui) above.
 - **No JS/TS unit test runner configured** — frontend verification relies on `tsc --noEmit`, `vite build`, and backend feature tests asserting Inertia response shape/shared-prop safety.
 - **Demo data (Checkpoint 26) only covers the `uesl` tenant** — `airpeace`/`ibom` still only have their Tenant Admin login and no employees/leave/documents/policies, by design (avoiding excessive seeded tenants).
-- **No RBAC role/permission editing UI, invitation flow, password reset UI, MFA, or SSO** for the three new demo logins or any other user — unchanged from Checkpoint 23's scope, see [Users & Access Management UI](#users--access-management-ui) above.
+- **No invitation flow, password reset UI, MFA, or SSO** for the three new demo logins or any other user — unchanged from Checkpoint 23's scope, see [Users & Access Management UI](#users--access-management-ui) above. (RBAC role/permission editing for *custom* roles was added in Checkpoint 28 — built-in/system roles remain view-only; see [RBAC Role & Permission Management UI](#rbac-role--permission-management-ui-checkpoint-28) below.)
 - **The build-size advisory from Checkpoint 25 is resolved** (Checkpoint 26) via lazy per-page resolution in `app.tsx` — see [Demo Readiness & UI Polish](#demo-readiness--ui-polish-checkpoint-26) above and `docs/architecture.md` for detail. No further bundle work is planned unless a future module meaningfully grows the app again.
 - **`TrustProxies` is not configured** (Checkpoint 27) — required before deploying behind any reverse proxy/load balancer that terminates TLS; see [Deployment & Production Hardening](#deployment--production-hardening-checkpoint-27) above and `docs/production-readiness.md`.
 - **No CI pipeline** runs the verification suite (tests, Pint, `tsc`, route audit, build) automatically — every checkpoint's regression check remains a manual local run. See [Deployment & Production Hardening](#deployment--production-hardening-checkpoint-27) above.
 - **No automated backup/restore tooling** — `docs/deployment.md` documents the practice, not an automated mechanism, since no real hosting environment exists yet to automate against.
+- **No role deletion** (Checkpoint 28) — for any role, system or custom; a deliberate scope decision, not an oversight. See [RBAC Role & Permission Management UI](#rbac-role--permission-management-ui-checkpoint-28) above.
+- **System/built-in roles cannot have their permissions edited at all** (Checkpoint 28) — the "safer MVP" lockdown chosen over a runtime "would this break the only admin path" check. See [RBAC Role & Permission Management UI](#rbac-role--permission-management-ui-checkpoint-28) above.
+- **No role import/export, access review workflow, approval workflow for permission changes, segregation-of-duties engine, or permission risk scoring** — see [RBAC Role & Permission Management UI](#rbac-role--permission-management-ui-checkpoint-28) above.

@@ -291,6 +291,24 @@ configuration exists in `bootstrap/app.php`, which matters only if this
 app is ever deployed behind a reverse proxy/load balancer that
 terminates TLS — see `docs/security.md` and `docs/production-readiness.md`.
 
+## RBAC Role & Permission Management UI (Checkpoint 28)
+
+`/settings/access/roles` gains create/edit/permission-assignment on
+top of Checkpoint 23's read-only list — but only ever for **custom**
+(tenant-admin-created) roles. Built-in/seeded roles (Tenant Admin, HR
+Manager, etc.) are permanently view-only in this checkpoint: no name/
+description edit, no permission add/remove, no delete — the "safer
+MVP" approach, chosen over building a runtime check for whether a
+given permission change would leave the tenant without an effective
+admin path. A new `is_system_role` column on `roles` (backfilled `true`
+for every existing seeded role) is what makes this distinction
+possible; any role created through the new API is always
+`is_system_role: false`. Permission assignment is gated by
+`permissions.assign` — an existing, previously-unused permission key,
+not a newly-invented one. No role deletion exists yet, for any role.
+See `docs/security.md` for the full security design and
+`docs/architecture.md` for the schema/architecture decisions.
+
 ## Documentation
 
 - [`docs/architecture.md`](docs/architecture.md) — multi-tenancy, tenant resolution, RBAC overview, internal-vs-public IDs, frontend architecture.

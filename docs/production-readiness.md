@@ -147,6 +147,14 @@ one place for a pre-launch security review:
 - [ ] No hardcoded bypass users, disabled middleware, or permissive
       demo-only routes exist anywhere in the codebase (confirmed by
       this checkpoint's review — none were found; none were introduced)
+- [ ] Built-in/system roles (Tenant Admin, HR Manager, etc.) cannot be
+      edited or have permissions added/removed through the RBAC
+      management UI/API (Checkpoint 28 — confirmed `403` regardless of
+      which permission the actor holds)
+- [ ] Permission assignment/removal on custom roles is gated by
+      `permissions.assign`, writes an audit log entry either way, and
+      is never possible against a platform role or another tenant's
+      role (Checkpoint 28)
 - [ ] Full backend test suite passes (`./artisan.bat test`), code style
       is clean (`vendor/bin/pint --test`), and a full live HTTPS smoke
       test has been run since the last change to any of the above

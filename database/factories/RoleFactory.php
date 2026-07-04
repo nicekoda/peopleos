@@ -37,4 +37,17 @@ class RoleFactory extends Factory
             'is_platform_role' => true,
         ]);
     }
+
+    /**
+     * Checkpoint 28 — a built-in/seeded-style role, protected from
+     * edit/permission changes. Default factory state (no call to this)
+     * already produces `is_system_role: false` (the DB column default),
+     * matching a real admin-created custom role.
+     */
+    public function system(): static
+    {
+        return $this->state(fn (array $attributes) => [
+            'is_system_role' => true,
+        ]);
+    }
 }

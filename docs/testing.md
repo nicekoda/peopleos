@@ -973,6 +973,36 @@ knowledge. Worth applying the same judgment to any other
 scratch-directory script that's been reused three or more checkpoints
 in a row.
 
+## Testing a structural safety guarantee directly against its real name, not just a synthetic case (Checkpoint 28)
+
+`RolePermissionApiTest::test_built_in_tenant_admin_role_cannot_be_made_unsafe`
+doesn't test "some system role can't be edited" in the abstract — it
+creates a role literally slugged/named `tenant-admin`, gives it a real
+permission, and asserts both that a new permission can't be added to
+it *and* that the existing one can't be stripped from it. The point:
+this checkpoint's whole safety argument ("Tenant Admin can never be
+locked out because system roles are fully immutable") is only as
+convincing as a test that exercises the actual role the argument is
+about, not a generically-named substitute. `RoleFactory::system()`
+(new factory state) makes this natural to write — `Role::factory()->system()->create(['slug' => 'tenant-admin', ...])`
+reads as exactly what it's testing.
+
+### Testing three layers of the same guard independently, not just the outermost one
+
+`RolePermissionApiTest` proves each of the three independent safeguards
+around permission assignment separately, rather than only checking that
+the end-to-end action succeeds/fails: `AssignRolePermissionRequest`'s
+validation rejects a platform-only `permission_id` with `422` before
+the controller runs at all; `RolePermissionController`'s own
+`ensureRoleBelongsToCurrentTenant()`/`ensureNotSystemRole()` reject a
+cross-tenant/platform/system role target with `404`/`403`; and
+`Role::givePermissionTo()`'s existing scope-mismatch guard would still
+catch a platform/tenant scope mismatch even if the first two layers
+were both bypassed somehow. Testing each layer's specific status code
+(`422` vs `403` vs `404`) rather than just "some 4xx happened" is what
+actually proves the layering is real, not just that *a* check exists
+somewhere in the chain.
+
 ## Verifying against the real app, not just the test suite
 
 Because of the SQLite/Postgres split above, checkpoints in this project

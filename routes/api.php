@@ -15,6 +15,7 @@ use App\Http\Controllers\Api\V1\MeController;
 use App\Http\Controllers\Api\V1\PermissionController;
 use App\Http\Controllers\Api\V1\PolicyController;
 use App\Http\Controllers\Api\V1\RoleController;
+use App\Http\Controllers\Api\V1\RolePermissionController;
 use App\Http\Controllers\Api\V1\TenantController;
 use App\Http\Controllers\Api\V1\UserController;
 use App\Http\Controllers\Api\V1\UserRoleController;
@@ -70,6 +71,23 @@ Route::middleware(['auth', 'tenant.matches'])->prefix('api/v1')->group(function 
     Route::delete('users/{user}/roles/{role}', [UserRoleController::class, 'destroy'])->middleware('permission:users.assign_role');
     Route::get('roles', [RoleController::class, 'index'])->middleware('permission:roles.view');
     Route::get('permissions', [PermissionController::class, 'index'])->middleware('permission:permissions.view');
+
+    // Checkpoint 28 — RBAC role/permission management. show()/store()/
+    // update() only ever mutate custom (is_system_role: false) tenant
+    // roles; a system or platform role is rejected before any field is
+    // applied (RoleController::ensureNotSystemRole()/
+    // ensureBelongsToCurrentTenant()). No delete route exists this
+    // checkpoint — see docs/security.md.
+    Route::get('roles/{role}', [RoleController::class, 'show'])->middleware('permission:roles.view');
+    Route::post('roles', [RoleController::class, 'store'])->middleware('permission:roles.create');
+    Route::patch('roles/{role}', [RoleController::class, 'update'])->middleware('permission:roles.update');
+    // permissions.assign (existing, previously-unused key) — not
+    // roles.assign_permission, which does not exist in this app's
+    // permission catalog. Tenant Admin already holds it via the
+    // existing "all non-platform permissions" wildcard grant; no other
+    // role is granted it this checkpoint.
+    Route::post('roles/{role}/permissions', [RolePermissionController::class, 'store'])->middleware('permission:permissions.assign');
+    Route::delete('roles/{role}/permissions/{permission}', [RolePermissionController::class, 'destroy'])->middleware('permission:permissions.assign');
 
     // Checkpoint 24 — read-only. AuditLog does NOT use BelongsToTenant
     // (see docs/security.md) — every query manually filters by

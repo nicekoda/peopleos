@@ -1333,3 +1333,59 @@ every checkpoint: every `auth`-protected route must also carry
 directly (`Route::getRoutes()`), not a pre-generated JSON snapshot, so
 it stays correct automatically as routes are added — no maintenance
 step required when a future checkpoint adds a new authenticated route.
+
+## RBAC Role & Permission Management UI (Checkpoint 28)
+
+Adds create/edit/permission-assignment to Checkpoint 23's read-only
+role list — `GET /api/v1/roles/{role}` (show), `POST /api/v1/roles`
+(create), `PATCH /api/v1/roles/{role}` (update),
+`POST`/`DELETE /api/v1/roles/{role}/permissions(/{permission})`
+(assign/remove). No new pages beyond what Checkpoint 23 already
+scaffolded at `/settings/access/roles` — three new routes
+(`/create`, `/{role}`, `/{role}/edit`) plus permission management
+folded into the detail page rather than a fifth separate page. See
+`docs/security.md` for the full security-design writeup; this section
+covers the schema/architecture decisions.
+
+**`roles.is_system_role` (new column) is the load-bearing design
+decision this checkpoint made.** The `roles` table previously had no
+way to distinguish a seeded role from an admin-created one —
+`is_platform_role` only separates platform-vs-tenant scope, not
+built-in-vs-custom within the tenant scope. Added as a plain boolean,
+default `false`, backfilled `true` for every pre-existing row at
+migration time, and `RoleSeeder` now sets it explicitly on every role
+it creates going forward (so a bare `db:seed` re-run against an
+already-migrated database still marks new seeded rows correctly, not
+just relying on the migration's one-time backfill).
+
+**Every system role is permanently locked to view-only — no runtime
+"is this safe" calculation exists.** `RoleController::update()` and
+both `RolePermissionController` actions call `ensureNotSystemRole()`
+(403) before doing anything else. This was the explicitly approved
+"safer MVP" alternative to building logic that decides whether removing
+a given permission from Tenant Admin would leave the tenant without an
+effective admin path — that calculation is genuinely hard to get
+right and even harder to fully test, so this checkpoint doesn't attempt
+it. The tradeoff: even an obviously-harmless edit to a built-in role
+(e.g. adding `documents.view` to HR Officer) isn't possible through
+this UI yet — a real limitation, documented as such, not hidden.
+
+**Two permission-mutation methods on `Role`, deliberately not one.**
+`givePermissionTo()` (existing, Checkpoint 4/5) stays exactly as it
+was — used only by `RoleSeeder`'s bulk catalog-building loop, and
+deliberately un-audited, since logging each of its ~100+ calls per
+`migrate:fresh --seed` would flood the audit log with seeding noise.
+`assignPermission()`/`removePermission()` (new) wrap the same
+underlying scope-check logic but add audit logging, and are the only
+methods `RolePermissionController` calls. Same shape as
+`HasPermissions`'s `assignRole()`/`removeRole()` (user-level, always
+audited) vs. how a seeder populates a user's roles directly — this
+checkpoint just makes the equivalent split explicit at the role-
+permission level too.
+
+**No role deletion, at all, for any role.** Not attempted this
+checkpoint — the simplest possible guarantee that "Tenant Admin
+protected from deletion" holds is that nothing can be deleted yet.
+`roles.delete` remains a seeded-but-unused permission key, same
+category as `policies.export_acknowledgements` and a few others this
+app has seeded ahead of the feature that will eventually use them.

@@ -5,16 +5,19 @@ import PageHeader from '@/Components/PageHeader';
 import Badge from '@/Components/Badge';
 import EmptyState from '@/Components/EmptyState';
 import LoadingState from '@/Components/LoadingState';
+import PermissionGate from '@/Components/PermissionGate';
 import { api, toApiError, redirectIfUnauthenticated, ApiError } from '@/lib/api';
 import { PaginatedResponse } from '@/types/user';
 import { Role } from '@/types/role';
 
 /**
- * Read-only role list (Checkpoint 23) — no create/edit/delete, no
- * permission list per role, only a computed count. Fetched from the
- * new, tenant-filtered /api/v1/roles endpoint — can never include a
- * platform role or another tenant's roles (Role has no BelongsToTenant
- * global scope, so the backend filters manually — see docs/security.md).
+ * Role list (Checkpoint 23; create action + built-in/custom badge added
+ * Checkpoint 28) — no raw permission list per role here, only a
+ * computed count; the full grouped permission list lives on the detail
+ * page. Fetched from the tenant-filtered /api/v1/roles endpoint — can
+ * never include a platform role or another tenant's roles (Role has no
+ * BelongsToTenant global scope, so the backend filters manually — see
+ * docs/security.md).
  */
 export default function SettingsAccessRoles() {
     const [roles, setRoles] = useState<Role[] | null>(null);
@@ -39,9 +42,19 @@ export default function SettingsAccessRoles() {
                 title="Roles"
                 description="Tenant roles and how many permissions each holds."
                 actions={
-                    <Link href="/settings/access" className="text-sm font-medium text-indigo-600 hover:text-indigo-500">
-                        Back to Users &amp; Access
-                    </Link>
+                    <div className="flex items-center gap-3">
+                        <Link href="/settings/access" className="text-sm font-medium text-indigo-600 hover:text-indigo-500">
+                            Back to Users &amp; Access
+                        </Link>
+                        <PermissionGate permission="roles.create">
+                            <Link
+                                href="/settings/access/roles/create"
+                                className="inline-flex items-center justify-center gap-2 rounded-md bg-indigo-600 px-3.5 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500"
+                            >
+                                Create Role
+                            </Link>
+                        </PermissionGate>
+                    </div>
                 }
             />
 
@@ -63,17 +76,25 @@ export default function SettingsAccessRoles() {
                                 <th className="px-4 py-3 text-left font-semibold text-slate-600">Name</th>
                                 <th className="px-4 py-3 text-left font-semibold text-slate-600">Type</th>
                                 <th className="px-4 py-3 text-left font-semibold text-slate-600">Permissions</th>
+                                <th className="px-4 py-3 text-left font-semibold text-slate-600">Users</th>
                                 <th className="px-4 py-3 text-left font-semibold text-slate-600">Description</th>
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100">
                             {roles.map((role) => (
                                 <tr key={role.id}>
-                                    <td className="whitespace-nowrap px-4 py-3 font-medium text-slate-900">{role.name}</td>
+                                    <td className="whitespace-nowrap px-4 py-3 font-medium text-slate-900">
+                                        <Link href={`/settings/access/roles/${role.id}`} className="text-indigo-600 hover:text-indigo-500">
+                                            {role.name}
+                                        </Link>
+                                    </td>
                                     <td className="whitespace-nowrap px-4 py-3">
-                                        <Badge tone="neutral">Tenant role</Badge>
+                                        <Badge tone={role.is_system_role ? 'neutral' : 'success'}>
+                                            {role.is_system_role ? 'System Role' : 'Custom Role'}
+                                        </Badge>
                                     </td>
                                     <td className="whitespace-nowrap px-4 py-3 text-slate-500">{role.permission_count}</td>
+                                    <td className="whitespace-nowrap px-4 py-3 text-slate-500">{role.user_count ?? '—'}</td>
                                     <td className="px-4 py-3 text-slate-500">{role.description ?? '—'}</td>
                                 </tr>
                             ))}

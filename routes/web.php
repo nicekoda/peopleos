@@ -127,6 +127,14 @@ Route::middleware(['auth', 'tenant.matches'])->group(function () {
         ->middleware('permission:users.view')->name('settings.access.users.show');
     Route::get('settings/access/roles', [UsersAccessUiController::class, 'roles'])
         ->middleware('permission:roles.view')->name('settings.access.roles');
+    // RBAC Role/Permission Management UI (Checkpoint 28) — 'create' must
+    // be registered before '{role}' so Laravel doesn't collide the two.
+    Route::get('settings/access/roles/create', [UsersAccessUiController::class, 'roleCreate'])
+        ->middleware('permission:roles.create')->name('settings.access.roles.create');
+    Route::get('settings/access/roles/{role}', [UsersAccessUiController::class, 'roleShow'])
+        ->middleware('permission:roles.view')->name('settings.access.roles.show');
+    Route::get('settings/access/roles/{role}/edit', [UsersAccessUiController::class, 'roleEdit'])
+        ->middleware('permission:roles.update')->name('settings.access.roles.edit');
     // Document Categories Admin UI (Checkpoint 25) — thin page routes;
     // category data is fetched client-side from the existing
     // /api/v1/document-categories endpoints (Checkpoint 9), never

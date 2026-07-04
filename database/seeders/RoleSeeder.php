@@ -55,7 +55,7 @@ class RoleSeeder extends Seeder
     {
         $role = Role::query()->updateOrCreate(
             ['slug' => 'platform-super-admin', 'tenant_id' => null],
-            ['name' => 'Platform Super Admin', 'is_platform_role' => true],
+            ['name' => 'Platform Super Admin', 'is_platform_role' => true, 'is_system_role' => true],
         );
 
         Permission::query()->where('is_platform_permission', true)->get()
@@ -67,7 +67,7 @@ class RoleSeeder extends Seeder
         $roles = collect(self::TENANT_ROLE_NAMES)->mapWithKeys(function (string $name) use ($tenant) {
             $role = Role::query()->updateOrCreate(
                 ['slug' => Str::slug($name), 'tenant_id' => $tenant->id],
-                ['name' => $name, 'is_platform_role' => false],
+                ['name' => $name, 'is_platform_role' => false, 'is_system_role' => true],
             );
 
             return [$name => $role];

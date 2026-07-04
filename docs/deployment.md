@@ -75,6 +75,12 @@ live HTTPS smoke test against the actual running app (this project's
 established practice every checkpoint) is what verifies that. See
 "Deployment Smoke Test Checklist" below.
 
+**All five commands above now also run automatically** via
+`.github/workflows/ci.yml` (Checkpoint 29) on every push/PR, plus
+`composer run quality` / `npm run quality` as the near-one-command
+local equivalents. See `docs/quality-gate.md` for the full local/CI
+reference — CI still does not replace the live smoke test below.
+
 ## 3. Tenant / Subdomain Deployment
 
 **Local/demo**, tenant resolution is subdomain-based

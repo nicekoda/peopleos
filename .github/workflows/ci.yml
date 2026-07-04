@@ -1,0 +1,113 @@
+name: CI
+
+# Checkpoint 29 — the automated counterpart to the manual quality gate
+# every checkpoint in this project has run by hand
+# (./artisan.bat test / vendor/bin/pint --test /
+# ./artisan.bat route:audit-tenant-scoping / npx tsc --noEmit /
+# npm run build). See docs/quality-gate.md for the full local +
+# CI reference, and docs/testing.md for why the backend test suite
+# below runs against SQLite while this workflow still provisions a
+# real PostgreSQL service for the migration/tenant-route-audit steps.
+#
+# This workflow does not run the live HTTPS smoke test — that
+# depends on local subdomains/certificates and real browser/session
+# behavior that don't exist in a CI runner. See docs/quality-gate.md
+# "Manual post-CI smoke test" for the checklist that remains a
+# required manual step after CI passes.
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+
+    # Ephemeral, CI-run-only credentials — never real secrets, never
+    # reused outside this job, torn down when the job ends.
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: peopleos_ci
+          POSTGRES_PASSWORD: peopleos_ci_password
+          POSTGRES_DB: peopleos_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U peopleos_ci"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: pdo_pgsql, pgsql, mbstring, bcmath, ctype, fileinfo, openssl, tokenizer, xml
+          coverage: none
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: '.nvmrc'
+          cache: npm
+
+      - name: Install PHP dependencies
+        run: composer install --no-interaction --prefer-dist --no-progress
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Prepare environment
+        run: |
+          cp .env.example .env
+          php artisan key:generate
+        env:
+          # CI-only placeholder — never a real credential, never
+          # committed anywhere. See docs/security.md "Local Demo
+          # Credentials" for why a real value never appears in any
+          # committed file, CI included.
+          SEED_USER_PASSWORD: ci-only-not-a-real-password
+
+      - name: Run migrations against PostgreSQL
+        run: php artisan migrate --force
+        env:
+          DB_CONNECTION: pgsql
+          DB_HOST: 127.0.0.1
+          DB_PORT: 5432
+          DB_DATABASE: peopleos_ci
+          DB_USERNAME: peopleos_ci
+          DB_PASSWORD: peopleos_ci_password
+
+      - name: Tenant-route audit
+        run: php artisan route:audit-tenant-scoping
+        env:
+          DB_CONNECTION: pgsql
+          DB_HOST: 127.0.0.1
+          DB_PORT: 5432
+          DB_DATABASE: peopleos_ci
+          DB_USERNAME: peopleos_ci
+          DB_PASSWORD: peopleos_ci_password
+
+      - name: Backend test suite
+        # Runs against phpunit.xml's own in-memory SQLite override —
+        # deliberately unrelated to the PostgreSQL service above. See
+        # docs/testing.md for why the suite runs on SQLite and how
+        # PostgreSQL-specific behavior is verified separately.
+        run: php artisan test
+
+      - name: Pint (code style)
+        run: vendor/bin/pint --test
+
+      - name: TypeScript check
+        run: npm run typecheck
+
+      - name: Frontend build
+        run: npm run build

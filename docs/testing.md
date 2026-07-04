@@ -1092,10 +1092,29 @@ must set `tenant_id` directly on the model instance (not via
 `docs/architecture.md`'s CLI/tinker gotcha note) since no `Tenant` is
 bound in the container outside a real HTTP request.
 
+## CI now runs this suite automatically — but on the same SQLite configuration, not PostgreSQL (Checkpoint 29)
+
+`.github/workflows/ci.yml` runs `php artisan test` on every push/PR,
+using `phpunit.xml`'s existing in-memory SQLite configuration —
+unchanged by this checkpoint. The workflow separately provisions a real
+PostgreSQL service container, but only for running migrations and the
+tenant-route audit (`route:audit-tenant-scoping`) against a genuinely
+booted app — not for the PHPUnit run itself. This was a deliberate
+choice, not an oversight: changing the test suite's database to satisfy
+a CI preference would be changing established test behavior for no
+CI-specific reason, when the actual reason the suite runs on SQLite
+(speed) is unrelated to whether it runs locally or in CI. See
+`docs/quality-gate.md` for the full reasoning and
+`docs/production-readiness.md` for the production database
+requirements this doesn't change.
+
 ## Known limitations
 
-- No CI pipeline configured yet — tests are run locally only.
 - No test coverage reporting configured yet.
 - Feature tests dominate; very few pure unit tests exist so far, since
   most logic to date (tenant resolution, RBAC guards, audit logging) is
   most meaningfully verified at the HTTP/integration level.
+- CI (Checkpoint 29) runs the backend suite, Pint, the tenant-route
+  audit, the TypeScript check, and the frontend build automatically —
+  it does not run the live HTTPS smoke test, which remains a required
+  manual step (see `docs/quality-gate.md`).

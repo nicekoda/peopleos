@@ -309,6 +309,31 @@ not a newly-invented one. No role deletion exists yet, for any role.
 See `docs/security.md` for the full security design and
 `docs/architecture.md` for the schema/architecture decisions.
 
+## CI & Automated Quality Gate (Checkpoint 29)
+
+No new product feature — this checkpoint automates the five checks
+every prior checkpoint has run manually. Locally:
+
+```bash
+composer run quality   # test -> pint --test -> route:audit-tenant-scoping
+npm run quality          # typecheck (tsc --noEmit) -> build
+```
+
+`.github/workflows/ci.yml` runs the same five checks on every push/PR
+to `main`/`master`: PHP + Node setup, `composer install`/`npm ci`, a
+real PostgreSQL service container for migrations and the tenant-route
+audit, then the backend test suite (which — deliberately unchanged —
+still runs against `phpunit.xml`'s in-memory SQLite, not the
+PostgreSQL service; see `docs/quality-gate.md` for why these coexist
+in one workflow rather than contradicting each other), Pint, the
+TypeScript check, and the frontend build. No secrets are committed —
+`APP_KEY` is generated fresh every CI run, and the PostgreSQL service's
+credentials are throwaway, local to that run only. The live HTTPS
+smoke test this project has always run by hand is **not** automated
+(it depends on local subdomains/certs/browser sessions CI doesn't
+have) — it remains a documented required manual step after CI passes.
+See `docs/quality-gate.md` for the full reference.
+
 ## Documentation
 
 - [`docs/architecture.md`](docs/architecture.md) — multi-tenancy, tenant resolution, RBAC overview, internal-vs-public IDs, frontend architecture.
@@ -319,6 +344,7 @@ See `docs/security.md` for the full security design and
 - [`docs/demo-guide.md`](docs/demo-guide.md) — demo users, login sequence, per-module demo flow, what each role should see, known limitations.
 - [`docs/deployment.md`](docs/deployment.md) — environment configuration, tenant/subdomain deployment, storage/logging/queue readiness, build & verification commands, deployment smoke test checklist.
 - [`docs/production-readiness.md`](docs/production-readiness.md) — production go/no-go checklist and security hardening checklist.
+- [`docs/quality-gate.md`](docs/quality-gate.md) — local quality gate commands, CI reference, and the manual post-CI smoke test checklist.
 
 ## Project Standards
 

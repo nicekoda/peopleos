@@ -158,3 +158,8 @@ one place for a pre-launch security review:
 - [ ] Full backend test suite passes (`./artisan.bat test`), code style
       is clean (`vendor/bin/pint --test`), and a full live HTTPS smoke
       test has been run since the last change to any of the above
+- [ ] CI (`.github/workflows/ci.yml`, Checkpoint 29) is green on the
+      branch/commit being deployed — test suite, Pint, tenant-route
+      audit, TypeScript check, and frontend build all pass automatically.
+      CI does not run the live HTTPS smoke test above — that remains a
+      required manual step; see `docs/quality-gate.md`.

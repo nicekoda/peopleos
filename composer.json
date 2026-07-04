@@ -51,6 +51,13 @@
             "@php artisan config:clear --ansi @no_additional_args",
             "@php artisan test"
         ],
+        "pint": "vendor/bin/pint --test",
+        "route-audit": "@php artisan route:audit-tenant-scoping",
+        "quality": [
+            "@test",
+            "@pint",
+            "@route-audit"
+        ],
         "post-autoload-dump": [
             "Illuminate\\Foundation\\ComposerScripts::postAutoloadDump",
             "@php artisan package:discover --ansi"

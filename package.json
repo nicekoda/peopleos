@@ -4,7 +4,12 @@
     "type": "module",
     "scripts": {
         "build": "vite build",
-        "dev": "vite"
+        "dev": "vite",
+        "typecheck": "tsc --noEmit",
+        "quality": "npm run typecheck && npm run build"
+    },
+    "engines": {
+        "node": ">=22"
     },
     "devDependencies": {
         "@tailwindcss/vite": "^4.0.0",

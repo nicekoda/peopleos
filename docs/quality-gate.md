@@ -192,6 +192,21 @@ full version of this list this section summarizes.
   scanning, or security static analysis — none of these exist yet in
   this project, CI or otherwise.
 
+**Known CI flakiness (pre-existing, not introduced by CI):**
+`DashboardAndFrontendSecurityTest::test_shared_inertia_props_contain_no_sensitive_fields`
+naively substring-searches the entire shared-props JSON blob for
+sensitive-looking fragments (e.g. `ssn`) — a random ULID or Faker-
+generated name occasionally contains that 3-letter sequence purely by
+chance (confirmed live on Checkpoint 30's first fully-green CI attempt:
+a tenant's auto-generated ULID `...kbdssna0ng...` contained `ssn`).
+A re-run passes because the random values differ each time. This was
+first flagged in Checkpoint 24 (via a fixed background task, not yet
+addressed) and isn't a CI-specific issue — fixing it properly means
+pinning the test's fixture values instead of asserting against
+randomly-generated content, out of scope for a CI-verification
+checkpoint. If this recurs often enough to be disruptive, that's the
+fix to prioritize.
+
 ## 5. GitHub Free — Current Plan and When to Reconsider
 
 **Business constraint (confirmed Checkpoint 30): PeopleOS will run on

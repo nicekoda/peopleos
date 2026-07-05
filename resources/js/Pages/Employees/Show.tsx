@@ -132,6 +132,14 @@ export default function EmployeesShow() {
                     </dl>
                 </Card>
 
+                <Card title="Organisation">
+                    <dl className="divide-y divide-slate-100">
+                        <Field label="Department" value={employee.department?.name ?? null} />
+                        <Field label="Position" value={employee.position?.name ?? null} />
+                        <Field label="Location" value={employee.location?.name ?? null} />
+                    </dl>
+                </Card>
+
                 <Card title="Dates">
                     <dl className="divide-y divide-slate-100">
                         <Field label="Start date" value={employee.start_date} />

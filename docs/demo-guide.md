@@ -1,6 +1,7 @@
 # PeopleOS Demo Guide
 
-**Checkpoint 26** (updated Checkpoint 27 with a reset-command warning).
+**Checkpoint 26** (updated Checkpoint 27 with a reset-command warning;
+updated Checkpoint 32 with Departments/Positions/Locations admin).
 This is the practical "how to run a demo" companion to
 `docs/security.md`/`docs/architecture.md` — it doesn't restate the RBAC
 design or the tenant-isolation model, only how to log in, what to click,
@@ -93,15 +94,16 @@ A natural order to show the app, each login building on the last:
 - **Leave request and approval** — as Employee (Chidi Okafor), the pending Annual Leave request is already seeded; switch to Line Manager (Tunde Adeyemi) and approve it live. Then show Grace Nwosu's already-approved request and Ibrahim Sule's already-rejected request (with a rejection reason) as HR Manager/HR Officer.
 - **Document upload/download** — as HR Manager or Employee, open Chidi Okafor's documents: a normal "Offer Letter", a sensitive "Employment Contract" (badge visible), and switch to Grace Nwosu/Ibrahim Sule's documents to show an expiry-dated certification and one expiring soon.
 - **Policy publish/assign/acknowledge** — as HR Manager, show the Draft "Remote Work Policy" (not published), the Published-but-unassigned "Code of Conduct", and the published + assigned "Data Protection Policy" with a mix of pending and acknowledged rows.
-- **Settings** — as Tenant Admin, tour the full hub (Company, Users & Access, Document Categories, Leave Types, Security & Audit) — every card now reflects real, working pages, not "Coming later" placeholders.
+- **Settings** — as Tenant Admin, tour the full hub (Company, Users & Access, Document Categories, Leave Types, Departments, Positions, Locations, Security & Audit) — every card now reflects real, working pages, not "Coming later" placeholders.
+- **Departments/Positions/Locations** — as HR Manager, open Settings → Departments, edit one, archive another (status flips to Inactive, no hard delete); show the same for Positions and Locations. Then open the Employee edit form and show the three new dropdowns only ever offer active entities — an archived one silently disappears from the list, and the backend independently rejects it even if a stale ID were submitted directly.
 - **Users & Access** — as Tenant Admin, show the Users list/roles list; demonstrate that removing the tenant's last Tenant Admin role is blocked.
 - **Audit Log review** — as Auditor, open the audit log, show the role-assignment entries created during seeding and any entries generated live during the demo (e.g. the leave approval above) — then attempt (and get blocked from) a tenant settings write.
 
 ## 5. What Each Role Should Be Able to See
 
 - **Tenant Admin** — everything within the tenant: all modules, all Settings sections, full Users & Access.
-- **HR Manager** — employees, leave (tenant-wide), documents, policies, Settings (Document Categories/Leave Types), but not Users & Access or Audit Log.
-- **HR Officer** — leave (tenant-wide) and policies, Settings visible (for Leave Types), but not Users & Access, Document Categories management, or Audit Log.
+- **HR Manager** — employees, leave (tenant-wide), documents, policies, Settings (Document Categories/Leave Types/Departments/Positions/Locations, full CRUD), but not Users & Access or Audit Log.
+- **HR Officer** — leave (tenant-wide) and policies, Settings visible (for Leave Types/Departments/Positions/Locations — view/create/update, no delete), but not Users & Access, Document Categories management, or Audit Log.
 - **Line Manager** — their own profile plus direct reports only; leave approval limited to direct reports; no Settings access.
 - **Employee** — their own profile, own leave, own documents, own policy acknowledgements only. No Settings, no visibility into other employees' data.
 - **Auditor** — tenant-wide read access to leave/employees (view-only) and the Audit Log; Settings visible (for Security & Audit) but no admin write actions anywhere.

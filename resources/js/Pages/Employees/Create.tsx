@@ -1,12 +1,16 @@
 import { Head, router } from '@inertiajs/react';
-import { FormEventHandler, useState } from 'react';
+import { FormEventHandler, useEffect, useState } from 'react';
 import AppLayout from '@/Layouts/AppLayout';
 import PageHeader from '@/Components/PageHeader';
 import Card from '@/Components/Card';
 import Button from '@/Components/Button';
 import { InputField, SelectField } from '@/Components/FormField';
+import { useCan } from '@/hooks/useCan';
 import { api, toApiError, redirectIfUnauthenticated, ApiError } from '@/lib/api';
 import { Employee, EmployeeFormPayload } from '@/types/employee';
+import { Department, PaginatedResponse as DepartmentPaginatedResponse } from '@/types/department';
+import { Position, PaginatedResponse as PositionPaginatedResponse } from '@/types/position';
+import { Location, PaginatedResponse as LocationPaginatedResponse } from '@/types/location';
 
 const emptyForm: EmployeeFormPayload = {
     employee_number: '',
@@ -19,6 +23,9 @@ const emptyForm: EmployeeFormPayload = {
     phone: '',
     employment_type: 'full_time',
     status: 'draft',
+    department_id: '',
+    location_id: '',
+    position_id: '',
     start_date: '',
     probation_end_date: '',
     confirmation_date: '',
@@ -27,16 +34,49 @@ const emptyForm: EmployeeFormPayload = {
 /**
  * Refinement 3 — the payload sent to POST /employees is built field by
  * field from `emptyForm`'s shape, never by spreading a broader object.
- * department_id/location_id/position_id (no lookup API exists yet —
- * see docs/api.md) and manager_employee_id/user-link/tenant_id/
- * created_by/updated_by (structurally rejected by StoreEmployeeRequest
- * itself, see docs/security.md) are never fields on this form at all.
+ * manager_employee_id/user-link/tenant_id/created_by/updated_by
+ * (structurally rejected by StoreEmployeeRequest itself, see
+ * docs/security.md) are never fields on this form at all.
+ * department_id/location_id/position_id were added Checkpoint 32, now
+ * that real lookup APIs exist — only active, same-tenant options are
+ * offered (tenant scoping is automatic via BelongsToTenant; "active
+ * only" is a client-side filter here, matching this app's existing
+ * employee-linking picker convention).
  */
 export default function EmployeesCreate() {
     const [form, setForm] = useState<EmployeeFormPayload>(emptyForm);
     const [errors, setErrors] = useState<Record<string, string[]>>({});
     const [submitting, setSubmitting] = useState(false);
     const [generalError, setGeneralError] = useState<string | null>(null);
+
+    const canViewDepartments = useCan('departments.view');
+    const canViewPositions = useCan('positions.view');
+    const canViewLocations = useCan('locations.view');
+
+    const [departments, setDepartments] = useState<Department[]>([]);
+    const [positions, setPositions] = useState<Position[]>([]);
+    const [locations, setLocations] = useState<Location[]>([]);
+
+    useEffect(() => {
+        if (!canViewDepartments) return;
+        api.get<DepartmentPaginatedResponse<Department>>('/departments')
+            .then((response) => setDepartments(response.data.data.filter((department) => department.status === 'active')))
+            .catch(() => setDepartments([]));
+    }, [canViewDepartments]);
+
+    useEffect(() => {
+        if (!canViewPositions) return;
+        api.get<PositionPaginatedResponse<Position>>('/positions')
+            .then((response) => setPositions(response.data.data.filter((position) => position.status === 'active')))
+            .catch(() => setPositions([]));
+    }, [canViewPositions]);
+
+    useEffect(() => {
+        if (!canViewLocations) return;
+        api.get<LocationPaginatedResponse<Location>>('/locations')
+            .then((response) => setLocations(response.data.data.filter((location) => location.status === 'active')))
+            .catch(() => setLocations([]));
+    }, [canViewLocations]);
 
     const set = <K extends keyof EmployeeFormPayload>(key: K, value: EmployeeFormPayload[K]) => {
         setForm((prev) => ({ ...prev, [key]: value }));
@@ -50,7 +90,10 @@ export default function EmployeesCreate() {
 
         // Blank optional strings are omitted rather than sent as "" —
         // StoreEmployeeRequest's nullable/date rules treat an empty
-        // string differently from an absent key for some validators.
+        // string differently from an absent key for some validators. A
+        // brand-new employee has no prior department/location/position
+        // value to preserve, so omitting these when blank is safe here
+        // (unlike Edit, which needs an explicit null — see Edit.tsx).
         const payload = Object.fromEntries(
             Object.entries(form).filter(([, value]) => value !== ''),
         );
@@ -177,6 +220,49 @@ export default function EmployeesCreate() {
                             onChange={(e) => set('phone', e.target.value)}
                             error={fieldError('phone')}
                         />
+
+                        <SelectField
+                            label="Department"
+                            name="department_id"
+                            value={form.department_id}
+                            onChange={(e) => set('department_id', e.target.value)}
+                            error={fieldError('department_id')}
+                        >
+                            <option value="">— None —</option>
+                            {departments.map((department) => (
+                                <option key={department.id} value={department.id}>
+                                    {department.name}
+                                </option>
+                            ))}
+                        </SelectField>
+                        <SelectField
+                            label="Position"
+                            name="position_id"
+                            value={form.position_id}
+                            onChange={(e) => set('position_id', e.target.value)}
+                            error={fieldError('position_id')}
+                        >
+                            <option value="">— None —</option>
+                            {positions.map((position) => (
+                                <option key={position.id} value={position.id}>
+                                    {position.name}
+                                </option>
+                            ))}
+                        </SelectField>
+                        <SelectField
+                            label="Location"
+                            name="location_id"
+                            value={form.location_id}
+                            onChange={(e) => set('location_id', e.target.value)}
+                            error={fieldError('location_id')}
+                        >
+                            <option value="">— None —</option>
+                            {locations.map((location) => (
+                                <option key={location.id} value={location.id}>
+                                    {location.name}
+                                </option>
+                            ))}
+                        </SelectField>
 
                         <InputField
                             label="Start date"

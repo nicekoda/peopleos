@@ -2,8 +2,11 @@
 
 namespace App\Http\Requests\Employee;
 
+use App\Enums\DepartmentStatus;
 use App\Enums\EmployeeStatus;
 use App\Enums\EmploymentType;
+use App\Enums\LocationStatus;
+use App\Enums\PositionStatus;
 use App\Models\Employee;
 use App\Models\Tenant;
 use Illuminate\Foundation\Http\FormRequest;
@@ -56,17 +59,35 @@ class UpdateEmployeeRequest extends FormRequest
             'phone' => ['nullable', 'string', 'max:50'],
             'status' => ['sometimes', new Enum(EmployeeStatus::class)],
             'employment_type' => ['sometimes', 'required', new Enum(EmploymentType::class)],
+            // Checkpoint 32 — excludes archived (status: inactive) and
+            // soft-deleted rows, same pattern as
+            // StoreEmployeeDocumentRequest's document_category_id
+            // (Checkpoint 9). Only enforced when the field is actually
+            // provided in the request body — an employee already linked
+            // to a department that's later archived keeps that link
+            // untouched by unrelated PATCH requests (e.g. updating just
+            // first_name); this only blocks actively (re)assigning an
+            // employee to an archived department/position/location.
             'department_id' => [
                 'nullable', 'string',
-                Rule::exists('departments', 'id')->where(fn ($q) => $q->where('tenant_id', $tenantId)),
+                Rule::exists('departments', 'id')->where(fn ($q) => $q
+                    ->where('tenant_id', $tenantId)
+                    ->where('status', DepartmentStatus::Active->value)
+                    ->whereNull('deleted_at')),
             ],
             'location_id' => [
                 'nullable', 'string',
-                Rule::exists('locations', 'id')->where(fn ($q) => $q->where('tenant_id', $tenantId)),
+                Rule::exists('locations', 'id')->where(fn ($q) => $q
+                    ->where('tenant_id', $tenantId)
+                    ->where('status', LocationStatus::Active->value)
+                    ->whereNull('deleted_at')),
             ],
             'position_id' => [
                 'nullable', 'string',
-                Rule::exists('positions', 'id')->where(fn ($q) => $q->where('tenant_id', $tenantId)),
+                Rule::exists('positions', 'id')->where(fn ($q) => $q
+                    ->where('tenant_id', $tenantId)
+                    ->where('status', PositionStatus::Active->value)
+                    ->whereNull('deleted_at')),
             ],
             // manager_employee_id is deliberately not a validated field
             // here (Checkpoint 13) — this endpoint's old, weaker

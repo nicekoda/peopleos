@@ -6,8 +6,12 @@ import Card from '@/Components/Card';
 import Button from '@/Components/Button';
 import LoadingState from '@/Components/LoadingState';
 import { InputField, SelectField } from '@/Components/FormField';
+import { useCan } from '@/hooks/useCan';
 import { api, toApiError, redirectIfUnauthenticated, ApiError } from '@/lib/api';
 import { Employee, EmployeeFormPayload } from '@/types/employee';
+import { Department, PaginatedResponse as DepartmentPaginatedResponse } from '@/types/department';
+import { Position, PaginatedResponse as PositionPaginatedResponse } from '@/types/position';
+import { Location, PaginatedResponse as LocationPaginatedResponse } from '@/types/location';
 import { PageProps } from '@/types';
 
 interface EditProps extends PageProps {
@@ -26,6 +30,9 @@ function toFormPayload(employee: Employee): EmployeeFormPayload {
         phone: employee.phone ?? '',
         employment_type: employee.employment_type,
         status: employee.status,
+        department_id: employee.department_id ?? '',
+        location_id: employee.location_id ?? '',
+        position_id: employee.position_id ?? '',
         start_date: employee.start_date ?? '',
         probation_end_date: employee.probation_end_date ?? '',
         confirmation_date: employee.confirmation_date ?? '',
@@ -40,6 +47,14 @@ function toFormPayload(employee: Employee): EmployeeFormPayload {
  * docs/security.md). Refinement 3 applies here too: the PATCH payload
  * is built from this same allowlisted shape, never by spreading the
  * fetched Employee object.
+ *
+ * department_id/location_id/position_id (Checkpoint 32) are the one
+ * exception to this form's "omit if blank" convention — same reasoning
+ * as Leave Type's max_days_per_year (Ck25): StoreEmployeeRequest/
+ * UpdateEmployeeRequest's rules are `nullable` with no `sometimes`, so
+ * an *absent* key leaves the existing value untouched forever, while an
+ * *explicit* `null` genuinely clears it. Without this, an employee once
+ * assigned a department could never be unassigned through this form.
  */
 export default function EmployeesEdit() {
     const { employeeId } = usePage<EditProps>().props;
@@ -51,6 +66,14 @@ export default function EmployeesEdit() {
     const [loadError, setLoadError] = useState<ApiError | null>(null);
     const [success, setSuccess] = useState(false);
 
+    const canViewDepartments = useCan('departments.view');
+    const canViewPositions = useCan('positions.view');
+    const canViewLocations = useCan('locations.view');
+
+    const [departments, setDepartments] = useState<Department[]>([]);
+    const [positions, setPositions] = useState<Position[]>([]);
+    const [locations, setLocations] = useState<Location[]>([]);
+
     useEffect(() => {
         api.get<{ data: Employee }>(`/employees/${employeeId}`)
             .then((response) => setForm(toFormPayload(response.data.data)))
@@ -61,6 +84,27 @@ export default function EmployeesEdit() {
                 }
             });
     }, [employeeId]);
+
+    useEffect(() => {
+        if (!canViewDepartments) return;
+        api.get<DepartmentPaginatedResponse<Department>>('/departments')
+            .then((response) => setDepartments(response.data.data.filter((department) => department.status === 'active')))
+            .catch(() => setDepartments([]));
+    }, [canViewDepartments]);
+
+    useEffect(() => {
+        if (!canViewPositions) return;
+        api.get<PositionPaginatedResponse<Position>>('/positions')
+            .then((response) => setPositions(response.data.data.filter((position) => position.status === 'active')))
+            .catch(() => setPositions([]));
+    }, [canViewPositions]);
+
+    useEffect(() => {
+        if (!canViewLocations) return;
+        api.get<LocationPaginatedResponse<Location>>('/locations')
+            .then((response) => setLocations(response.data.data.filter((location) => location.status === 'active')))
+            .catch(() => setLocations([]));
+    }, [canViewLocations]);
 
     const set = <K extends keyof EmployeeFormPayload>(key: K, value: EmployeeFormPayload[K]) => {
         setForm((prev) => (prev ? { ...prev, [key]: value } : prev));
@@ -76,7 +120,15 @@ export default function EmployeesEdit() {
         setErrors({});
         setGeneralError(null);
 
-        const payload = Object.fromEntries(Object.entries(form).filter(([, value]) => value !== ''));
+        const payload = {
+            ...Object.fromEntries(Object.entries(form).filter(([, value]) => value !== '')),
+            // Explicit null when blank — never omitted — so clearing one
+            // of these dropdowns genuinely unassigns it, rather than
+            // silently leaving the old value in place.
+            department_id: form.department_id === '' ? null : form.department_id,
+            location_id: form.location_id === '' ? null : form.location_id,
+            position_id: form.position_id === '' ? null : form.position_id,
+        };
 
         api.patch(`/employees/${employeeId}`, payload)
             .then(() => {
@@ -224,6 +276,49 @@ export default function EmployeesEdit() {
                             onChange={(e) => set('phone', e.target.value)}
                             error={fieldError('phone')}
                         />
+
+                        <SelectField
+                            label="Department"
+                            name="department_id"
+                            value={form.department_id}
+                            onChange={(e) => set('department_id', e.target.value)}
+                            error={fieldError('department_id')}
+                        >
+                            <option value="">— None —</option>
+                            {departments.map((department) => (
+                                <option key={department.id} value={department.id}>
+                                    {department.name}
+                                </option>
+                            ))}
+                        </SelectField>
+                        <SelectField
+                            label="Position"
+                            name="position_id"
+                            value={form.position_id}
+                            onChange={(e) => set('position_id', e.target.value)}
+                            error={fieldError('position_id')}
+                        >
+                            <option value="">— None —</option>
+                            {positions.map((position) => (
+                                <option key={position.id} value={position.id}>
+                                    {position.name}
+                                </option>
+                            ))}
+                        </SelectField>
+                        <SelectField
+                            label="Location"
+                            name="location_id"
+                            value={form.location_id}
+                            onChange={(e) => set('location_id', e.target.value)}
+                            error={fieldError('location_id')}
+                        >
+                            <option value="">— None —</option>
+                            {locations.map((location) => (
+                                <option key={location.id} value={location.id}>
+                                    {location.name}
+                                </option>
+                            ))}
+                        </SelectField>
 
                         <InputField
                             label="Start date"

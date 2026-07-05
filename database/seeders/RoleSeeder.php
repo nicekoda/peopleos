@@ -121,6 +121,14 @@ class RoleSeeder extends Seeder
             // permissions").
             'leave_balances.view', 'leave_balances.create', 'leave_balances.update',
             'leave_balances.adjust', 'leave_balances.view_all',
+            // Checkpoint 32 — Employee Lifecycle Foundation. Full manage
+            // rights (including archive), per your explicit approved
+            // mapping: org-structure administration is core HR Manager
+            // duty, unlike document_categories above which deliberately
+            // stayed Tenant-Admin-only.
+            'departments.view', 'departments.create', 'departments.update', 'departments.delete',
+            'positions.view', 'positions.create', 'positions.update', 'positions.delete',
+            'locations.view', 'locations.create', 'locations.update', 'locations.delete',
         ]);
 
         $this->grantByKeys($roles['Employee'], [
@@ -168,6 +176,11 @@ class RoleSeeder extends Seeder
             // broad policy/leave permissions elsewhere.
             'leave_balances.view', 'leave_balances.create', 'leave_balances.update',
             'leave_balances.adjust', 'leave_balances.view_all',
+            // Checkpoint 32 — view/create/update only, no delete/archive,
+            // per your explicit approved mapping.
+            'departments.view', 'departments.create', 'departments.update',
+            'positions.view', 'positions.create', 'positions.update',
+            'locations.view', 'locations.create', 'locations.update',
         ]);
 
         $this->grantByKeys($roles['Auditor'], [
@@ -183,6 +196,8 @@ class RoleSeeder extends Seeder
             'leave.view', 'leave.view_all',
             'employees.view_team',
             'leave_balances.view', 'leave_balances.view_all',
+            // Checkpoint 32 — view only, per your explicit approved mapping.
+            'departments.view', 'positions.view', 'locations.view',
         ]);
 
         // Line Manager (Checkpoint 13: employees.view_team only).
@@ -201,6 +216,8 @@ class RoleSeeder extends Seeder
             'dashboard.view',
             'employees.view_team',
             'leave.view', 'leave.view_team', 'leave.approve', 'leave.reject',
+            // Checkpoint 32 — view only, per your explicit approved mapping.
+            'departments.view', 'positions.view', 'locations.view',
         ]);
 
         // Remaining roles (HR Director, Department Head, etc.) are

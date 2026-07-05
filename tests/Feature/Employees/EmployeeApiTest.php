@@ -2,6 +2,7 @@
 
 namespace Tests\Feature\Employees;
 
+use App\Enums\DepartmentStatus;
 use App\Enums\EmploymentType;
 use App\Models\AuditLog;
 use App\Models\Department;
@@ -226,6 +227,133 @@ class EmployeeApiTest extends TestCase
         $this->actingAs($user)
             ->postJson($this->url($tenant, 'employees'), $this->validEmployeePayload(['position_id' => $foreignPosition->id]))
             ->assertStatus(422)->assertJsonValidationErrors('position_id');
+    }
+
+    /**
+     * Checkpoint 32 — the archived-row validation fix. Rule::exists()
+     * is a raw DB check that bypasses Eloquent's SoftDeletes scope
+     * entirely, so an archived (soft-deleted) or inactive department/
+     * location/position must be excluded explicitly — same pattern
+     * fixed for document_category_id in Checkpoint 9. An employee must
+     * never be assignable to an archived lookup value going forward.
+     */
+    public function test_archived_department_cannot_be_assigned_to_employee(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $user = $this->userWithPermission($tenant, 'employees.create');
+        $softDeletedDepartment = Department::factory()->create(['tenant_id' => $tenant->id]);
+        $softDeletedDepartment->delete();
+        $inactiveDepartment = Department::factory()->inactive()->create(['tenant_id' => $tenant->id]);
+
+        $this->actingAs($user)
+            ->postJson($this->url($tenant, 'employees'), $this->validEmployeePayload(['employee_number' => 'EMP-1001', 'department_id' => $softDeletedDepartment->id]))
+            ->assertStatus(422)->assertJsonValidationErrors('department_id');
+
+        $this->actingAs($user)
+            ->postJson($this->url($tenant, 'employees'), $this->validEmployeePayload(['employee_number' => 'EMP-1002', 'department_id' => $inactiveDepartment->id]))
+            ->assertStatus(422)->assertJsonValidationErrors('department_id');
+    }
+
+    public function test_archived_position_cannot_be_assigned_to_employee(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $user = $this->userWithPermission($tenant, 'employees.create');
+        $softDeletedPosition = Position::factory()->create(['tenant_id' => $tenant->id]);
+        $softDeletedPosition->delete();
+        $inactivePosition = Position::factory()->inactive()->create(['tenant_id' => $tenant->id]);
+
+        $this->actingAs($user)
+            ->postJson($this->url($tenant, 'employees'), $this->validEmployeePayload(['employee_number' => 'EMP-1003', 'position_id' => $softDeletedPosition->id]))
+            ->assertStatus(422)->assertJsonValidationErrors('position_id');
+
+        $this->actingAs($user)
+            ->postJson($this->url($tenant, 'employees'), $this->validEmployeePayload(['employee_number' => 'EMP-1004', 'position_id' => $inactivePosition->id]))
+            ->assertStatus(422)->assertJsonValidationErrors('position_id');
+    }
+
+    public function test_archived_location_cannot_be_assigned_to_employee(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $user = $this->userWithPermission($tenant, 'employees.create');
+        $softDeletedLocation = Location::factory()->create(['tenant_id' => $tenant->id]);
+        $softDeletedLocation->delete();
+        $inactiveLocation = Location::factory()->inactive()->create(['tenant_id' => $tenant->id]);
+
+        $this->actingAs($user)
+            ->postJson($this->url($tenant, 'employees'), $this->validEmployeePayload(['employee_number' => 'EMP-1005', 'location_id' => $softDeletedLocation->id]))
+            ->assertStatus(422)->assertJsonValidationErrors('location_id');
+
+        $this->actingAs($user)
+            ->postJson($this->url($tenant, 'employees'), $this->validEmployeePayload(['employee_number' => 'EMP-1006', 'location_id' => $inactiveLocation->id]))
+            ->assertStatus(422)->assertJsonValidationErrors('location_id');
+    }
+
+    /**
+     * An employee already assigned to a department is unaffected when
+     * that department is later archived — the archived-row exclusion
+     * only blocks new or changed assignment, not existing ones (see
+     * StoreEmployeeRequest/UpdateEmployeeRequest — this field is
+     * `nullable` with no `sometimes`, so it's only validated when the
+     * request actually provides it).
+     */
+    public function test_updating_unrelated_employee_field_does_not_revalidate_an_already_archived_department(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $user = $this->userWithPermission($tenant, 'employees.update');
+        $department = Department::factory()->create(['tenant_id' => $tenant->id]);
+        $employee = Employee::factory()->create(['tenant_id' => $tenant->id, 'department_id' => $department->id]);
+        $department->update(['status' => DepartmentStatus::Inactive]);
+
+        $response = $this->actingAs($user)->patchJson($this->url($tenant, "employees/{$employee->id}"), [
+            'first_name' => 'Updated',
+        ]);
+
+        $response->assertOk();
+        $this->assertSame($department->id, $employee->fresh()->department_id);
+    }
+
+    public function test_employee_resource_returns_resolved_department_location_position_names(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $user = $this->userWithPermission($tenant, 'employees.view');
+        $department = Department::factory()->create(['tenant_id' => $tenant->id, 'name' => 'Engineering']);
+        $location = Location::factory()->create(['tenant_id' => $tenant->id, 'name' => 'Lagos HQ']);
+        $position = Position::factory()->create(['tenant_id' => $tenant->id, 'name' => 'Software Engineer']);
+        $employee = Employee::factory()->create([
+            'tenant_id' => $tenant->id,
+            'department_id' => $department->id,
+            'location_id' => $location->id,
+            'position_id' => $position->id,
+        ]);
+
+        $response = $this->actingAs($user)->getJson($this->url($tenant, "employees/{$employee->id}"));
+
+        $response->assertOk();
+        $response->assertJsonPath('data.department.id', $department->id);
+        $response->assertJsonPath('data.department.name', 'Engineering');
+        $response->assertJsonPath('data.location.name', 'Lagos HQ');
+        $response->assertJsonPath('data.position.name', 'Software Engineer');
+        // Raw IDs kept for backward compatibility.
+        $response->assertJsonPath('data.department_id', $department->id);
+    }
+
+    public function test_employee_resource_returns_null_department_location_position_when_unassigned(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $user = $this->userWithPermission($tenant, 'employees.view');
+        $employee = Employee::factory()->create([
+            'tenant_id' => $tenant->id,
+            'department_id' => null,
+            'location_id' => null,
+            'position_id' => null,
+        ]);
+
+        $response = $this->actingAs($user)->getJson($this->url($tenant, "employees/{$employee->id}"));
+
+        $response->assertOk();
+        $response->assertJsonPath('data.department', null);
+        $response->assertJsonPath('data.location', null);
+        $response->assertJsonPath('data.position', null);
     }
 
     /**

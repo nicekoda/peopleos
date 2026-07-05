@@ -2,12 +2,15 @@
 
 use App\Http\Controllers\AuditLogUiController;
 use App\Http\Controllers\DashboardController;
+use App\Http\Controllers\DepartmentUiController;
 use App\Http\Controllers\DocumentCategoryUiController;
 use App\Http\Controllers\EmployeeDocumentUiController;
 use App\Http\Controllers\EmployeeUiController;
 use App\Http\Controllers\LeaveTypeUiController;
 use App\Http\Controllers\LeaveUiController;
+use App\Http\Controllers\LocationUiController;
 use App\Http\Controllers\PolicyUiController;
+use App\Http\Controllers\PositionUiController;
 use App\Http\Controllers\SettingsController;
 use App\Http\Controllers\UsersAccessUiController;
 use Illuminate\Support\Facades\Route;
@@ -146,6 +149,31 @@ Route::middleware(['auth', 'tenant.matches'])->group(function () {
         ->middleware('permission:document_categories.create')->name('settings.document-categories.create');
     Route::get('settings/document-categories/{documentCategory}/edit', [DocumentCategoryUiController::class, 'edit'])
         ->middleware('permission:document_categories.update')->name('settings.document-categories.edit');
+
+    // Employee Lifecycle Foundation (Checkpoint 32) — Departments/
+    // Positions/Locations Admin UI, same thin-page-route pattern. 'create'
+    // must be registered before '{department}/edit' etc. so Laravel
+    // doesn't collide the two.
+    Route::get('settings/departments', [DepartmentUiController::class, 'index'])
+        ->middleware('permission:departments.view')->name('settings.departments');
+    Route::get('settings/departments/create', [DepartmentUiController::class, 'create'])
+        ->middleware('permission:departments.create')->name('settings.departments.create');
+    Route::get('settings/departments/{department}/edit', [DepartmentUiController::class, 'edit'])
+        ->middleware('permission:departments.update')->name('settings.departments.edit');
+
+    Route::get('settings/positions', [PositionUiController::class, 'index'])
+        ->middleware('permission:positions.view')->name('settings.positions');
+    Route::get('settings/positions/create', [PositionUiController::class, 'create'])
+        ->middleware('permission:positions.create')->name('settings.positions.create');
+    Route::get('settings/positions/{position}/edit', [PositionUiController::class, 'edit'])
+        ->middleware('permission:positions.update')->name('settings.positions.edit');
+
+    Route::get('settings/locations', [LocationUiController::class, 'index'])
+        ->middleware('permission:locations.view')->name('settings.locations');
+    Route::get('settings/locations/create', [LocationUiController::class, 'create'])
+        ->middleware('permission:locations.create')->name('settings.locations.create');
+    Route::get('settings/locations/{location}/edit', [LocationUiController::class, 'edit'])
+        ->middleware('permission:locations.update')->name('settings.locations.edit');
 
     // Leave Types Admin UI (Checkpoint 25) — same thin-page-route
     // pattern, fetched client-side from the existing /api/v1/leave-types

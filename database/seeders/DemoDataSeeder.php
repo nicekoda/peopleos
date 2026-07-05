@@ -84,6 +84,7 @@ class DemoDataSeeder extends Seeder
         foreach ($names as $name) {
             $departments[$name] = Department::query()->firstOrCreate(
                 ['tenant_id' => $tenant->id, 'name' => $name],
+                ['slug' => Str::slug($name)],
             );
         }
 
@@ -106,6 +107,7 @@ class DemoDataSeeder extends Seeder
         foreach ($names as $name) {
             $positions[$name] = Position::query()->firstOrCreate(
                 ['tenant_id' => $tenant->id, 'name' => $name],
+                ['slug' => Str::slug($name)],
             );
         }
 
@@ -124,6 +126,7 @@ class DemoDataSeeder extends Seeder
         foreach ($names as $name) {
             $locations[$name] = Location::query()->firstOrCreate(
                 ['tenant_id' => $tenant->id, 'name' => $name],
+                ['slug' => Str::slug($name)],
             );
         }
 

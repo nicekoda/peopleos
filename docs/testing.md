@@ -1010,6 +1010,80 @@ logic — none of which needed to change, since the bug was entirely in
 how the *test* verified safety, never in whether the app was actually
 safe.
 
+## Employee Lifecycle Foundation: the same 24/11-test template, run three times (Checkpoint 32)
+
+`DepartmentApiTest`/`DepartmentUiTest` (24 + 11 tests) were written
+first as the template, then `PositionApiTest`/`PositionUiTest` and
+`LocationApiTest`/`LocationUiTest` were generated from them via `sed`
+find-replace plus a `./vendor/bin/pint` pass to fix import ordering —
+deliberately, since all three entities share an identical shape
+(same fields, same permission structure, same controller pattern), so
+hand-writing three near-identical 35-test files independently would
+have been pure duplication risk (a fix applied to one but not
+copy-pasted correctly into the others). Each of the three files' 24 API
+tests covers: guest rejection, permission gating in both directions
+(with permission → succeeds, without → `403`), tenant isolation
+(cross-tenant `404`), Platform Super Admin blocked, resource field
+safety, audit logging (`created`/`updated`/`archived`), `tenant.matches`
+middleware coverage, inactive-user/inactive-tenant fail-closed, name
+uniqueness per tenant (and the same name allowed across different
+tenants), no hard-delete route, slug immutability on update, and
+forged/unexpected fields silently ignored. The 11 UI tests cover the
+matching guest/permission/tenant-isolation/IDs-only-props checks for
+`/settings/{departments,positions,locations}(/create)(/{id}/edit)`.
+
+**A second real comment-syntax bug, same root cause as Checkpoint 32's
+`DepartmentController` bug, found in a test file this time.** A
+docblock in the new `EmployeeApiTest.php` test
+(`test_updating_unrelated_employee_field_does_not_revalidate_an_already_archived_department`)
+originally read "only blocks `*new*`/`*changed*` assignment" — the
+literal `*/` substring inside that phrase closed the PHP `/** ... */`
+comment early, producing a hard parse error
+(`syntax error, unexpected token "*"`) the moment the file was loaded
+by PHPUnit. Same class of bug as the earlier `DepartmentController.php`
+docblock (`"to *new*/*updated* employee"`), same fix: reword the prose
+so no `*/` substring appears inside the comment body. Worth watching
+for specifically when writing markdown-style emphasis (`*word*`) inside
+a `/** */` docblock — two `*word*/*word*` sequences in a row will
+always trip this.
+
+**Archived-row exclusion needed both a "rejected" test and an
+"unaffected" test — proving the same fix in two directions.** Six new
+tests were added to `EmployeeApiTest.php`: three confirm a *new*
+assignment to a soft-deleted or `inactive` department/position/location
+is rejected with a 422
+(`test_archived_department_cannot_be_assigned_to_employee`, and the
+position/location equivalents — each checking both the soft-deleted and
+the merely-`inactive` case separately, since they're different code
+paths — one bypasses `SoftDeletes`' global scope, the other bypasses
+nothing but still isn't `active`). A fourth
+(`test_updating_unrelated_employee_field_does_not_revalidate_an_already_archived_department`)
+confirms the opposite direction just as deliberately: an *existing*
+assignment made before the department was archived survives an
+unrelated field update untouched — proving the validation rule's
+`nullable`-without-`sometimes` shape behaves as designed, not as an
+accidental gap. Two more
+(`test_employee_resource_returns_resolved_department_location_position_names`,
+`test_employee_resource_returns_null_department_location_position_when_unassigned`)
+confirm `EmployeeResource`'s new nested `department`/`location`/
+`position` objects resolve correctly both when set and when absent.
+
+**Fresh `migrate:fresh --seed` re-run was the actual way the
+`DemoDataSeeder` slug bug was found, not code review.** Adding the
+`slug` column via migration didn't itself break anything — the bug was
+that `DemoDataSeeder`'s `firstOrCreate(['tenant_id' => ..., 'name' =>
+...])` calls never included `slug` in the second (create) argument, so
+a fresh seed run left every department/position/location with
+`slug: null`. No existing test caught this (nothing asserted seeded
+demo data's slug field), and it wouldn't have been visible on an
+already-migrated database with data already backfilled — only a true
+`migrate:fresh --seed` from empty revealed it. Confirmed via `tinker`
+after a fresh seed, fixed by passing `['slug' => Str::slug($name)]` as
+the second `firstOrCreate()` argument in each of the three seeder
+methods, then re-verified with another fresh `migrate:fresh --seed` and
+a `withoutGlobalScopes()->whereNull('slug')->count()` check confirming
+zero null slugs remained.
+
 ## A case-sensitivity bug that only a real Linux CI run could catch (Checkpoint 30)
 
 The first real GitHub Actions run (Ubuntu, case-sensitive filesystem)

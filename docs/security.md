@@ -3742,6 +3742,137 @@ shows.
   removal (Checkpoint 23), extended to cover "deleting the tenant's
   only role with a given critical permission."
 
+## Employee Lifecycle Foundation (Checkpoint 32)
+
+Adds full CRUD (`view`/`create`/`update`/`delete`) for Departments,
+Positions, and Locations — three lookup entities that existed at the
+schema level since Checkpoint 6 but had no API, permissions, or UI at
+all. See
+[`architecture.md`](architecture.md#employee-lifecycle-foundation-checkpoint-32)
+for the schema/technical writeup; this section covers the security
+design.
+
+### Same three-layer tenant-isolation pattern as every other top-level admin resource, not a new one
+
+`DepartmentController`/`PositionController`/`LocationController` are
+structurally identical to `DocumentCategoryController` (Checkpoint 9):
+`tenant.matches` middleware → `BelongsToTenant` global scope → an
+explicit controller-level tenant-ownership check on every mutation.
+No new isolation pattern was introduced for this checkpoint — reusing
+an already-tested pattern was preferred over inventing a fourth
+variant.
+
+### Permission tiers: four roles, four different trust levels, none broader than approved
+
+| Role | departments/positions/locations |
+|---|---|
+| Tenant Admin | full (via existing wildcard grant) |
+| HR Manager | `view`, `create`, `update`, `delete` |
+| HR Officer | `view`, `create`, `update` (no `delete`) |
+| Line Manager | `view` only |
+| Auditor | `view` only |
+| Employee | none |
+
+Employee deliberately receives no direct lookup permission — an
+employee sees their own department/position/location only as resolved
+names on their own linked employee record (`GET /me/employee`,
+Checkpoint 11), never through a standalone `/departments` etc. call.
+Checked explicitly before granting: HR Manager is the only
+non-Tenant-Admin role holding `employees.create`/`employees.update`,
+and it already receives full access to all three lookup entities — so
+there is no scenario where a role can create/edit an employee but
+can't populate the department/position/location fields, which would
+have been a real UI-breaking permission gap if it existed.
+
+### `slug` is never client-writable, at any point
+
+`StoreDepartmentRequest` validates only `name`/`description`;
+`UpdateDepartmentRequest` adds `status`. Neither request has a `slug`
+rule — a forged request body containing `slug` has it silently
+dropped before the controller ever sees it
+(`test_forged_slug_in_request_is_ignored`, replicated across all three
+entities). The controller always derives the slug server-side from
+`name` via `Str::slug()` plus a numeric disambiguation suffix if
+needed, scoped `withoutGlobalScopes()` per-tenant so a soft-deleted
+row's slug still blocks reuse.
+
+### A real, pre-existing `Rule::exists()` gap in Employee, closed here — the same class of bug Checkpoint 9 already fixed once
+
+`StoreEmployeeRequest`/`UpdateEmployeeRequest`'s `department_id`/
+`location_id`/`position_id` validation (since Checkpoint 6) checked
+only that the referenced row belonged to the current tenant — it never
+excluded archived (`status: inactive`) or soft-deleted rows, because
+`Rule::exists()` is a raw database check that bypasses Eloquent's
+`SoftDeletes` global scope and any status column entirely. This is
+structurally identical to the `document_categories` gap found and
+fixed in Checkpoint 9 — the same lesson applied a second time,
+deliberately, per your explicit "use the same safe pattern used in
+Checkpoint 9" instruction. Fixed by adding
+`->where('status', DepartmentStatus::Active->value)->whereNull('deleted_at')`
+(and the Position/Location equivalents) to each rule. Verified both
+failure modes directly: a soft-deleted department and a merely
+`inactive` (not deleted) department are both rejected with a 422 on
+`department_id` (`test_archived_department_cannot_be_assigned_to_employee`,
+and the Position/Location equivalents).
+
+**This exclusion only applies to *new or changed* assignment, not
+retroactively.** An employee already assigned to a department that is
+later archived keeps that assignment — `department_id` is `nullable`
+with no `sometimes` in the validation rules, so it's only re-validated
+when a request actually supplies the field. Confirmed directly
+(`test_updating_unrelated_employee_field_does_not_revalidate_an_already_archived_department`):
+archiving a department after assignment, then PATCHing an unrelated
+employee field (`first_name`), succeeds and leaves `department_id`
+unchanged. This is a deliberate consequence of the validation shape,
+not an overlooked edge case — retroactively invalidating existing
+assignments the moment a lookup entity is archived would be a much
+larger behavior change than this checkpoint's approved scope.
+
+### `EmployeeResource`'s new nested objects carry no additional sensitive data
+
+`department`/`location`/`position` each resolve to `{id, name}` (or
+`null`) — the same two fields (`id`, `name`) already publicly visible
+via the entities' own `GET /departments` etc. endpoints to anyone
+holding the corresponding `.view` permission. No new sensitive field is
+exposed by this addition; it only avoids a viewer needing bare IDs
+resolved through a second manual lookup.
+
+### What was intentionally not built this checkpoint
+
+Per your explicit "do not build yet" list: no employment-type lookup
+table (stays the existing enum — see `architecture.md`), no
+onboarding/offboarding workflow, no org chart, no payroll/salary/
+benefits/grades/cost-centre features, no recruitment, no performance
+reviews, no training/LMS, no assets, no attendance/timesheets/shifts,
+no disciplinary/case management, no HR service desk. All three lookup
+entities are pure CRUD-plus-archive, nothing more.
+
+### Current limitations
+
+- No bulk import/export for departments/positions/locations (contractor/
+  vendor bulk import via Excel, added in a separate checkpoint, does
+  not extend to these three entities).
+- No department/position hierarchy (e.g. sub-departments, reporting
+  position levels) — flat lists only.
+- No usage-count guard before archiving — archiving a department that
+  still has active employees assigned to it is allowed; existing
+  assignments are simply left untouched (see "only applies to new or
+  changed assignment" above). A future checkpoint could add a warning
+  or block if this becomes a real operational problem.
+- No cascading effect when a location/department/position is archived
+  beyond blocking *new* assignment — no notification, no bulk
+  reassignment tool.
+
+### Future
+
+- Department/position hierarchy, if a real tenant need for multi-level
+  structures emerges.
+- A guard (warning or hard block) before archiving a lookup entity that
+  still has active employees assigned, once real usage patterns clarify
+  whether this is actually needed.
+- Bulk import/export for these three entities, following the same
+  Excel-import pattern already built for contractor/vendor records.
+
 ## Local Demo Credentials
 
 **Local development only — these are not real secrets and only work against your own local database.** Password comes from `SEED_USER_PASSWORD` in `.env` (not committed; `.env.example` has an empty placeholder).
@@ -3774,7 +3905,6 @@ data these six `uesl` logins see (Checkpoint 26's `DemoDataSeeder`).
 - See "Current limitations" under Audit Logging above for the audit-specific gaps (no read endpoint, `givePermissionTo()`/tenant CRUD not logged yet).
 - No permission caching — `hasPermission()` hits the database on every call (two queries: role-permission lookup, direct-grant lookup). Fine for foundation-stage traffic; revisit if it becomes a hot path.
 - 17 of 20 seeded tenant roles per tenant have no permissions attached yet (by design — placeholders for modules that don't exist yet).
-- No `departments`/`locations`/`positions` CRUD endpoints — see Employee Records above.
 - `employee_number` is manually provided, not auto-generated — no numbering-scheme feature exists yet.
 - No salary, bank details, medical information, disciplinary records, or documents on employees yet — deliberately deferred to separate, more sensitive future checkpoints.
 - `/api/v1` routes use the same session-based `web` auth as the rest of the app (no Sanctum/token guard yet) — see `docs/api.md` for the full future plan and what a token layer must support before it's added.
@@ -3809,3 +3939,5 @@ data these six `uesl` logins see (Checkpoint 26's `DemoDataSeeder`).
 - **No role deletion** (Checkpoint 28) — for any role, system or custom; a deliberate scope decision, not an oversight. See [RBAC Role & Permission Management UI](#rbac-role--permission-management-ui-checkpoint-28) above.
 - **System/built-in roles cannot have their permissions edited at all** (Checkpoint 28) — the "safer MVP" lockdown chosen over a runtime "would this break the only admin path" check. See [RBAC Role & Permission Management UI](#rbac-role--permission-management-ui-checkpoint-28) above.
 - **No role import/export, access review workflow, approval workflow for permission changes, segregation-of-duties engine, or permission risk scoring** — see [RBAC Role & Permission Management UI](#rbac-role--permission-management-ui-checkpoint-28) above.
+- **Departments/Positions/Locations (Checkpoint 32) have no hierarchy, no usage-count guard before archiving, and no bulk import/export** — see [Employee Lifecycle Foundation](#employee-lifecycle-foundation-checkpoint-32) above.
+- **Employment Type remains a fixed enum, not a tenant-configurable lookup table** (Checkpoint 32, deliberate scope decision) — see [Employee Lifecycle Foundation](#employee-lifecycle-foundation-checkpoint-32) above.

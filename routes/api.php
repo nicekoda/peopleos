@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\Api\V1\AuditLogController;
 use App\Http\Controllers\Api\V1\DashboardController;
+use App\Http\Controllers\Api\V1\DepartmentController;
 use App\Http\Controllers\Api\V1\DocumentCategoryController;
 use App\Http\Controllers\Api\V1\EmployeeController;
 use App\Http\Controllers\Api\V1\EmployeeDocumentController;
@@ -11,9 +12,11 @@ use App\Http\Controllers\Api\V1\EmployeeUserLinkController;
 use App\Http\Controllers\Api\V1\LeaveBalanceController;
 use App\Http\Controllers\Api\V1\LeaveRequestController;
 use App\Http\Controllers\Api\V1\LeaveTypeController;
+use App\Http\Controllers\Api\V1\LocationController;
 use App\Http\Controllers\Api\V1\MeController;
 use App\Http\Controllers\Api\V1\PermissionController;
 use App\Http\Controllers\Api\V1\PolicyController;
+use App\Http\Controllers\Api\V1\PositionController;
 use App\Http\Controllers\Api\V1\RoleController;
 use App\Http\Controllers\Api\V1\RolePermissionController;
 use App\Http\Controllers\Api\V1\TenantController;
@@ -116,6 +119,29 @@ Route::middleware(['auth', 'tenant.matches'])->prefix('api/v1')->group(function 
     Route::get('document-categories/{documentCategory}', [DocumentCategoryController::class, 'show'])->middleware('permission:document_categories.view');
     Route::patch('document-categories/{documentCategory}', [DocumentCategoryController::class, 'update'])->middleware('permission:document_categories.update');
     Route::delete('document-categories/{documentCategory}', [DocumentCategoryController::class, 'destroy'])->middleware('permission:document_categories.delete');
+
+    // Checkpoint 32 — Employee Lifecycle Foundation. Department/
+    // Position/Location already use BelongsToTenant (Checkpoint 26),
+    // the standard two-layer tenant pattern — same shape as
+    // document-categories above, not the manual-filtering exception
+    // User/Role/AuditLog need.
+    Route::get('departments', [DepartmentController::class, 'index'])->middleware('permission:departments.view');
+    Route::post('departments', [DepartmentController::class, 'store'])->middleware('permission:departments.create');
+    Route::get('departments/{department}', [DepartmentController::class, 'show'])->middleware('permission:departments.view');
+    Route::patch('departments/{department}', [DepartmentController::class, 'update'])->middleware('permission:departments.update');
+    Route::delete('departments/{department}', [DepartmentController::class, 'destroy'])->middleware('permission:departments.delete');
+
+    Route::get('positions', [PositionController::class, 'index'])->middleware('permission:positions.view');
+    Route::post('positions', [PositionController::class, 'store'])->middleware('permission:positions.create');
+    Route::get('positions/{position}', [PositionController::class, 'show'])->middleware('permission:positions.view');
+    Route::patch('positions/{position}', [PositionController::class, 'update'])->middleware('permission:positions.update');
+    Route::delete('positions/{position}', [PositionController::class, 'destroy'])->middleware('permission:positions.delete');
+
+    Route::get('locations', [LocationController::class, 'index'])->middleware('permission:locations.view');
+    Route::post('locations', [LocationController::class, 'store'])->middleware('permission:locations.create');
+    Route::get('locations/{location}', [LocationController::class, 'show'])->middleware('permission:locations.view');
+    Route::patch('locations/{location}', [LocationController::class, 'update'])->middleware('permission:locations.update');
+    Route::delete('locations/{location}', [LocationController::class, 'destroy'])->middleware('permission:locations.delete');
 
     // update requires policies.update as a baseline; archiving (status ->
     // archived in the request body) is additionally gated by

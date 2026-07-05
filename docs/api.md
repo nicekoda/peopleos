@@ -327,6 +327,9 @@ all). Every other field is always present when known.
     "department_id": null,
     "location_id": null,
     "position_id": null,
+    "department": null,
+    "location": null,
+    "position": null,
     "manager_employee_id": null,
     "start_date": null,
     "probation_end_date": null,
@@ -336,6 +339,12 @@ all). Every other field is always present when known.
   }
 }
 ```
+
+**`department`/`location`/`position` (Checkpoint 32)** each resolve to
+`{"id": "...", "name": "..."}` when the corresponding `*_id` field is
+set, or `null` when unassigned — resolved server-side via eager loading,
+never a separate request. The raw `department_id`/`location_id`/
+`position_id` fields are unchanged, kept for backward compatibility.
 
 ### Validation rules
 
@@ -349,7 +358,7 @@ all). Every other field is always present when known.
 | `phone` | nullable, string |
 | `status` | nullable, valid `EmployeeStatus` enum value |
 | `employment_type` | required (create) / sometimes+required (update), valid `EmploymentType` enum value |
-| `department_id` / `location_id` / `position_id` | nullable, must exist **and belong to the same tenant** |
+| `department_id` / `location_id` / `position_id` | nullable, must exist, belong to the same tenant, **and be `active` and not soft-deleted (Checkpoint 32)** — an archived or deleted lookup row is rejected with a 422, the same pattern Checkpoint 9 established for `document_category_id` |
 | `manager_employee_id` | nullable, must exist and belong to the same tenant; **cannot be the employee's own id** (on update) |
 | `start_date`, `confirmation_date` | nullable, valid date |
 | `probation_end_date` | nullable, valid date, ≥ `start_date` |
@@ -357,6 +366,70 @@ all). Every other field is always present when known.
 Validation errors return Laravel's standard 422 shape
 (`{"message": ..., "errors": {"field": ["message"]}}`) — no stack traces,
 no internal detail, regardless of `APP_DEBUG`.
+
+## Departments, Positions, Locations
+
+Three top-level (not nested) tenant-owned lookup resources, added in
+Checkpoint 32 — identical route/permission shape, so shown together.
+Replace `departments` with `positions` or `locations` for the other
+two; permission keys follow the same `departments.*`/`positions.*`/
+`locations.*` pattern.
+
+| Method | Path | Permission | Notes |
+|---|---|---|---|
+| `GET` | `/api/v1/departments` | `departments.view` | Paginated |
+| `POST` | `/api/v1/departments` | `departments.create` | |
+| `GET` | `/api/v1/departments/{department}` | `departments.view` | 404 if the department belongs to another tenant |
+| `PATCH` | `/api/v1/departments/{department}` | `departments.update` | Partial update |
+| `DELETE` | `/api/v1/departments/{department}` | `departments.delete` | Soft delete only |
+
+**`tenant_id` is never accepted as request input**, same rule as every
+other module.
+
+**`slug` is never accepted as request input, at create or update.** It
+is always derived server-side from `name` (via `Str::slug()`, with a
+numeric disambiguation suffix if the tenant already has a matching
+slug, including soft-deleted rows) — a `slug` value in the request body
+is silently ignored.
+
+### Response shape
+
+```json
+{
+  "data": {
+    "id": "01h...",
+    "name": "Engineering",
+    "slug": "engineering",
+    "description": null,
+    "status": "active",
+    "created_at": "2026-07-05T00:00:00+00:00",
+    "updated_at": "2026-07-05T00:00:00+00:00"
+  }
+}
+```
+
+### Validation rules
+
+| Field | Rules |
+|---|---|
+| `name` | required (create) / sometimes+required (update), unique per tenant |
+| `description` | nullable, max 1000 characters |
+| `status` | update only; nullable, valid `Department`/`Position`/`LocationStatus` enum value (`active` or `inactive`) |
+
+### Permission grants
+
+| Role | view | create | update | delete |
+|---|---|---|---|---|
+| Tenant Admin | ✓ (wildcard) | ✓ | ✓ | ✓ |
+| HR Manager | ✓ | ✓ | ✓ | ✓ |
+| HR Officer | ✓ | ✓ | ✓ | — |
+| Line Manager | ✓ | — | — | — |
+| Auditor | ✓ | — | — | — |
+| Employee | — | — | — | — |
+
+An Employee sees their own department/position/location only as
+resolved names on their own linked employee record — see "Employees"
+above.
 
 ## Leave Balances
 
@@ -473,6 +546,15 @@ served through the `web` middleware group, session-based auth same as
 | `GET` | `/settings/leave-types` | `auth`, `tenant.matches`, `permission:leave_types.view` | Real UI (Checkpoint 25) — list, fetched client-side from `/api/v1/leave-types` |
 | `GET` | `/settings/leave-types/create` | `auth`, `tenant.matches`, `permission:leave_types.create` | Create form |
 | `GET` | `/settings/leave-types/{leaveType}/edit` | `auth`, `tenant.matches`, `permission:leave_types.update` | Edit form — passes only `leaveTypeId` as a prop; `404` if cross-tenant |
+| `GET` | `/settings/departments` | `auth`, `tenant.matches`, `permission:departments.view` | Real UI (Checkpoint 32) — list, fetched client-side from `/api/v1/departments` |
+| `GET` | `/settings/departments/create` | `auth`, `tenant.matches`, `permission:departments.create` | Create form |
+| `GET` | `/settings/departments/{department}/edit` | `auth`, `tenant.matches`, `permission:departments.update` | Edit form — passes only `departmentId` as a prop; `404` if cross-tenant |
+| `GET` | `/settings/positions` | `auth`, `tenant.matches`, `permission:positions.view` | Real UI (Checkpoint 32) — list, fetched client-side from `/api/v1/positions` |
+| `GET` | `/settings/positions/create` | `auth`, `tenant.matches`, `permission:positions.create` | Create form |
+| `GET` | `/settings/positions/{position}/edit` | `auth`, `tenant.matches`, `permission:positions.update` | Edit form — passes only `positionId` as a prop; `404` if cross-tenant |
+| `GET` | `/settings/locations` | `auth`, `tenant.matches`, `permission:locations.view` | Real UI (Checkpoint 32) — list, fetched client-side from `/api/v1/locations` |
+| `GET` | `/settings/locations/create` | `auth`, `tenant.matches`, `permission:locations.create` | Create form |
+| `GET` | `/settings/locations/{location}/edit` | `auth`, `tenant.matches`, `permission:locations.update` | Edit form — passes only `locationId` as a prop; `404` if cross-tenant |
 | `GET` | `/settings/security` | `auth`, `tenant.matches`, `permission:audit.view` | Real hub UI (Checkpoint 24) — links to Audit Logs |
 | `GET` | `/settings/security/audit-logs` | `auth`, `tenant.matches`, `permission:audit.view` | Real UI — list with filters, fetched client-side from `/api/v1/audit-logs` |
 | `GET` | `/settings/security/audit-logs/{auditLog}` | `auth`, `tenant.matches`, `permission:audit.view` | Detail — passes only `auditLogId` as a prop, never audit data; `404` if cross-tenant |
@@ -991,7 +1073,7 @@ second `approve` call, etc.) returns `409`.
 
 - No export endpoint (`employees.export` permission is seeded but unused — explicitly out of scope this checkpoint).
 - No bulk actions.
-- No `departments`/`locations`/`positions` CRUD endpoints — they exist only to support employee FK validation (unlike `document_categories`, which now has one).
+- No hierarchy for departments/positions/locations (Checkpoint 32) — flat lists only, no usage-count guard before archiving.
 - No self-linking / invitation-token flow — linking a user to an employee is HR/admin-only, see `docs/security.md`.
 - No employee profile self-update endpoint — `/me/employee` is read-only.
 - Leave balances exist (Checkpoint 15) but have no accrual engine, carry-forward automation, half-day support, or public holiday calendar — see `docs/security.md#leave-balances-foundation`.

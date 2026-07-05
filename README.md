@@ -350,6 +350,37 @@ minutes/month for private repos. See `docs/quality-gate.md` §5 for the
 full GitHub Free reasoning and what would trigger reconsidering a paid
 plan later.
 
+## Employee Lifecycle Foundation (Checkpoint 32)
+
+Departments, Positions, and Locations — three lookup entities that
+existed at the schema level since Checkpoint 6 (used only for employee
+FK validation) — now have full admin CRUD:
+`/settings/{departments,positions,locations}(/create)(/{id}/edit)`,
+backed by `/api/v1/{departments,positions,locations}`. Same three-layer
+tenant-isolation pattern as every other top-level admin resource
+(`tenant.matches` → `BelongsToTenant` scope → explicit controller
+check), same permission tiers as Document Categories (Tenant Admin
+full; HR Manager full; HR Officer view/create/update, no delete; Line
+Manager and Auditor view-only; Employee none). `slug` is always
+server-generated from `name`, never accepted from the frontend.
+Employment Type deliberately stays a fixed enum, not a fourth lookup
+table — it's a stable, universal classification, unlike the
+tenant-specific structures the other three represent.
+
+A real, pre-existing validation gap was closed as part of this
+checkpoint: `StoreEmployeeRequest`/`UpdateEmployeeRequest`'s
+`department_id`/`location_id`/`position_id` checks (since Checkpoint 6)
+never excluded archived or soft-deleted rows — the same class of bug
+Checkpoint 9 found and fixed for `document_categories`. Fixed the same
+way, and verified an employee's *existing* assignment survives an
+unrelated field update even after that department is later archived
+(the fields are `nullable` with no `sometimes`, so they're only
+re-validated when actually supplied). `EmployeeResource` also gained
+resolved `department`/`location`/`position` `{id, name}` objects,
+alongside the existing raw IDs, so the Employee UI can finally show
+real names instead of bare identifiers. See `docs/architecture.md` and
+`docs/security.md` for the full design.
+
 ## Documentation
 
 - [`docs/architecture.md`](docs/architecture.md) — multi-tenancy, tenant resolution, RBAC overview, internal-vs-public IDs, frontend architecture.

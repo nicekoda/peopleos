@@ -18,7 +18,10 @@ class EmployeeController extends Controller
 {
     public function index(Request $request): AnonymousResourceCollection
     {
-        $employees = Employee::query()->orderBy('last_name')->paginate();
+        $employees = Employee::query()
+            ->with(['department', 'location', 'position'])
+            ->orderBy('last_name')
+            ->paginate();
 
         return EmployeeResource::collection($employees);
     }
@@ -51,12 +54,16 @@ class EmployeeController extends Controller
             userAgent: $request->userAgent(),
         );
 
+        $employee->load(['department', 'location', 'position']);
+
         return (new EmployeeResource($employee))->response()->setStatusCode(201);
     }
 
     public function show(Request $request, Employee $employee): EmployeeResource
     {
         $this->ensureBelongsToCurrentTenant($employee);
+
+        $employee->load(['department', 'location', 'position']);
 
         return new EmployeeResource($employee);
     }
@@ -89,6 +96,8 @@ class EmployeeController extends Controller
                 userAgent: $request->userAgent(),
             );
         }
+
+        $employee->load(['department', 'location', 'position']);
 
         return new EmployeeResource($employee);
     }

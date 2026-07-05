@@ -1389,3 +1389,110 @@ protected from deletion" holds is that nothing can be deleted yet.
 `roles.delete` remains a seeded-but-unused permission key, same
 category as `policies.export_acknowledgements` and a few others this
 app has seeded ahead of the feature that will eventually use them.
+
+## Employee Lifecycle Foundation (Checkpoint 32)
+
+Adds management UI and API for three lookup entities that already
+existed at the schema level since Checkpoint 6 (`departments`,
+`positions`, `locations` — each with only `id`, `tenant_id`, `name`,
+already FK-referenced from `employees`) but had zero API/controller/
+route/permission/UI surface until now. See
+[`security.md`](security.md#employee-lifecycle-foundation) for the
+full security model and [`api.md`](api.md#departments-positions-locations)
+for the route reference.
+
+**Deliberately scoped to lookup-entity CRUD only, not a lifecycle
+workflow.** "Employee Lifecycle" in this checkpoint's name refers to
+the organisational structures (department/position/location) an
+employee's lifecycle will eventually move through, not onboarding/
+offboarding/org-chart/payroll workflows themselves — all explicitly
+named as future work, none built here. `DepartmentController`/
+`PositionController`/`LocationController` mirror `DocumentCategoryController`'s
+(Checkpoint 9) shape exactly: the fourth top-level, non-nested,
+tenant-scoped admin resource in this app, not a new pattern.
+
+**Employment Type stays a fixed enum, deliberately not converted to a
+fourth lookup table this checkpoint.** Departments/positions/locations
+are tenant-specific organisational structures that legitimately vary
+per tenant; employment type (`full_time`/`part_time`/`contractor`/
+`intern`/`consultant`) is a stable, universal classification that
+already worked safely as `App\Enums\EmploymentType`. Converting it
+alongside the other three would have been scope creep beyond what was
+approved — a future checkpoint can revisit this if a real tenant-
+specific employment-type need ever surfaces.
+
+**Schema additions are additive only, no data rewrite.** Each of the
+three tables gained `slug`, `description`, `status`, `created_by`,
+`updated_by` via migration — nullable/defaulted columns backfilled for
+existing rows in the same migration (via plain Eloquent with
+`withoutGlobalScopes()`, never raw driver-specific SQL), then a unique
+`(tenant_id, slug)` index added after backfill. `status` is a plain
+two-value enum (`DepartmentStatus`/`PositionStatus`/`LocationStatus`,
+each `Active`/`Inactive` only) — archiving one of these entities is a
+soft toggle, on top of (not instead of) the existing `SoftDeletes`
+soft-delete already present on all three models.
+
+**Slug is always server-generated, never accepted from the frontend.**
+`StoreDepartmentRequest`/`UpdateDepartmentRequest` (and the Position/
+Location equivalents) only validate `name`/`description` (create) or
+`name`/`description`/`status` (update) — `slug` has no rule at all, so
+a request body containing one has it silently dropped before the
+controller ever sees it. Each controller's private `uniqueSlugFor()`
+helper derives a slug from `name` via `Str::slug()`, then appends a
+numeric disambiguation suffix (`-2`, `-3`, ...) if the tenant already
+has a matching slug — checked via `withoutGlobalScopes()` so a
+soft-deleted row's slug still counts as taken, preventing a slug reuse
+collision against index history.
+
+**A real, pre-existing validation gap in Employee closed as part of
+this checkpoint, not a new feature.** `StoreEmployeeRequest`/
+`UpdateEmployeeRequest`'s `department_id`/`location_id`/`position_id`
+`Rule::exists()` checks (present since Checkpoint 6) validated only
+tenant ownership, never excluding archived (`status: inactive`) or
+soft-deleted rows — the exact same class of gap Checkpoint 9 found and
+fixed for `document_categories` (`Rule::exists()` is a raw DB check
+that bypasses Eloquent's `SoftDeletes` global scope and any status
+column entirely). Fixed by adding
+`->where('status', DepartmentStatus::Active->value)->whereNull('deleted_at')`
+(and the Position/Location equivalents) to each rule. Verified an
+employee already assigned to a department that is *later* archived is
+unaffected (`test_updating_unrelated_employee_field_does_not_revalidate_an_already_archived_department`)
+— the fields are `nullable` with no `sometimes`, so they're only
+re-validated when a request actually supplies them, never retroactively
+on an unrelated field update.
+
+**`EmployeeResource` gained nested `{id, name}` objects, keeping raw
+IDs for backward compatibility.** `department`/`location`/`position`
+each resolve to `{id, name}` (or `null` if unassigned) via
+`EmployeeController` unconditionally eager-loading all three
+relations (`->with(['department', 'location', 'position'])` on
+`index()`, `->load([...])` after `store()`/`show()`/`update()`) — not
+gated by `whenLoaded()`, since the controller always loads them. The
+raw `department_id`/`location_id`/`position_id` fields stay in the
+response unchanged, so nothing that already depended on the bare ID
+breaks.
+
+**Permission grants follow the exact tier structure Document
+Categories established, extended to three entities:** Tenant Admin
+(wildcard, unchanged), HR Manager (`view`/`create`/`update`/`delete`
+on all three), HR Officer (`view`/`create`/`update`, no `delete`),
+Line Manager and Auditor (`view` only), Employee (none — an employee
+sees their own department/position/location only via the resolved
+names on their own linked employee record, never a direct lookup
+permission). Checked explicitly before granting broadly: HR Manager is
+the only non-Tenant-Admin role holding `employees.create`/
+`employees.update`, and it already receives full department/position/
+location access, so there's no permission-dependency gap where a role
+could create/edit an employee but couldn't populate the new dropdowns.
+
+**Frontend fetches active-only records for the Employee form's three
+new pickers, filtered client-side, not via a server-side query
+parameter.** `Employees/Create.tsx`/`Edit.tsx` call the existing
+`GET /departments`/`/positions`/`/locations` list endpoints (no new
+API surface for this) and filter `.filter(x => x.status === 'active')`
+before rendering `<option>` sets — archived entities are excluded from
+selection without needing a dedicated `?status=active` query parameter
+on three already-simple list endpoints. The backend's own archived-row
+validation is what actually prevents an archived ID from being
+accepted regardless of what the dropdown offers, per Refinement 9 (the
+frontend filter is a convenience, not the enforcement).

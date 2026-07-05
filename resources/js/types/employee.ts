@@ -23,6 +23,13 @@ export interface Employee {
     department_id: string | null;
     location_id: string | null;
     position_id: string | null;
+    // Resolved names (Checkpoint 32) — always present alongside the raw
+    // IDs above (EmployeeController eager-loads all three), null only
+    // when the employee genuinely has no department/location/position
+    // assigned.
+    department: { id: string; name: string } | null;
+    location: { id: string; name: string } | null;
+    position: { id: string; name: string } | null;
     manager_employee_id: string | null;
     start_date: string | null;
     probation_end_date: string | null;
@@ -47,10 +54,16 @@ export interface PaginatedResponse<T> {
 /**
  * The allowlisted fields Create/Edit forms may submit — deliberately a
  * narrower type than Employee itself (Refinement 3). Never built by
- * spreading a full Employee object; department_id/location_id/
- * position_id/manager_employee_id/user-link fields/tenant_id/
- * created_by/updated_by are structurally absent, matching what
- * Store/UpdateEmployeeRequest actually accept.
+ * spreading a full Employee object; manager_employee_id/user-link
+ * fields/tenant_id/created_by/updated_by remain structurally absent,
+ * matching what Store/UpdateEmployeeRequest actually accept.
+ * department_id/location_id/position_id were added Checkpoint 32, now
+ * that real lookup APIs exist — always sent as an explicit `null` when
+ * cleared, never omitted, so clearing the field on Edit genuinely
+ * unassigns it rather than silently leaving the old value in place
+ * (StoreEmployeeRequest/UpdateEmployeeRequest's rules are `nullable`
+ * with no `sometimes`, same reasoning as Leave Type's
+ * max_days_per_year — see docs/security.md).
  */
 export interface EmployeeFormPayload {
     employee_number: string;
@@ -63,6 +76,9 @@ export interface EmployeeFormPayload {
     phone: string;
     employment_type: Employee['employment_type'] | '';
     status: Employee['status'] | '';
+    department_id: string;
+    location_id: string;
+    position_id: string;
     start_date: string;
     probation_end_date: string;
     confirmation_date: string;

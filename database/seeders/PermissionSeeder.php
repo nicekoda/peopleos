@@ -24,6 +24,10 @@ class PermissionSeeder extends Seeder
             'roles' => ['view', 'create', 'update', 'delete'],
             'permissions' => ['view', 'assign', 'grant_direct', 'revoke_direct'],
             'employees' => ['view', 'create', 'update', 'delete', 'view_sensitive', 'export', 'link_user', 'unlink_user', 'view_team', 'update_manager'],
+            // Checkpoint 32 — Employee Lifecycle Foundation lookup entities.
+            'departments' => ['view', 'create', 'update', 'delete'],
+            'positions' => ['view', 'create', 'update', 'delete'],
+            'locations' => ['view', 'create', 'update', 'delete'],
             'documents' => ['view', 'upload', 'download', 'delete', 'approve', 'view_sensitive'],
             'document_categories' => ['view', 'create', 'update', 'delete'],
             'policies' => ['view', 'create', 'update', 'publish', 'archive', 'assign', 'acknowledge', 'view_acknowledgements', 'export_acknowledgements'],

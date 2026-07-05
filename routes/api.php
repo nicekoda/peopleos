@@ -12,6 +12,8 @@ use App\Http\Controllers\Api\V1\EmployeeUserLinkController;
 use App\Http\Controllers\Api\V1\LeaveBalanceController;
 use App\Http\Controllers\Api\V1\LeaveRequestController;
 use App\Http\Controllers\Api\V1\LeaveTypeController;
+use App\Http\Controllers\Api\V1\LifecycleProcessController;
+use App\Http\Controllers\Api\V1\LifecycleTaskController;
 use App\Http\Controllers\Api\V1\LocationController;
 use App\Http\Controllers\Api\V1\MeController;
 use App\Http\Controllers\Api\V1\PermissionController;
@@ -212,4 +214,26 @@ Route::middleware(['auth', 'tenant.matches'])->prefix('api/v1')->group(function 
     Route::post('leave-balances', [LeaveBalanceController::class, 'store'])->middleware('permission:leave_balances.create');
     Route::get('leave-balances/{leaveBalance}', [LeaveBalanceController::class, 'show'])->middleware('permission:leave_balances.view');
     Route::patch('leave-balances/{leaveBalance}', [LeaveBalanceController::class, 'update'])->middleware('permission:leave_balances.update');
+
+    // Checkpoint 33 — Onboarding & Offboarding Foundation. lifecycle.view
+    // gates index()/show() uniformly; both additionally scope by
+    // LifecycleVisibilityService inside the controller (not expressible
+    // as route middleware — same shape as leave.view above), since Line
+    // Manager and Employee hold the identical permission set here
+    // (lifecycle.view + lifecycle.complete_task) despite needing
+    // different visibility. See docs/security.md.
+    Route::get('lifecycle-processes', [LifecycleProcessController::class, 'index'])->middleware('permission:lifecycle.view');
+    Route::post('lifecycle-processes', [LifecycleProcessController::class, 'store'])->middleware('permission:lifecycle.create');
+    Route::get('lifecycle-processes/{lifecycleProcess}', [LifecycleProcessController::class, 'show'])->middleware('permission:lifecycle.view');
+    Route::patch('lifecycle-processes/{lifecycleProcess}', [LifecycleProcessController::class, 'update'])->middleware('permission:lifecycle.update');
+    Route::delete('lifecycle-processes/{lifecycleProcess}', [LifecycleProcessController::class, 'destroy'])->middleware('permission:lifecycle.delete');
+
+    Route::post('lifecycle-processes/{lifecycleProcess}/tasks', [LifecycleTaskController::class, 'store'])->middleware('permission:lifecycle.create');
+    Route::patch('lifecycle-tasks/{lifecycleTask}', [LifecycleTaskController::class, 'update'])->middleware('permission:lifecycle.update');
+    Route::delete('lifecycle-tasks/{lifecycleTask}', [LifecycleTaskController::class, 'destroy'])->middleware('permission:lifecycle.delete');
+    // complete/skip are further scoped by LifecycleVisibilityService::
+    // canAccessTask() in the controller — lifecycle.complete_task alone
+    // is necessary but not sufficient for Line Manager/Employee callers.
+    Route::post('lifecycle-tasks/{lifecycleTask}/complete', [LifecycleTaskController::class, 'complete'])->middleware('permission:lifecycle.complete_task');
+    Route::post('lifecycle-tasks/{lifecycleTask}/skip', [LifecycleTaskController::class, 'skip'])->middleware('permission:lifecycle.complete_task');
 });

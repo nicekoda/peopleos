@@ -1,7 +1,8 @@
 # PeopleOS Demo Guide
 
 **Checkpoint 26** (updated Checkpoint 27 with a reset-command warning;
-updated Checkpoint 32 with Departments/Positions/Locations admin).
+updated Checkpoint 32 with Departments/Positions/Locations admin;
+updated Checkpoint 33 with Onboarding & Offboarding).
 This is the practical "how to run a demo" companion to
 `docs/security.md`/`docs/architecture.md` — it doesn't restate the RBAC
 design or the tenant-isolation model, only how to log in, what to click,
@@ -96,17 +97,18 @@ A natural order to show the app, each login building on the last:
 - **Policy publish/assign/acknowledge** — as HR Manager, show the Draft "Remote Work Policy" (not published), the Published-but-unassigned "Code of Conduct", and the published + assigned "Data Protection Policy" with a mix of pending and acknowledged rows.
 - **Settings** — as Tenant Admin, tour the full hub (Company, Users & Access, Document Categories, Leave Types, Departments, Positions, Locations, Security & Audit) — every card now reflects real, working pages, not "Coming later" placeholders.
 - **Departments/Positions/Locations** — as HR Manager, open Settings → Departments, edit one, archive another (status flips to Inactive, no hard delete); show the same for Positions and Locations. Then open the Employee edit form and show the three new dropdowns only ever offer active entities — an archived one silently disappears from the list, and the backend independently rejects it even if a stale ID were submitted directly.
+- **Onboarding & Offboarding** — no demo data is pre-seeded for this module (deliberately, to keep the seed set small); create it live instead. As Tenant Admin or HR Manager, open an employee's profile and click "Start Onboarding," add a couple of tasks (e.g. "Set up laptop," assigned to the HR Manager demo user), then switch to that assigned user and show them completing their own task from `/lifecycle`. Switch to Line Manager (Tunde Adeyemi) and show they only ever see Chidi Okafor's (their direct report's) lifecycle processes, never an unrelated employee's.
 - **Users & Access** — as Tenant Admin, show the Users list/roles list; demonstrate that removing the tenant's last Tenant Admin role is blocked.
 - **Audit Log review** — as Auditor, open the audit log, show the role-assignment entries created during seeding and any entries generated live during the demo (e.g. the leave approval above) — then attempt (and get blocked from) a tenant settings write.
 
 ## 5. What Each Role Should Be Able to See
 
 - **Tenant Admin** — everything within the tenant: all modules, all Settings sections, full Users & Access.
-- **HR Manager** — employees, leave (tenant-wide), documents, policies, Settings (Document Categories/Leave Types/Departments/Positions/Locations, full CRUD), but not Users & Access or Audit Log.
-- **HR Officer** — leave (tenant-wide) and policies, Settings visible (for Leave Types/Departments/Positions/Locations — view/create/update, no delete), but not Users & Access, Document Categories management, or Audit Log.
-- **Line Manager** — their own profile plus direct reports only; leave approval limited to direct reports; no Settings access.
-- **Employee** — their own profile, own leave, own documents, own policy acknowledgements only. No Settings, no visibility into other employees' data.
-- **Auditor** — tenant-wide read access to leave/employees (view-only) and the Audit Log; Settings visible (for Security & Audit) but no admin write actions anywhere.
+- **HR Manager** — employees, leave (tenant-wide), documents, policies, Onboarding/Offboarding (full manage, tenant-wide), Settings (Document Categories/Leave Types/Departments/Positions/Locations, full CRUD), but not Users & Access or Audit Log.
+- **HR Officer** — leave (tenant-wide) and policies, Onboarding/Offboarding (create/update/assign/complete, no delete), Settings visible (for Leave Types/Departments/Positions/Locations — view/create/update, no delete), but not Users & Access, Document Categories management, or Audit Log.
+- **Line Manager** — their own profile plus direct reports only; leave approval limited to direct reports; sees and can complete Onboarding/Offboarding tasks only for direct reports or assigned to them; no Settings access.
+- **Employee** — their own profile, own leave, own documents, own policy acknowledgements, and only Onboarding/Offboarding tasks assigned to them personally. No Settings, no visibility into other employees' data.
+- **Auditor** — tenant-wide read access to leave/employees/Onboarding/Offboarding (view-only) and the Audit Log; Settings visible (for Security & Audit) but no admin write actions anywhere.
 - **Platform Super Admin** — a safe, empty-of-tenant-data dashboard; blocked (403) from every tenant-scoped `/api/v1` endpoint, including its own tenant's settings.
 
 None of the above is enforced by hiding navigation links — every rule is
@@ -117,7 +119,7 @@ the frontend is never the security boundary in this app.
 
 - No invitation flow, password reset UI, MFA, or SSO — demo users are pre-seeded, not self-registered.
 - No RBAC role/permission *editing* UI yet — roles/permissions are viewable, not editable, from the UI.
-- No payroll, onboarding, performance, recruitment, notifications, exports, or analytics charts.
+- No payroll, performance, recruitment, notifications, exports, or analytics charts. Onboarding/Offboarding (Checkpoint 33) exists as a foundation — no task templates, approval routing, or notifications yet.
 - No platform-level dashboard for the Platform Super Admin (deliberately kept minimal/safe instead).
 - Leave balances have no accrual engine or carry-forward automation — the seeded balances are a fixed, consistent snapshot, not a running calculation.
 - Documents use safe fake files on the private `local` disk — there is nothing to actually "view" as a real PDF; the demo shows metadata (title, category, sensitivity, expiry), not real document contents.
@@ -125,4 +127,4 @@ the frontend is never the security boundary in this app.
 
 ## 7. What Not to Demo Yet
 
-Don't attempt to show, or promise as working: full RBAC permission editing, self-service invitation/registration, MFA/SSO, payroll, onboarding, performance/recruitment modules, AI features, notifications, data exports, analytics dashboards, a platform-wide admin dashboard, billing/subscription management, third-party integrations, or a workflow builder. If asked about any of these, the honest answer is "not built yet — see the roadmap in `docs/architecture.md`."
+Don't attempt to show, or promise as working: full RBAC permission editing, self-service invitation/registration, MFA/SSO, payroll, performance/recruitment modules, AI features, notifications, data exports, analytics dashboards, a platform-wide admin dashboard, billing/subscription management, third-party integrations, a workflow/approval-routing builder for Onboarding/Offboarding, or task templates. If asked about any of these, the honest answer is "not built yet — see the roadmap in `docs/architecture.md`."

@@ -8,6 +8,7 @@ use App\Http\Controllers\EmployeeDocumentUiController;
 use App\Http\Controllers\EmployeeUiController;
 use App\Http\Controllers\LeaveTypeUiController;
 use App\Http\Controllers\LeaveUiController;
+use App\Http\Controllers\LifecycleUiController;
 use App\Http\Controllers\LocationUiController;
 use App\Http\Controllers\PolicyUiController;
 use App\Http\Controllers\PositionUiController;
@@ -76,6 +77,29 @@ Route::middleware(['auth', 'tenant.matches'])->group(function () {
         ->middleware('permission:leave.request')->name('leave.create');
     Route::get('leave/{leaveRequest}', [LeaveUiController::class, 'show'])
         ->middleware('permission:leave.view')->name('leave.show');
+
+    // Onboarding & Offboarding Foundation UI (Checkpoint 33) — generic
+    // /lifecycle routes internally; page components label each process
+    // Onboarding/Offboarding from its own `type` field once loaded. Same
+    // thin-page-route pattern as every other module: process/task data
+    // is fetched client-side from /api/v1/lifecycle-processes and
+    // /api/v1/lifecycle-tasks, never passed as an Inertia prop beyond
+    // IDs. 'create' and 'tasks/create' must be registered before
+    // '{lifecycleProcess}'/'{lifecycleProcess}/edit' so Laravel doesn't
+    // treat them as route parameters.
+    Route::get('lifecycle', [LifecycleUiController::class, 'index'])
+        ->middleware('permission:lifecycle.view')->name('lifecycle.index');
+    Route::get('lifecycle/create', [LifecycleUiController::class, 'create'])
+        ->middleware('permission:lifecycle.create')->name('lifecycle.create');
+    Route::get('lifecycle/{lifecycleProcess}', [LifecycleUiController::class, 'show'])
+        ->middleware('permission:lifecycle.view')->name('lifecycle.show');
+    Route::get('lifecycle/{lifecycleProcess}/edit', [LifecycleUiController::class, 'edit'])
+        ->middleware('permission:lifecycle.update')->name('lifecycle.edit');
+    Route::get('lifecycle/{lifecycleProcess}/tasks/create', [LifecycleUiController::class, 'taskCreate'])
+        ->middleware('permission:lifecycle.create')->name('lifecycle.tasks.create');
+    Route::get('lifecycle/tasks/{lifecycleTask}/edit', [LifecycleUiController::class, 'taskEdit'])
+        ->middleware('permission:lifecycle.update')->name('lifecycle.tasks.edit');
+
     Route::get('documents', fn () => Inertia::render('Documents/Index'))
         ->middleware('permission:documents.view')->name('documents.index');
 

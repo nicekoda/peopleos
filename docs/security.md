@@ -3873,6 +3873,188 @@ entities are pure CRUD-plus-archive, nothing more.
 - Bulk import/export for these three entities, following the same
   Excel-import pattern already built for contractor/vendor records.
 
+## Onboarding & Offboarding Foundation (Checkpoint 33)
+
+Adds a practical workflow foundation for employee onboarding/
+offboarding — two new tables (`employee_lifecycle_processes`,
+`employee_lifecycle_tasks`), one generic permission set, no template
+designer, no approval routing, no notifications. See
+[`architecture.md`](architecture.md#onboarding--offboarding-foundation-checkpoint-33)
+for the schema/technical writeup; this section covers the security
+design.
+
+### Same three-layer tenant-isolation pattern as every other top-level module
+
+`LifecycleProcessController`/`LifecycleTaskController` follow the exact
+shape established since Checkpoint 6: `tenant.matches` middleware →
+`BelongsToTenant` global scope → an explicit controller-level
+tenant-ownership check on every action. No new isolation pattern was
+introduced.
+
+### Permission model: one generic set, six roles, three distinct visibility tiers
+
+`lifecycle.view`/`create`/`update`/`delete`/`assign_task`/`complete_task` —
+per your explicit "simpler generic" recommendation over an
+`onboarding.*`/`offboarding.*` split, since no role in the approved
+grant table actually needs different access to one process type vs.
+the other.
+
+| Role | view | create | update | delete | assign_task | complete_task |
+|---|---|---|---|---|---|---|
+| Tenant Admin | ✓ (wildcard) | ✓ | ✓ | ✓ | ✓ | ✓ |
+| HR Manager | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| HR Officer | ✓ | ✓ | ✓ | — | ✓ | ✓ |
+| Line Manager | ✓ | — | — | — | — | ✓ |
+| Auditor | ✓ | — | — | — | — | — |
+| Employee | ✓ | — | — | — | — | ✓ |
+
+**A real design problem this permission table creates, solved
+deliberately, not accidentally: Line Manager and Employee hold the
+*identical* set** (`view` + `complete_task`, nothing else) despite
+needing different visibility — a Line Manager should see their direct
+reports' processes; an Employee should see only tasks assigned to
+them. No permission key distinguishes these two roles here, unlike
+Leave Management's `leave.view`/`leave.view_team`/`leave.view_all`
+three-tier split. `LifecycleVisibilityService::hasUnrestrictedAccess()`
+resolves the ambiguity from relationship data instead:
+
+1. **Holding any write permission** (`create`/`update`/`delete`/
+   `assign_task`) on this resource → HR/Admin tier, sees and can act on
+   everything in the tenant.
+2. **Holding `view` but not `complete_task` at all** → Auditor tier,
+   read-only, sees everything in the tenant (matches how Auditor
+   already gets tenant-wide read access to Departments/Positions/
+   Locations/Leave elsewhere in this app).
+3. **Holding `view` + `complete_task`, nothing else** → the narrowed
+   tier (Line Manager or Employee). Scoped to: processes for the
+   caller's own direct reports (via the existing, already-tested
+   `ManagerHierarchyService::directReportsOf()`, unchanged since
+   Checkpoint 14) and/or any process containing a task assigned
+   directly to the caller.
+
+This is a genuine judgment call, not something derivable purely from
+the approved permission list — flagged explicitly rather than decided
+silently. The practical effect: a Line Manager can see and complete
+tasks within their direct report's onboarding/offboarding process even
+if a specific task isn't literally assigned to them (e.g., "introduce
+new hire to the team"), while an Employee with no direct reports sees
+only tasks where they are the literal assignee.
+
+### Two genuine, identically-shaped permission gaps found and fixed mid-checkpoint, both flagged before deciding
+
+Building the Create-process form's employee picker surfaced that
+`GET /api/v1/employees` requires `employees.view`, which HR Officer
+never held (only `employees.view_team`) — despite this checkpoint
+granting HR Officer `lifecycle.create`. Building the task
+assignee picker surfaced the identical shape: `GET /api/v1/users`
+requires `users.view`, also never held by HR Officer, despite holding
+`lifecycle.assign_task`. Both are the same class of gap Checkpoint 19
+found for `document_categories.view` — a role granted an action but
+not the read permission its own UI depends on. Both were confirmed with
+you individually (not assumed from the first approval alone, since
+`users.view` exposes a broader, more sensitive resource — the full
+tenant user/account list — than `employees.view`) before granting.
+Both fixes are view-only; no create/update/deactivate/assign_role was
+added to either grant.
+
+### `lifecycle.assign_task` is a sub-permission of create/update, not a separate route
+
+Setting or changing a task's `assigned_to_user_id` requires
+`lifecycle.assign_task` in addition to `lifecycle.create`/
+`lifecycle.update` — checked explicitly in the controller
+(`abort_if(..., ! $request->user()->hasPermission('lifecycle.assign_task'))`),
+not folded into the general update permission. Every role holding
+`create` in this checkpoint's approved grants also holds `assign_task`,
+so this has no visible effect on the seeded demo roles today — it
+exists so a future custom role that separates "can add tasks" from
+"can decide who does them" is already safe.
+
+### Status transitions are centralized and validated against current state, not just enum membership
+
+`LifecycleProcessStatus`/`LifecycleTaskStatus` each carry
+`allowedNextStates()`/`canTransitionTo()` — the exact pattern
+`LeaveRequestStatus` established in Checkpoint 12. Checked in
+`UpdateLifecycleProcessRequest`/`UpdateLifecycleTaskRequest`'s
+`withValidator()` against the route-bound record's *current* status.
+A terminal process (`completed`/`cancelled`) or task (`completed`/
+`skipped`) rejects every further mutation outright (422) — per your
+explicit rule 9, not just illegal-transition attempts.
+
+**The generic `PATCH` task endpoint cannot be used to set `completed`/
+`skipped` directly.** Only `pending`/`in_progress` are accepted through
+`UpdateLifecycleTaskRequest`'s `status` field — reaching a terminal
+state requires the dedicated `POST .../complete` or `.../skip` action,
+which are the only code paths that set `completed_at`/`completed_by`
+from trusted context. Verified directly
+(`test_update_endpoint_cannot_be_used_to_set_completed_status_directly`).
+
+### Task assignee must belong to the same tenant, same pattern as every other tenant-scoped reference field
+
+`assigned_to_user_id` is validated via `Rule::exists('users', 'id')`
+scoped to the current tenant, excluding platform admins and inactive
+users — the same shape as `LinkEmployeeUserRequest`'s `user_id` rule
+(Checkpoint 11) and `StorePolicyRequest`'s `owner_user_id` rule
+(Checkpoint 10).
+
+### Deletion is soft-cancel/soft-delete, never hard, for both processes and tasks
+
+`DELETE /lifecycle-processes/{process}` transitions a non-terminal
+process to `cancelled` before soft-deleting it; an already-terminal
+process is simply hidden, its status left untouched (there's no
+truthful "cancel" action for something already completed).
+`DELETE /lifecycle-tasks/{task}` soft-deletes only, logged as
+`lifecycle_task.deleted` — an audit action name not in your originally
+listed set, added anyway since under-logging a real mutation is a
+worse failure mode than slightly exceeding the minimum required list.
+
+### Audit metadata never carries free-text task content
+
+Only `id`/`status`/`process_id`/`assigned_to_user_id` are ever passed
+to `AuditLogger::logFor()` as metadata for task events — `title`/
+`description` are never included, per your explicit "do not log
+sensitive free-text task details if avoidable" instruction. This is
+stricter than `AuditLogger`'s own mask-by-key-pattern fallback (which
+only catches a field if its *name* matches a known-sensitive
+substring): here the free-text fields are simply never passed through
+at all. Verified directly
+(`test_task_description_is_not_stored_in_audit_metadata`).
+
+### No standalone single-task read endpoint
+
+The approved API route list has no `GET /api/v1/lifecycle-tasks/{task}` —
+the Task Edit page instead fetches the parent process (which already
+eager-loads its tasks) and finds the specific task client-side by ID.
+Adding a new route solely to avoid one client-side lookup would have
+exceeded the approved "keep it minimal" scope.
+
+### Current limitations
+
+- No task templates/reusable checklists (`lifecycle_task_templates`
+  was offered as optional in the proposed schema and deliberately not
+  built this checkpoint — HR adds tasks directly per process).
+- No task dependencies, ordering, or approval routing.
+- No notifications, email reminders, or calendar integration for
+  due dates.
+- No IT/asset provisioning integration, no document generation, no
+  e-signature.
+- No recruitment-to-employee conversion — a lifecycle process must be
+  started manually for an existing employee record.
+- No performance/probation review integration.
+- Indirect (skip-level) manager visibility is out of scope — Line
+  Manager sees only direct reports' processes, the same "direct only"
+  policy decision Leave Management made in Checkpoint 14.
+
+### Future
+
+- Task templates/checklists, once real onboarding/offboarding patterns
+  across tenants clarify what's actually reusable.
+- A workflow designer, if a real need for configurable multi-step
+  approval routing emerges — explicitly out of scope for this
+  foundation.
+- Notifications/reminders for upcoming or overdue tasks.
+- Integration points for IT provisioning, asset assignment, and
+  document generation once those modules exist.
+
 ## Local Demo Credentials
 
 **Local development only — these are not real secrets and only work against your own local database.** Password comes from `SEED_USER_PASSWORD` in `.env` (not committed; `.env.example` has an empty placeholder).
@@ -3941,3 +4123,4 @@ data these six `uesl` logins see (Checkpoint 26's `DemoDataSeeder`).
 - **No role import/export, access review workflow, approval workflow for permission changes, segregation-of-duties engine, or permission risk scoring** — see [RBAC Role & Permission Management UI](#rbac-role--permission-management-ui-checkpoint-28) above.
 - **Departments/Positions/Locations (Checkpoint 32) have no hierarchy, no usage-count guard before archiving, and no bulk import/export** — see [Employee Lifecycle Foundation](#employee-lifecycle-foundation-checkpoint-32) above.
 - **Employment Type remains a fixed enum, not a tenant-configurable lookup table** (Checkpoint 32, deliberate scope decision) — see [Employee Lifecycle Foundation](#employee-lifecycle-foundation-checkpoint-32) above.
+- **Onboarding & Offboarding (Checkpoint 33) has no task templates, task dependencies/ordering, approval routing, notifications, IT/asset provisioning integration, document generation, e-signature, recruitment-to-employee conversion, or performance/probation review integration; Line Manager visibility is direct-reports only, not the full reporting tree** — see [Onboarding & Offboarding Foundation](#onboarding--offboarding-foundation-checkpoint-33) above.

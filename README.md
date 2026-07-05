@@ -381,6 +381,36 @@ alongside the existing raw IDs, so the Employee UI can finally show
 real names instead of bare identifiers. See `docs/architecture.md` and
 `docs/security.md` for the full design.
 
+## Onboarding & Offboarding Foundation (Checkpoint 33)
+
+A practical workflow foundation, not a workflow builder: two new
+tables (`employee_lifecycle_processes`, `employee_lifecycle_tasks`),
+reached at `/lifecycle(/create)(/{id})(/{id}/edit)(/{id}/tasks/create)`
+and `/lifecycle-processes`/`/lifecycle-tasks` in the API. One generic
+`lifecycle.*` permission set covers both onboarding and offboarding —
+`type` is just a column, not two parallel modules. Status transitions
+(`draft → in_progress → completed/cancelled` for processes, `pending →
+in_progress → completed/skipped` for tasks) are centralized and
+validated against the record's current state, the same pattern
+`LeaveRequestStatus` established in Checkpoint 12; a completed/
+cancelled process or a completed/skipped task rejects every further
+mutation.
+
+Line Manager and Employee hold the *identical* permission set
+(`lifecycle.view` + `lifecycle.complete_task`) despite needing
+different visibility — no permission key distinguishes "see my direct
+reports' processes" from "see only my assigned tasks." A new
+`LifecycleVisibilityService` resolves this from relationship data
+instead of a permission key, documented as a deliberate design
+decision, not an oversight. Two genuine, identically-shaped permission
+gaps (HR Officer lacking `employees.view`/`users.view` needed to
+populate the process/task pickers, despite holding the create/assign
+actions) were found while building the frontend and fixed the same way
+Checkpoint 19 fixed an analogous gap — both confirmed with the project
+owner individually before granting, since `users.view` is a broader,
+more sensitive resource than `employees.view`. See `docs/architecture.md`
+and `docs/security.md` for the full design.
+
 ## Documentation
 
 - [`docs/architecture.md`](docs/architecture.md) — multi-tenancy, tenant resolution, RBAC overview, internal-vs-public IDs, frontend architecture.

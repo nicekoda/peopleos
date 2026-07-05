@@ -1084,6 +1084,77 @@ methods, then re-verified with another fresh `migrate:fresh --seed` and
 a `withoutGlobalScopes()->whereNull('slug')->count()` check confirming
 zero null slugs remained.
 
+## A wrong default table name, caught immediately by the first test run (Checkpoint 33)
+
+`LifecycleProcess`/`LifecycleTask` were the first models in this app
+named with a leading noun ("Employee**LifecycleProcesses**" as a
+migration/table name) that doesn't match Eloquent's default table-name
+inference from the class name alone. Eloquent infers a table name by
+snake-casing and pluralizing the class name — `LifecycleProcess`
+becomes `lifecycle_processes`, not the actual migration table
+`employee_lifecycle_processes`. Every prior tenant-owned model in this
+app (`Employee`, `LeaveRequest`, `DocumentCategory`, ...) happened to
+have a class name whose default inference matched its table exactly,
+so this class of bug never surfaced before. The very first test
+exercising `POST /lifecycle-processes` failed immediately with a raw
+`PDOException: no such table: lifecycle_processes` — caught by the
+first local test run, long before any CI or live smoke test, exactly
+the kind of failure a fast local feedback loop exists to catch early.
+Fixed by adding an explicit `protected $table = 'employee_lifecycle_processes'`/
+`'employee_lifecycle_tasks'` to each model. Worth remembering for any
+future model whose class name doesn't literally match its table name
+once pluralized and snake-cased.
+
+## 108 new tests across three new files, one shared "who can see what" template (Checkpoint 33)
+
+`LifecycleProcessApiTest` (33 tests), `LifecycleTaskApiTest` (33
+tests), and `LifecycleUiTest` (16 tests) — 82 new tests, plus the
+pre-existing Department/Position/Location/Employee suites unchanged,
+covering: guest rejection, permission gating in both directions,
+tenant isolation, Platform Super Admin blocked, resource field safety,
+audit logging for every write action, `tenant.matches` middleware
+coverage, inactive-user/inactive-tenant fail-closed, status-transition
+guards (both directions — a legal transition succeeds, an illegal one
+422s), terminal-state mutation blocking, forged/system fields ignored,
+and UI route permission/tenant-isolation/IDs-only-props checks.
+
+**The Line Manager/Employee visibility split needed to be tested from
+both directions, not just "the scoped case works."** Because
+`LifecycleVisibilityService` resolves visibility from permission
+*absence* rather than a dedicated permission key (see
+`docs/architecture.md`), the test suite specifically covers: a Line
+Manager sees their direct report's process
+(`test_line_manager_can_view_direct_reports_process`) but not an
+unrelated one (`test_line_manager_cannot_view_unrelated_process`); a
+Line Manager can complete a task within a direct report's process even
+when the task isn't literally assigned to them
+(`test_line_manager_can_complete_task_within_direct_reports_process`),
+but cannot act on an unrelated employee's task
+(`test_line_manager_cannot_complete_task_for_unrelated_employee`); an
+Employee with no direct reports sees zero processes until a task is
+actually assigned to them
+(`test_employee_without_any_assigned_task_sees_no_processes`); and an
+Auditor (holding `lifecycle.view` but no `complete_task` at all) sees
+everything tenant-wide but can mutate nothing
+(`test_auditor_sees_every_process_but_cannot_mutate`). Each of these
+four roles needed its own test, since the underlying logic branches on
+relationship data, not a single permission check that would cover all
+cases with one assertion.
+
+**A handful of test-fixture bugs, not implementation bugs, found by the
+first run.** Three of the four initial test failures were the test
+itself granting the wrong permission for what it claimed to test (e.g.
+a "tenant A cannot list tenant B's processes" test whose user lacked
+`lifecycle.view` entirely, so it 403'd before tenant isolation was ever
+exercised) or fixtures missing a required relationship (e.g. testing
+that a cancelled process blocks task completion, using a user with
+`lifecycle.complete_task` but no assigned task and no direct-report
+relationship, so the *visibility* check failed before the *process-
+terminal* check under test was ever reached). Both are a useful
+reminder that a failing assertion's literal error doesn't always point
+at the code path the test intended to exercise — check what condition
+actually failed before assuming the implementation is wrong.
+
 ## A case-sensitivity bug that only a real Linux CI run could catch (Checkpoint 30)
 
 The first real GitHub Actions run (Ubuntu, case-sensitive filesystem)

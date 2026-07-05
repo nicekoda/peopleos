@@ -34,6 +34,11 @@ class PermissionSeeder extends Seeder
             'leave_types' => ['view', 'create', 'update', 'delete'],
             'leave_balances' => ['view', 'create', 'update', 'adjust', 'view_all'],
             'leave' => ['view', 'request', 'approve', 'reject', 'cancel', 'view_all', 'view_team'],
+            // Checkpoint 33 — Onboarding & Offboarding Foundation. One
+            // generic permission set for both process types (onboarding/
+            // offboarding are just a `type` value on the same resource,
+            // not separately-permissioned resources).
+            'lifecycle' => ['view', 'create', 'update', 'delete', 'assign_task', 'complete_task'],
             'announcements' => ['view', 'create', 'publish'],
             'audit' => ['view', 'export'],
         ];

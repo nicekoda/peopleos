@@ -523,6 +523,12 @@ served through the `web` middleware group, session-based auth same as
 | `GET` | `/leave` | `auth`, `tenant.matches`, `permission:leave.view` | Real UI (Checkpoint 18) — list + inline balances, fetched client-side from `/api/v1/leave-requests`, `/api/v1/leave-types`, `/api/v1/me/leave-balances` |
 | `GET` | `/leave/create` | `auth`, `tenant.matches`, `permission:leave.request` | Create form — registered before `/leave/{id}` to avoid route-param collision |
 | `GET` | `/leave/{leaveRequest}` | `auth`, `tenant.matches`, `permission:leave.view` | Detail — passes only `leaveRequestId` as a prop, never leave-request data (see `docs/architecture.md`); `404` if the request belongs to another tenant |
+| `GET` | `/lifecycle` | `auth`, `tenant.matches`, `permission:lifecycle.view` | Real UI (Checkpoint 33) — list, fetched client-side from `/api/v1/lifecycle-processes`; rows already scoped server-side by `LifecycleVisibilityService` |
+| `GET` | `/lifecycle/create` | `auth`, `tenant.matches`, `permission:lifecycle.create` | Create form — employee/type picker |
+| `GET` | `/lifecycle/{lifecycleProcess}` | `auth`, `tenant.matches`, `permission:lifecycle.view` | Detail — passes only `processId` as a prop; `404` if cross-tenant or outside the caller's visible scope |
+| `GET` | `/lifecycle/{lifecycleProcess}/edit` | `auth`, `tenant.matches`, `permission:lifecycle.update` | Edit form — status transition, dates |
+| `GET` | `/lifecycle/{lifecycleProcess}/tasks/create` | `auth`, `tenant.matches`, `permission:lifecycle.create` | Add-task form |
+| `GET` | `/lifecycle/tasks/{lifecycleTask}/edit` | `auth`, `tenant.matches`, `permission:lifecycle.update` | Edit-task form — passes `taskId` and `processId` as props |
 | `GET` | `/employees/{employee}/documents` | `auth`, `tenant.matches`, `permission:documents.view` | Real UI (Checkpoint 19) — list, fetched client-side from `/api/v1/employees/{employee}/documents` |
 | `GET` | `/employees/{employee}/documents/upload` | `auth`, `tenant.matches`, `permission:documents.upload` | Upload form — registered before `/employees/{employee}/documents/{document}` to avoid route-param collision |
 | `GET` | `/employees/{employee}/documents/{document}` | `auth`, `tenant.matches`, `permission:documents.view` | Detail — passes only `employeeId`/`documentId` as props, never document data (see `docs/architecture.md`); `404` if the employee belongs to another tenant, or the document doesn't belong to this employee |
@@ -1069,6 +1075,81 @@ second `approve` call, etc.) returns `409`.
 | `reason` | nullable, max 2000 characters |
 | `rejection_reason` (reject only) | required, max 2000 characters |
 
+## Lifecycle Processes & Tasks
+
+Checkpoint 33 — Onboarding & Offboarding Foundation. One generic
+resource (`type` distinguishes onboarding/offboarding), gated by a
+single `lifecycle.*` permission set.
+
+| Method | Path | Permission | Notes |
+|---|---|---|---|
+| `GET` | `/api/v1/lifecycle-processes` | `lifecycle.view` | Paginated; scoped by `LifecycleVisibilityService` for non-HR/Admin/Auditor callers — see `docs/security.md` |
+| `POST` | `/api/v1/lifecycle-processes` | `lifecycle.create` | |
+| `GET` | `/api/v1/lifecycle-processes/{lifecycleProcess}` | `lifecycle.view` | 404 if cross-tenant or outside the caller's visible scope |
+| `PATCH` | `/api/v1/lifecycle-processes/{lifecycleProcess}` | `lifecycle.update` | Rejected (422) if the process is `completed`/`cancelled`, or if the requested status isn't a legal transition |
+| `DELETE` | `/api/v1/lifecycle-processes/{lifecycleProcess}` | `lifecycle.delete` | Soft-cancel: transitions to `cancelled` (unless already terminal) then soft-deletes |
+| `POST` | `/api/v1/lifecycle-processes/{lifecycleProcess}/tasks` | `lifecycle.create` | Also requires `lifecycle.assign_task` if `assigned_to_user_id` is provided |
+| `PATCH` | `/api/v1/lifecycle-tasks/{lifecycleTask}` | `lifecycle.update` | `status` here only accepts `pending`/`in_progress` — reaching `completed`/`skipped` requires the dedicated actions below |
+| `DELETE` | `/api/v1/lifecycle-tasks/{lifecycleTask}` | `lifecycle.delete` | Soft delete only |
+| `POST` | `/api/v1/lifecycle-tasks/{lifecycleTask}/complete` | `lifecycle.complete_task` | Also requires `LifecycleVisibilityService::canAccessTask()` — own assignment, a direct report's process, or HR/Admin-tier |
+| `POST` | `/api/v1/lifecycle-tasks/{lifecycleTask}/skip` | `lifecycle.complete_task` | Same object-level scope as complete |
+
+**No standalone `GET` for a single task** — the Task Edit UI fetches
+the parent process (which eager-loads `tasks`) and finds the task
+client-side by ID instead.
+
+### Response shape
+
+```json
+// GET /api/v1/lifecycle-processes/{id}
+{
+  "data": {
+    "id": "01h...",
+    "employee_id": "01h...",
+    "employee": { "id": "01h...", "full_name": "Ada Lovelace" },
+    "type": "onboarding",
+    "status": "in_progress",
+    "started_at": "2026-07-05T00:00:00+00:00",
+    "due_date": "2026-07-19",
+    "completed_at": null,
+    "tasks": [
+      {
+        "id": "01h...",
+        "process_id": "01h...",
+        "title": "Set up laptop",
+        "description": null,
+        "assigned_to_user_id": 4,
+        "assigned_to": { "id": 4, "name": "IT Support" },
+        "status": "pending",
+        "due_date": "2026-07-08",
+        "completed_at": null,
+        "created_at": "2026-07-05T00:00:00+00:00",
+        "updated_at": "2026-07-05T00:00:00+00:00"
+      }
+    ],
+    "created_at": "2026-07-05T00:00:00+00:00",
+    "updated_at": "2026-07-05T00:00:00+00:00"
+  }
+}
+```
+
+`employee`/`assigned_to` resolve to `{id, name}` when set, `null`
+otherwise — same pattern Checkpoint 32 established for Employee's
+resolved department/position/location. The raw `employee_id`/
+`assigned_to_user_id` fields are kept alongside for compatibility.
+
+### Validation rules
+
+| Field | Rules |
+|---|---|
+| `employee_id` (process create only) | required, must exist and belong to the current tenant, not soft-deleted |
+| `type` (process create only) | required, valid `LifecycleProcessType` (`onboarding`/`offboarding`) — immutable after create |
+| `status` (process/task update) | must be a legal transition from the record's *current* status (see `LifecycleProcessStatus`/`LifecycleTaskStatus::canTransitionTo()`); task `status` here is further restricted to `pending`/`in_progress` only |
+| `started_at`, `due_date` | nullable, valid date |
+| `title` (task) | required (create) / sometimes+required (update), max 255 |
+| `description` (task) | nullable, max 2000 |
+| `assigned_to_user_id` (task) | nullable, must exist, belong to the current tenant, not a platform admin, and `status: active`; requires `lifecycle.assign_task` |
+
 ## Current limitations
 
 - No export endpoint (`employees.export` permission is seeded but unused — explicitly out of scope this checkpoint).
@@ -1085,6 +1166,8 @@ second `approve` call, etc.) returns `409`.
 - No document approval workflow endpoint — `documents.approve` permission and `approved_by`/`approved_at` columns are reserved, unused.
 - Pagination uses Laravel's default page-number style; no cursor pagination or configurable page size yet.
 - Session-based auth only — see "Authentication" above for the full future Sanctum/token plan.
+- No task templates, task dependencies/ordering, approval routing, notifications, or reminders for lifecycle processes/tasks (Checkpoint 33) — see `docs/security.md#onboarding--offboarding-foundation-checkpoint-33`.
+- No standalone `GET` for a single lifecycle task — see "Lifecycle Processes & Tasks" above.
 
 ## Future
 

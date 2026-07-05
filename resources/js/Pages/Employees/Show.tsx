@@ -105,6 +105,30 @@ export default function EmployeesShow() {
                                 Documents
                             </Link>
                         </PermissionGate>
+                        <PermissionGate permission="lifecycle.view">
+                            <Link
+                                href={`/lifecycle?employeeId=${employee.id}`}
+                                className="text-sm font-medium text-indigo-600 hover:text-indigo-500"
+                            >
+                                View Lifecycle
+                            </Link>
+                        </PermissionGate>
+                        <PermissionGate permission="lifecycle.create">
+                            <Link
+                                href={`/lifecycle/create?employeeId=${employee.id}&type=onboarding`}
+                                className="text-sm font-medium text-indigo-600 hover:text-indigo-500"
+                            >
+                                Start Onboarding
+                            </Link>
+                        </PermissionGate>
+                        <PermissionGate permission="lifecycle.create">
+                            <Link
+                                href={`/lifecycle/create?employeeId=${employee.id}&type=offboarding`}
+                                className="text-sm font-medium text-indigo-600 hover:text-indigo-500"
+                            >
+                                Start Offboarding
+                            </Link>
+                        </PermissionGate>
                         <PermissionGate permission="employees.update">
                             <Link
                                 href={`/employees/${employee.id}/edit`}

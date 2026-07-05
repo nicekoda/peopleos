@@ -1496,3 +1496,117 @@ on three already-simple list endpoints. The backend's own archived-row
 validation is what actually prevents an archived ID from being
 accepted regardless of what the dropdown offers, per Refinement 9 (the
 frontend filter is a convenience, not the enforcement).
+
+## Onboarding & Offboarding Foundation (Checkpoint 33)
+
+The first genuine multi-actor **workflow-shaped** module since Leave
+Management (Checkpoint 12) — two new tables,
+`employee_lifecycle_processes` and `employee_lifecycle_tasks`, added
+per your approved minimal schema. See
+[`security.md`](security.md#onboarding--offboarding-foundation-checkpoint-33)
+for the full security model and [`api.md`](api.md#lifecycle-processes--tasks)
+for the route reference.
+
+**One generic resource, two `type` values, not two parallel modules.**
+Onboarding and Offboarding are not separate tables, controllers, or
+permission sets — a `LifecycleProcess` has a `type` column
+(`onboarding`/`offboarding`) and everything else (schema, permissions,
+routes, UI) is shared. This mirrors the reasoning already applied to
+Departments/Positions/Locations sharing one CRUD shape in Checkpoint
+32: a genuinely identical structure doesn't need parallel
+implementations just because the two concepts have different names in
+the business domain.
+
+**Status transitions are centralized via `canTransitionTo()`, the
+exact pattern `LeaveRequestStatus` established in Checkpoint 12.**
+`LifecycleProcessStatus` (`draft` → `in_progress` → `completed`/
+`cancelled`, both terminal) and `LifecycleTaskStatus` (`pending` →
+`in_progress`/`completed`/`skipped`, the latter two terminal) each
+carry their own `allowedNextStates()`/`canTransitionTo()` pair, checked
+in `UpdateLifecycleProcessRequest`/`UpdateLifecycleTaskRequest`'s
+`withValidator()` against the *route-bound record's current status* —
+not just "is this a valid enum value." A terminal process/task rejects
+every further mutation outright (422), not just illegal transitions —
+per your explicit rule 9 ("completed/cancelled process should not
+accept normal task updates").
+
+**`LifecycleVisibilityService` had to solve a problem `LeaveVisibilityService`
+never faced: two roles with the *identical* permission set needing
+*different* visibility.** Every prior visibility-scoped module (Leave)
+had a distinct permission key per tier (`leave.view`/`leave.view_team`/
+`leave.view_all`). Your explicit "simpler generic" permission
+recommendation for this checkpoint means Line Manager and Employee
+both hold exactly `lifecycle.view` + `lifecycle.complete_task` — no
+permission key distinguishes "see my direct reports' processes" from
+"see only tasks assigned to me." `hasUnrestrictedAccess()` resolves
+this from relationship data instead: holding any *write* permission on
+the resource (`create`/`update`/`delete`/`assign_task`) means HR/Admin-
+tier (see everything); holding `view` but not `complete_task` at all
+means Auditor-tier (read-only, see everything); the one remaining
+case — `view` + `complete_task`, nothing else — is scoped to the
+caller's own direct reports (via the existing `ManagerHierarchyService::
+directReportsOf()`, Checkpoint 14) and/or tasks assigned directly to
+them. This is a judgment call, not something derivable purely from the
+approved permission list — documented explicitly rather than silently
+decided, per Refinement 9's "flag it before deciding" instruction.
+
+**A genuine, identically-shaped permission gap was found twice while
+building the Create-process and Create-task forms, and flagged both
+times before fixing.** `GET /api/v1/employees` (the process form's
+employee picker) requires `employees.view`; `GET /api/v1/users` (the
+task form's assignee picker) requires `users.view`. HR Officer held
+neither, despite being granted `lifecycle.create`/`lifecycle.assign_task`
+in this same checkpoint — the same "granted an action but not the read
+permission the action's own UI depends on" shape as Checkpoint 19's
+`document_categories.view` fix. Both were confirmed and approved
+individually (not assumed from precedent alone, since `users.view`
+exposes a broader/more sensitive resource than `employees.view`) before
+granting — view-only in both cases, no create/update/deactivate/
+assign_role added.
+
+**Assigning a task is a distinct permission from creating/editing one.**
+`lifecycle.assign_task` gates setting/changing `assigned_to_user_id`
+specifically — checked explicitly in `LifecycleTaskController::store()`/
+`update()`, on top of (not instead of) `lifecycle.create`/
+`lifecycle.update` route middleware. Every role holding `create` in
+this checkpoint's approved grants also holds `assign_task`, so this
+distinction has no visible effect on the seeded demo roles today — it
+exists so a future custom role that splits them (e.g., "can add tasks
+but assignment stays HR-only") is already safe, not something to
+retrofit later.
+
+**No standalone `GET /api/v1/lifecycle-tasks/{task}` endpoint exists —
+deliberately, matching your "keep it minimal" instruction.** The
+approved API route list has no single-task read route; the Task Edit
+page instead fetches the parent process (`GET
+/api/v1/lifecycle-processes/{process}`, which already eager-loads
+`tasks`) and finds the specific task client-side by ID. Adding a new
+route just to avoid one extra property lookup in the frontend would
+have been scope creep beyond what was approved.
+
+**Soft-delete/cancel, never a hard delete, for both processes and
+tasks — the same rule Checkpoint 32 established for Departments/
+Positions/Locations, applied here too.** `DELETE
+/lifecycle-processes/{process}` transitions a non-terminal process to
+`cancelled` before soft-deleting it (an already-terminal process is
+just hidden, its status left alone — "cancelling" a completed process
+would be a false statement); `DELETE /lifecycle-tasks/{task}`
+soft-deletes only, logged as `lifecycle_task.deleted` — an action name
+not in your originally-listed audit actions, added anyway since
+under-logging a real mutation is worse than slightly exceeding the
+minimum list.
+
+**Audit metadata never carries a task's free-text `title`/`description`** —
+only `id`/`status`/`process_id`/`assigned_to_user_id`, per your explicit
+"do not log sensitive free-text task details if avoidable" instruction.
+This is stricter than `AuditLogger`'s own mask-by-pattern fallback
+(which would only catch a field if its *name* matched a known-sensitive
+substring) — here, the free-text fields are simply never passed to
+`AuditLogger::logFor()` as metadata at all, verified directly
+(`test_task_description_is_not_stored_in_audit_metadata`).
+
+**No task-template table this checkpoint, per your explicit approval.**
+`lifecycle_task_templates` was offered as optional in the proposed
+schema; HR adds tasks directly when creating a process instead. A
+reusable checklist library is documented future work, not a silent
+scope cut — see "Current limitations" in `security.md`.

@@ -192,20 +192,40 @@ full version of this list this section summarizes.
   scanning, or security static analysis — none of these exist yet in
   this project, CI or otherwise.
 
-**Known CI flakiness (pre-existing, not introduced by CI):**
+**Resolved (Checkpoint 31): the sensitive-field flaky test.**
 `DashboardAndFrontendSecurityTest::test_shared_inertia_props_contain_no_sensitive_fields`
-naively substring-searches the entire shared-props JSON blob for
-sensitive-looking fragments (e.g. `ssn`) — a random ULID or Faker-
-generated name occasionally contains that 3-letter sequence purely by
-chance (confirmed live on Checkpoint 30's first fully-green CI attempt:
-a tenant's auto-generated ULID `...kbdssna0ng...` contained `ssn`).
-A re-run passes because the random values differ each time. This was
-first flagged in Checkpoint 24 (via a fixed background task, not yet
-addressed) and isn't a CI-specific issue — fixing it properly means
-pinning the test's fixture values instead of asserting against
-randomly-generated content, out of scope for a CI-verification
-checkpoint. If this recurs often enough to be disruptive, that's the
-fix to prioritize.
+(first flagged Checkpoint 24, recurred live during Checkpoint 30's CI
+verification via a tenant ULID coincidentally containing `ssn`) and a
+second, structurally identical instance in
+`SettingsUiTest::test_settings_pages_do_not_expose_sensitive_data` both
+used to `json_encode()` the entire shared-props tree and blindly
+substring-search it for sensitive fragments — a check that couldn't
+tell the difference between "a sensitive field actually leaked" and
+"a random ULID or Faker-generated word happened to contain the same
+3-6 letters." Both now use a shared recursive checker
+(`assertNoSensitiveFieldsInProps()`, duplicated in each test file per
+this project's established per-file test-helper convention) that:
+
+1. Checks every structural **key** name against the sensitive fragment
+   list unconditionally — this is the actual protection, and it's
+   unchanged: a field literally named `ssn`/`password`/`secret`/etc.
+   anywhere in the props tree still fails the test immediately, at any
+   nesting depth.
+2. Additionally checks string **values** for the same fragments, but
+   skips ID-shaped keys (`id`, `*_id`) — ULIDs and autoincrement IDs are
+   random-looking by construction and can coincidentally contain a
+   short fragment with zero security meaning; scanning their content
+   was never testing anything real.
+3. Both tests now also use fixed, deterministic tenant/user/employee
+   names (never Faker defaults), removing the other source of
+   randomness entirely.
+
+Verified the fix doesn't weaken the check: a temporary throwaway test
+proved the helper still fails on a deliberately-injected sensitive key
+and a deliberately-injected sensitive value, and still passes when the
+only "match" is inside an ID field's content — then the throwaway test
+was removed. Both real tests now pass identically across 5 repeated
+local runs each. See `docs/testing.md` for the full writeup.
 
 ## 5. GitHub Free — Current Plan and When to Reconsider
 

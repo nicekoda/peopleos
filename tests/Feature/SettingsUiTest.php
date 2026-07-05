@@ -151,22 +151,81 @@ class SettingsUiTest extends TestCase
         }
     }
 
-    // 19: no secrets/tokens/storage paths/audit internals/debug data anywhere
+    /**
+     * 19: no secrets/tokens/storage paths/audit internals/debug data
+     * anywhere. Checkpoint 31 — fixed, deterministic tenant/user names
+     * (never Faker defaults), same reasoning as
+     * DashboardAndFrontendSecurityTest::test_shared_inertia_props_contain_no_sensitive_fields
+     * (see docs/testing.md): a random Faker-generated word could
+     * otherwise coincidentally contain one of these fragments and
+     * false-fail this test for no security reason.
+     */
     public function test_settings_pages_do_not_expose_sensitive_data(): void
     {
-        $tenant = Tenant::factory()->create();
+        $tenant = Tenant::factory()->create(['name' => 'Acme Test Tenant']);
         $user = $this->userWithPermissions(
             $tenant,
             'tenant.settings.view', 'tenant.view', 'users.view', 'document_categories.view',
             'leave_types.view', 'audit.view',
         );
+        $user->update(['name' => 'Dana Test User', 'email' => 'dana.test.user@example.test']);
 
         foreach (array_merge(['settings', 'settings/company'], array_column(self::placeholderRouteProvider(), 0)) as $path) {
             $response = $this->actingAs($user)->get($this->url($tenant, $path));
-            $body = json_encode($response->viewData('page')['props']);
 
-            foreach (['password', 'remember_token', 'storage_path', 'storage_disk', 'api_key', 'secret', 'token'] as $sensitiveKey) {
-                $this->assertStringNotContainsString($sensitiveKey, $body, "Route [{$path}] props unexpectedly contain '{$sensitiveKey}'.");
+            $this->assertNoSensitiveFieldsInProps(
+                $response->viewData('page')['props'],
+                ['password', 'remember_token', 'storage_path', 'storage_disk', 'api_key', 'secret', 'token'],
+            );
+        }
+    }
+
+    /**
+     * Recursively checks both structural key names (unconditionally —
+     * the real protection: a field literally named e.g. 'secret' is
+     * caught here regardless of its value) and string field values
+     * (skipped for opaque identifier fields — ULIDs/autoincrement IDs
+     * are random-looking by construction and can coincidentally
+     * contain a short fragment with zero security meaning; see
+     * docs/testing.md). Deterministic fixture values (set by the
+     * caller) mean every other string value is no longer a source of
+     * randomness this check could ever false-fail on either.
+     *
+     * @param  array<string, mixed>  $props
+     * @param  list<string>  $sensitiveFragments
+     */
+    private function assertNoSensitiveFieldsInProps(array $props, array $sensitiveFragments, string $path = ''): void
+    {
+        foreach ($props as $key => $value) {
+            $currentPath = $path === '' ? (string) $key : "{$path}.{$key}";
+            $keyLower = strtolower((string) $key);
+
+            foreach ($sensitiveFragments as $fragment) {
+                $this->assertStringNotContainsString(
+                    strtolower($fragment),
+                    $keyLower,
+                    "Props expose a key resembling '{$fragment}' at '{$currentPath}'.",
+                );
+            }
+
+            if (is_array($value)) {
+                $this->assertNoSensitiveFieldsInProps($value, $sensitiveFragments, $currentPath);
+
+                continue;
+            }
+
+            if ($keyLower === 'id' || str_ends_with($keyLower, '_id')) {
+                continue;
+            }
+
+            if (is_string($value)) {
+                foreach ($sensitiveFragments as $fragment) {
+                    $this->assertStringNotContainsString(
+                        strtolower($fragment),
+                        strtolower($value),
+                        "Props expose '{$fragment}' in the value of '{$currentPath}'.",
+                    );
+                }
             }
         }
     }

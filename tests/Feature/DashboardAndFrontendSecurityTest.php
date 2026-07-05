@@ -95,21 +95,84 @@ class DashboardAndFrontendSecurityTest extends TestCase
         ];
     }
 
+    /**
+     * Checkpoint 31 — fixed, deterministic tenant/user/employee names
+     * (never Faker defaults) so this test can never false-fail on a
+     * randomly-generated word coincidentally containing a sensitive
+     * fragment — see assertNoSensitiveFieldsInProps() below for why
+     * this, combined with excluding ID fields from value-scanning, is
+     * what actually makes the check deterministic without weakening it.
+     */
     public function test_shared_inertia_props_contain_no_sensitive_fields(): void
     {
-        $tenant = Tenant::factory()->create();
+        $tenant = Tenant::factory()->create(['name' => 'Acme Test Tenant']);
         $user = $this->userWithPermissions($tenant, 'dashboard.view', 'employees.view');
-        Employee::factory()->create(['tenant_id' => $tenant->id, 'user_id' => $user->id]);
+        $user->update(['name' => 'Dana Test User', 'email' => 'dana.test.user@example.test']);
+        Employee::factory()->create([
+            'tenant_id' => $tenant->id,
+            'user_id' => $user->id,
+            'first_name' => 'Dana',
+            'last_name' => 'TestEmployee',
+        ]);
 
         $response = $this->actingAs($user)->get($this->url($tenant, 'dashboard'));
 
         $response->assertOk();
 
-        $page = $response->viewData('page');
-        $propsJson = json_encode($page['props']);
+        $this->assertNoSensitiveFieldsInProps(
+            $response->viewData('page')['props'],
+            ['password', 'remember_token', 'salary', 'bank', 'storage_path', 'storage_disk', 'national_id', 'ssn'],
+        );
+    }
 
-        foreach (['password', 'remember_token', 'salary', 'bank', 'storage_path', 'storage_disk', 'national_id', 'ssn'] as $sensitiveKey) {
-            $this->assertStringNotContainsString($sensitiveKey, $propsJson, "Shared props unexpectedly contain '{$sensitiveKey}'.");
+    /**
+     * Recursively checks both structural key names (unconditionally —
+     * this is the real protection: a field literally named e.g. 'ssn'
+     * or 'national_id' is caught here regardless of its value) and
+     * string field values (skipped for opaque identifier fields —
+     * ULIDs and autoincrement IDs are random-looking by construction
+     * and can coincidentally contain a short fragment like "ssn" or
+     * "key" with zero security meaning; see docs/testing.md for the
+     * incident this fixes). Deterministic fixture values (set by the
+     * caller) mean every other string value is no longer a source of
+     * randomness this check could ever false-fail on either.
+     *
+     * @param  array<string, mixed>  $props
+     * @param  list<string>  $sensitiveFragments
+     */
+    private function assertNoSensitiveFieldsInProps(array $props, array $sensitiveFragments, string $path = ''): void
+    {
+        foreach ($props as $key => $value) {
+            $currentPath = $path === '' ? (string) $key : "{$path}.{$key}";
+            $keyLower = strtolower((string) $key);
+
+            foreach ($sensitiveFragments as $fragment) {
+                $this->assertStringNotContainsString(
+                    strtolower($fragment),
+                    $keyLower,
+                    "Shared props expose a key resembling '{$fragment}' at '{$currentPath}'.",
+                );
+            }
+
+            if (is_array($value)) {
+                $this->assertNoSensitiveFieldsInProps($value, $sensitiveFragments, $currentPath);
+
+                continue;
+            }
+
+            if ($keyLower === 'id' || str_ends_with($keyLower, '_id')) {
+                continue;
+            }
+
+            if (is_string($value)) {
+                foreach ($sensitiveFragments as $fragment) {
+                    $this->assertStringNotContainsString(
+                        strtolower($fragment),
+                        strtolower($value),
+                        "Shared props expose '{$fragment}' in the value of '{$currentPath}'.",
+                    );
+                }
+            }
         }
     }
 

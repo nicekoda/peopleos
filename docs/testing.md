@@ -949,6 +949,67 @@ necessary but not sufficient; the live smoke test's per-role page loads
 all across seven roles) is what actually confirmed every page still
 resolves and renders correctly under the new lazy-loading path.
 
+## Fixing a flaky "no sensitive fields" test without weakening it (Checkpoint 31)
+
+Two tests — `DashboardAndFrontendSecurityTest::test_shared_inertia_props_contain_no_sensitive_fields`
+(flagged Checkpoint 24, recurred live during Checkpoint 30's CI
+verification) and `SettingsUiTest::test_settings_pages_do_not_expose_sensitive_data`
+(same bug, found by auditing other Security/Inertia-adjacent test
+files per this checkpoint's own instruction) — shared one root cause:
+`json_encode()`-ing the *entire* shared-props tree and blindly
+substring-searching the result for sensitive fragments like `ssn`,
+`secret`, or `password`. That check can't distinguish "a sensitive
+field actually leaked" from "a random ULID or Faker-generated word
+happened to contain the same handful of letters" — and a tenant's
+auto-generated ULID doing exactly that (`...kbdssna0ng...` containing
+`ssn`) is what caused the live CI failure in Checkpoint 30.
+
+**The fix separates two different questions the original single check
+conflated:**
+
+1. **"Is there a field whose *name* looks sensitive?"** — this is the
+   real protection, and answering it doesn't require touching any
+   value at all. A recursive walk checks every array key, at every
+   nesting depth, against the sensitive-fragment list, unconditionally.
+   A field literally named `ssn`/`national_id`/`secret`/etc. anywhere
+   in the props tree still fails the test immediately — nothing here
+   was removed or weakened.
+2. **"Does some field's *content* happen to contain sensitive text?"**
+   — a secondary, defense-in-depth check (catches e.g. a raw password
+   accidentally embedded inside an unrelated `description` field) that
+   only makes sense for actual business-data strings, not opaque
+   identifiers. ULIDs and autoincrement IDs are random-looking *by
+   construction* — checking whether their content happens to spell out
+   a short fragment was never testing anything meaningful, so
+   ID-shaped keys (`id`, `*_id`) are excluded from this half of the
+   check only, not from the key check above.
+
+Combined with switching both tests' tenant/user/employee fixtures from
+Faker defaults to fixed, deterministic literal strings (removing the
+other source of randomness), both tests are now fully deterministic —
+verified by running each 5 times in a row locally with identical
+assertion counts every time.
+
+**Verifying a security-test fix doesn't weaken the test is itself worth
+doing deliberately, not just asserting.** A temporary throwaway test
+(added, run, then deleted — never committed) called the new recursive
+checker directly against three hand-built prop arrays: one with a
+sensitive field as a *key* (correctly failed), one with sensitive text
+buried in a value (correctly failed), and one where only an ID field's
+random content coincidentally matched (correctly passed). This is a
+useful general pattern for any "fix a flaky security-adjacent test"
+change: prove the fixed version still catches the failure case it was
+built for, in both directions, before trusting that "it passes now"
+means "it's still meaningful" rather than "it got weaker."
+
+This project deliberately did **not**: delete either test, skip either
+test, remove the sensitive-field assertions, blanket-ignore all IDs
+(only ID-shaped keys are skipped, and only for the value half of the
+check), or touch `AuditValueSanitizer`/any production sanitization
+logic — none of which needed to change, since the bug was entirely in
+how the *test* verified safety, never in whether the app was actually
+safe.
+
 ## A case-sensitivity bug that only a real Linux CI run could catch (Checkpoint 30)
 
 The first real GitHub Actions run (Ubuntu, case-sensitive filesystem)

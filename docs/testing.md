@@ -949,6 +949,38 @@ necessary but not sufficient; the live smoke test's per-role page loads
 all across seven roles) is what actually confirmed every page still
 resolves and renders correctly under the new lazy-loading path.
 
+## A case-sensitivity bug that only a real Linux CI run could catch (Checkpoint 30)
+
+The first real GitHub Actions run (Ubuntu, case-sensitive filesystem)
+failed every UI/page test with `Inertia page component file [...] does
+not exist` — right after fixing the workflow's step order (see below)
+made the test suite actually reach real Inertia page assertions for
+the first time in CI. Root cause: `inertiajs/inertia-laravel`'s
+default config points `pages.paths` at
+`resource_path('js/pages')` — **lowercase** `pages` — while this
+project's actual directory has always been `resources/js/Pages`
+(capital `P`, the convention since Checkpoint 16). Windows/NTFS is
+case-insensitive, so every local run (every checkpoint in this
+project, all done from a Windows/Laragon machine) silently resolved
+the mismatched case and never revealed the bug. Fixed by publishing
+`config/inertia.php` (`php artisan vendor:publish
+--provider="Inertia\ServiceProvider"`) and correcting the one `paths`
+entry to match reality.
+
+**The general lesson**: a case-*insensitive* development filesystem
+(Windows, and macOS by default) can hide a real path mismatch
+indefinitely — every path reference "just works" locally regardless of
+whether its casing is actually correct, so nothing ever fails until
+the code runs somewhere case-sensitive (Linux, including virtually
+every CI runner and production server). This is exactly the kind of
+bug a live HTTPS smoke test *wouldn't* have caught either, since that
+smoke testing has also always run from the same Windows machine — a
+real Linux run (CI or production) was the only thing that could have
+surfaced it. Worth treating "first real Linux run" as its own
+verification step, separate from both the local test suite and the
+local live smoke test, precisely because it's the only one of the
+three that exercises case-sensitivity at all.
+
 ## A recurring manual check becomes a real, tested Artisan command (Checkpoint 27)
 
 The `tenant.matches`-coverage check ("every `auth`-protected route also

@@ -11,7 +11,7 @@ import {
     HR_DOCUMENT_ALLOWED_PLACEHOLDERS,
     HR_DOCUMENT_TYPE_LABELS,
     HrDocumentTemplate,
-    HrDocumentTemplateFormPayload,
+    HrDocumentTemplateCreatePayload,
 } from '@/types/hrDocument';
 
 /**
@@ -24,7 +24,7 @@ import {
  * HTML" rule used for Policy content.
  */
 export default function SettingsHrDocumentTemplateCreate() {
-    const [form, setForm] = useState<Omit<HrDocumentTemplateFormPayload, 'status'>>({
+    const [form, setForm] = useState<HrDocumentTemplateCreatePayload>({
         title: '',
         description: '',
         document_type: '',
@@ -96,7 +96,7 @@ export default function SettingsHrDocumentTemplateCreate() {
                             name="document_type"
                             required
                             value={form.document_type}
-                            onChange={(e) => set('document_type', e.target.value as HrDocumentTemplateFormPayload['document_type'])}
+                            onChange={(e) => set('document_type', e.target.value as HrDocumentTemplateCreatePayload['document_type'])}
                             error={fieldError('document_type')}
                         >
                             <option value="">— Select a type —</option>

@@ -453,6 +453,25 @@ uses (downloading a PDF of a document you can already view isn't a new
 capability). See `docs/architecture.md` and `docs/security.md` for the
 full design and why headless-browser PDF generation was ruled out.
 
+## HR Document Template Versioning Foundation (Checkpoint 36)
+
+A new `hr_document_template_versions` table gives HR document templates
+real version history, mirroring the `Policy`/`PolicyVersion` pattern
+from Checkpoint 20: `hr_document_templates` stays catalogue metadata
+(title, description, document type, status, `current_version_id`) and
+`content_template` moved entirely into the version table — approved
+after the gap analysis specifically to avoid a "which is authoritative"
+question between a template and its own content. A migration backfills
+every existing template with a published "version 1" (and backfills
+every existing generated document's version reference to match — both
+accurate, not guessed, since before this checkpoint a template only
+ever had one live `content_template`). Generation now resolves a
+template's *current published version* and records
+`hr_document_template_version_id` on the generated document;
+`rendered_content` remains the actual historical record, so PDF export
+and existing generated documents are entirely unaffected. See
+`docs/architecture.md` and `docs/security.md` for the full design.
+
 ## Documentation
 
 - [`docs/architecture.md`](docs/architecture.md) — multi-tenancy, tenant resolution, RBAC overview, internal-vs-public IDs, frontend architecture.

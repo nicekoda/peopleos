@@ -1752,3 +1752,97 @@ permission that already gates `GET /api/v1/hr-generated-documents/{id}`
 already view in full isn't a new capability worth its own permission
 key, the same reasoning already applied to policy-version reads in
 Checkpoint 20.
+
+## HR Document Template Versioning Foundation (Checkpoint 36)
+
+A new `hr_document_template_versions` table, added per your approved
+minimal schema — the same `Policy`/`PolicyVersion` template-and-instance
+shape from Checkpoint 20, applied to `HrDocumentTemplate` for the first
+time. See [`security.md`](security.md#hr-document-template-versioning-foundation-checkpoint-36)
+for the full security model and [`api.md`](api.md#hr-document-template-versions)
+for the route reference.
+
+**`content_template` moved entirely to the version; `title`/`description`/`document_type`
+deliberately did not — your explicit approved design, not the schema
+originally proposed.** A template's catalogue identity (what it's
+called, what kind of letter it is) doesn't change between wording
+revisions; only the wording itself does. Duplicating title/description/
+document_type onto the version (as first proposed) would have raised a
+"which is authoritative" question with no clean answer — keeping them
+template-only avoids the question entirely. This is a narrower design
+than `PolicyVersion` (which does carry its own `title`, distinct from
+`Policy.title`) — a deliberate simplification for this checkpoint, not
+an oversight.
+
+**Editing a draft version is a genuine new capability beyond what
+`PolicyVersion` supports — Policy versions are write-once-then-publish,
+with no `PATCH` endpoint for their content at all.** Your explicit
+requirement that HR/Admin users be able to edit a draft before
+publishing meant adding `PATCH /api/v1/hr-document-template-versions/{id}`,
+rejected (422) via `UpdateHrDocumentTemplateVersionRequest::withValidator()`
+unless the route-bound version's status is currently `draft` — the
+same "checked in withValidator() against the route-bound record's
+current status" pattern `UpdateLifecycleProcessRequest`/
+`UpdateLifecycleTaskRequest` already established in Checkpoint 33, not
+a new one invented here.
+
+**Publishing allows "republishing" an older archived version as a
+rollback — the same latitude `PolicyController::publish()` already
+has.** `HrDocumentTemplateVersionController::publish()` has no status
+guard on the *target* version (only draft versions are the realistic
+case, but nothing stops publishing an archived one back), demotes
+whichever version was previously published for the same template to
+`archived` (never deleted — every version stays queryable history), and
+points `hr_document_templates.current_version_id` at the newly
+published one. `published_at`/`published_by` are set here, server-side
+only, in the exact same request that performs the demotion — never
+accepted from client input.
+
+**One new permission, `hr_document_templates.publish`, mirrors
+`policies.publish` alongside `policies.update`.** Version list/create/
+edit/archive all reuse the existing `hr_document_templates.{view,update,delete}`
+keys — a version is the template's own history, not a separate resource
+with separate trust, the same reasoning that keeps `POST .../versions`
+gated by `.update` rather than `.create` (matching
+`PolicyController::storeVersion()`'s use of `policies.update`).
+
+**Single-step template creation was preserved, not replaced with
+Policy's two-step shape.** `POST /api/v1/hr-document-templates` still
+accepts `content_template` in the request body — your explicit approved
+choice, to avoid changing `Create.tsx`'s existing one-request UX. The
+controller creates the template row *and* its first version (`published`,
+`version_number: 1`) together; `content_template` is stripped from the
+validated array before the template itself is created (it was never a
+column there) and used only to create the version.
+
+**Generation resolves `current_version_id`, not a live `content_template`
+column that no longer exists.** `HrGeneratedDocumentController::store()`
+eager-loads `template.currentVersion`, requires it to be non-null *and*
+`published` (defense in depth beyond `GenerateHrDocumentRequest`'s own
+`whereNotNull('current_version_id')` check — guards the race where a
+version is archived between validation and this line), renders from
+`$version->content_template`, and stores `hr_document_template_version_id`
+alongside the existing `hr_document_template_id`. `rendered_content`
+remains generated once and never re-derived — exactly the guarantee
+that keeps `HrDocumentPdfRenderer` (Checkpoint 35) completely unaffected
+by this checkpoint: it only ever reads `rendered_content`, never the
+live template or its versions.
+
+**Backfill is a query-builder data migration, not an Eloquent one —
+deliberately.** `2026_07_06_150300_backfill_hr_document_template_versions.php`
+uses `DB::table(...)`, not the `HrDocumentTemplate`/`HrGeneratedDocument`
+model classes, because a data migration must stay correct against the
+schema as it existed *at that point in history*, independent of how the
+models evolve afterward (the models, as of this same checkpoint, no
+longer even have a `content_template` attribute to read). For every
+existing template it creates a `published` version 1 from the
+template's current `content_template` and points `current_version_id`
+at it; for every existing generated document referencing that template,
+it backfills `hr_document_template_version_id` to the same version —
+accurate, not a guess, since before this checkpoint a template only
+ever had one live `content_template`, so anything generated from it was
+necessarily generated from what is now "version 1". Verified directly
+(not just assumed) by rolling back the backfill + column-drop
+migrations, inserting a raw pre-checkpoint-shaped row, replaying them
+forward, and confirming the resulting version/reference/column state —
+see `docs/testing.md`.

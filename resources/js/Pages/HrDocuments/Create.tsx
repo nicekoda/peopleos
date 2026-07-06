@@ -17,9 +17,10 @@ import { HrDocumentTemplate, HrGeneratedDocument, HrGeneratedDocumentFormPayload
  * Employee detail page's "HR Documents" link) only pre-fills the form;
  * the actual employee_id sent is always whatever this form currently
  * holds, never trusted from the URL alone — same pattern as
- * Lifecycle/Create.tsx. Only active templates are offered — an inactive
- * template is rejected server-side (GenerateHrDocumentRequest) even if
- * somehow submitted.
+ * Lifecycle/Create.tsx. Only active templates *with a published version*
+ * are offered (Checkpoint 36) — an inactive template, or one with no
+ * current_version_id yet, is rejected server-side (GenerateHrDocumentRequest)
+ * even if somehow submitted.
  */
 export default function HrDocumentCreate() {
     const params = useMemo(() => new URLSearchParams(window.location.search), []);
@@ -47,7 +48,9 @@ export default function HrDocumentCreate() {
             });
 
         api.get<PaginatedResponse<HrDocumentTemplate>>('/hr-document-templates')
-            .then((response) => setTemplates(response.data.data.filter((template) => template.status === 'active')))
+            .then((response) => setTemplates(
+                response.data.data.filter((template) => template.status === 'active' && template.current_version_id !== null),
+            ))
             .catch((err) => {
                 const apiError = toApiError(err);
                 if (!redirectIfUnauthenticated(apiError)) {

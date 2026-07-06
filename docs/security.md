@@ -4319,6 +4319,152 @@ full browser engine.
 - DOCX export, if a real customer need for an editable format
   (as opposed to a final, non-editable letter) is shown.
 
+## HR Document Template Versioning Foundation (Checkpoint 36)
+
+Adds real version history to HR document templates — a new
+`hr_document_template_versions` table, per your approved minimal
+schema (template-only metadata, versioned `content_template` only). See
+[`architecture.md`](architecture.md#hr-document-template-versioning-foundation-checkpoint-36)
+for the schema/technical writeup; this section covers the security
+design.
+
+### Same three-layer tenant-isolation pattern as every other module
+
+`HrDocumentTemplateVersionController` follows the exact shape
+established since Checkpoint 6: `tenant.matches` middleware →
+`BelongsToTenant` global scope → an explicit controller-level
+tenant-ownership check on every action. Because `BelongsToTenant`'s
+global scope filters *every* query — including implicit route-model
+binding — a cross-tenant version ID 404s before a FormRequest's
+`withValidator()` ever runs against it, so
+`UpdateHrDocumentTemplateVersionRequest`'s draft-status check can never
+leak information about another tenant's version.
+
+### Permission model: one new key, everything else reused
+
+```
+hr_document_templates.view    — list/view versions (existing)
+hr_document_templates.update  — create a draft version, edit a draft (existing)
+hr_document_templates.publish — publish a version (new, Checkpoint 36)
+hr_document_templates.delete  — delete a draft-only version (existing)
+```
+
+A version is the template's own history, not a separate-trust
+resource — reusing the existing template permission set (per your
+explicit preference) rather than inventing `hr_document_template_versions.*`.
+`.publish` is the one new key, mirroring `policies.publish` alongside
+`policies.update`.
+
+| Role | view/create/update draft | publish | delete draft |
+|---|---|---|---|
+| Tenant Admin | ✓ (wildcard) | ✓ | ✓ |
+| HR Manager | ✓ | ✓ | ✓ |
+| HR Director | ✓ | ✓ | ✓ |
+| HR Officer | view only, no manage | — | — |
+| Auditor | view only | — | — |
+| Line Manager / Employee | — | — | — |
+
+HR Manager and HR Director both gain `.publish` alongside their
+existing full template-manage grant — consistent with them already
+holding every other template permission this checkpoint reuses. HR
+Officer/Auditor/Line Manager/Employee are unchanged from Checkpoint 34
+— HR Officer still never manages templates at all (view-only), so it
+gets no version-management or publish access either.
+
+### Draft-editable, published-immutable, by design — not by accident
+
+`UpdateHrDocumentTemplateVersionRequest::withValidator()` rejects (422)
+any edit unless the route-bound version's `status` is currently
+`draft` — a published or archived version's `content_template` is
+permanent from that point on. This is the one place this checkpoint
+goes beyond `PolicyVersion`'s precedent (which has no edit endpoint for
+version content at all, ever) — your explicit requirement that HR/Admin
+users be able to revise a draft before publishing it.
+
+### Publishing is a dedicated, minimal action — never a generic status field
+
+`published_at`/`published_by` are set only inside
+`HrDocumentTemplateVersionController::publish()`, server-side, in the
+same request that demotes the previously-published version (if any) to
+`archived`. Neither field is ever accepted from request input — tested
+directly (`test_user_with_permission_can_publish_a_draft_version`
+submits forged `published_at`/`published_by` values and asserts they're
+ignored). `hr_document_templates.current_version_id` is updated in the
+same request, so a template's "what's live right now" pointer and its
+version history's "what's published right now" flag can never disagree.
+
+### Old versions are never deleted — draft-only deletion is the one exception
+
+`DELETE /api/v1/hr-document-template-versions/{id}` soft-deletes only
+when the version's `status` is `draft` (422 otherwise) — an abandoned
+draft nothing has ever referenced is safe to discard, but anything that
+was ever `published` (now `archived`) is permanent history, per your
+explicit "do not delete old versions" rule. `version_number`'s
+auto-increment (`max('version_number')`, `withTrashed()`) accounts for
+a deleted draft's number never being reused, so the
+`unique(tenant_id, hr_document_template_id, version_number)` constraint
+is never at risk even after a discard.
+
+### Generation resolves the published version, with defense in depth
+
+`GenerateHrDocumentRequest` requires `hr_document_templates.current_version_id`
+to be non-null (in addition to the existing active-status check);
+`HrGeneratedDocumentController::store()` re-checks that the resolved
+version is genuinely `published` before rendering — the same two-layer
+"FormRequest necessary, controller re-verifies" pattern every other
+tenant-scoped write in this app uses, here guarding the race where a
+version is archived between validation and the render call.
+
+### PDF export is completely unaffected — by construction, not luck
+
+`HrDocumentPdfRenderer` (Checkpoint 35) only ever reads
+`hr_generated_documents.rendered_content` — never the live template or
+any version. Since this checkpoint doesn't touch `rendered_content` or
+the PDF renderer at all, every existing PDF-download test from
+Checkpoint 35 still passes unchanged, and a newly generated document's
+PDF is identical whether its template has one version or fifty.
+
+### Migration/backfill is verified directly, not just assumed correct
+
+`docs/testing.md` documents rolling back the backfill + column-drop
+migrations, inserting a raw pre-Checkpoint-36-shaped row (a template
+with `content_template` set directly, no `current_version_id`) via the
+query builder, replaying the migrations forward, and confirming: the
+template gets a `published` version 1 with matching content, a
+generated document referencing that template gets its
+`hr_document_template_version_id` backfilled to the same version, and
+`content_template` is genuinely gone from `hr_document_templates`
+afterward. This is stronger verification than a fresh `migrate:fresh --seed`
+alone provides, since this app's demo seed data deliberately contains
+no HR document templates (Checkpoint 34's "no demo data pre-seeded"
+choice) — a fresh install alone would exercise the backfill migration
+over zero rows.
+
+### Current limitations
+
+- No diff/comparison UI between versions — the Versions list shows
+  version number, status, and created date, not a wording diff.
+- No approval workflow before publishing — any user holding
+  `hr_document_templates.publish` can publish immediately; no
+  second-reviewer step exists.
+- Publishing an old archived version back (a rollback) is *possible*
+  (no status guard on the target) but has no dedicated "rollback" UI
+  affordance — it's the same Publish button, which is intentionally
+  simple rather than surfacing a separate, more explicit rollback
+  action.
+
+### Future
+
+- A diff/compare view between two versions, once real demand for it is
+  shown — explicitly out of scope for this foundation, per your
+  instruction.
+- An approval/review step before publishing, if a real
+  compliance/legal-review need is scoped — a distinct future decision
+  from this checkpoint's plain publish action.
+- Option C PDF generation (Checkpoint 35's future work) would attach to
+  a specific `hr_document_template_version_id` implicitly via the
+  generated document it's derived from — no new design needed there.
+
 ## Local Demo Credentials
 
 **Local development only — these are not real secrets and only work against your own local database.** Password comes from `SEED_USER_PASSWORD` in `.env` (not committed; `.env.example` has an empty placeholder).
@@ -4388,4 +4534,4 @@ data these six `uesl` logins see (Checkpoint 26's `DemoDataSeeder`).
 - **Departments/Positions/Locations (Checkpoint 32) have no hierarchy, no usage-count guard before archiving, and no bulk import/export** — see [Employee Lifecycle Foundation](#employee-lifecycle-foundation-checkpoint-32) above.
 - **Employment Type remains a fixed enum, not a tenant-configurable lookup table** (Checkpoint 32, deliberate scope decision) — see [Employee Lifecycle Foundation](#employee-lifecycle-foundation-checkpoint-32) above.
 - **Onboarding & Offboarding (Checkpoint 33) has no task templates, task dependencies/ordering, approval routing, notifications, IT/asset provisioning integration, document generation, e-signature, recruitment-to-employee conversion, or performance/probation review integration; Line Manager visibility is direct-reports only, not the full reporting tree** — see [Onboarding & Offboarding Foundation](#onboarding--offboarding-foundation-checkpoint-33) above.
-- **HR Documents & Letter Generation (Checkpoint 34) has no DOCX file, e-signature, approval workflow, automated sending, template versioning, bulk generation, or employee self-service download — PDF export was added in Checkpoint 35 (generate-on-demand, never stored)** — see [HR Documents & Letter Generation Foundation](#hr-documents--letter-generation-foundation-checkpoint-34) and [PDF Export Dependency Review & Prototype](#pdf-export-dependency-review--prototype-checkpoint-35) above.
+- **HR Documents & Letter Generation (Checkpoint 34) has no DOCX file, e-signature, approval workflow, automated sending, or bulk/employee-self-service generation — PDF export was added in Checkpoint 35 (generate-on-demand, never stored) and template version history in Checkpoint 36 (no diff/compare UI, no publish-approval workflow)** — see [HR Documents & Letter Generation Foundation](#hr-documents--letter-generation-foundation-checkpoint-34), [PDF Export Dependency Review & Prototype](#pdf-export-dependency-review--prototype-checkpoint-35), and [HR Document Template Versioning Foundation](#hr-document-template-versioning-foundation-checkpoint-36) above.

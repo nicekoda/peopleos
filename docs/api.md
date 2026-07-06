@@ -566,7 +566,9 @@ served through the `web` middleware group, session-based auth same as
 | `GET` | `/settings/locations/{location}/edit` | `auth`, `tenant.matches`, `permission:locations.update` | Edit form — passes only `locationId` as a prop; `404` if cross-tenant |
 | `GET` | `/settings/hr-document-templates` | `auth`, `tenant.matches`, `permission:hr_document_templates.view` | Real UI (Checkpoint 34) — list, fetched client-side from `/api/v1/hr-document-templates` |
 | `GET` | `/settings/hr-document-templates/create` | `auth`, `tenant.matches`, `permission:hr_document_templates.create` | Create form |
-| `GET` | `/settings/hr-document-templates/{hrDocumentTemplate}/edit` | `auth`, `tenant.matches`, `permission:hr_document_templates.update` | Edit form — passes only `hrDocumentTemplateId` as a prop; `404` if cross-tenant |
+| `GET` | `/settings/hr-document-templates/{hrDocumentTemplate}/edit` | `auth`, `tenant.matches`, `permission:hr_document_templates.update` | Edit form (metadata only, Checkpoint 36) — passes only `hrDocumentTemplateId` as a prop; `404` if cross-tenant. Embeds the Versions card (list/publish), fetched client-side from `/api/v1/hr-document-templates/{id}/versions` |
+| `GET` | `/settings/hr-document-templates/{hrDocumentTemplate}/versions/create` | `auth`, `tenant.matches`, `permission:hr_document_templates.update` | **New in Checkpoint 36** — create-draft-version form |
+| `GET` | `/settings/hr-document-template-versions/{hrDocumentTemplateVersion}/edit` | `auth`, `tenant.matches`, `permission:hr_document_templates.update` | **New in Checkpoint 36** — edit-draft-version form; passes only `hrDocumentTemplateVersionId` as a prop; loads read-only (disabled form) if the version isn't `draft`; `404` if cross-tenant |
 | `GET` | `/settings/security` | `auth`, `tenant.matches`, `permission:audit.view` | Real hub UI (Checkpoint 24) — links to Audit Logs |
 | `GET` | `/settings/security/audit-logs` | `auth`, `tenant.matches`, `permission:audit.view` | Real UI — list with filters, fetched client-side from `/api/v1/audit-logs` |
 | `GET` | `/settings/security/audit-logs/{auditLog}` | `auth`, `tenant.matches`, `permission:audit.view` | Detail — passes only `auditLogId` as a prop, never audit data; `404` if cross-tenant |
@@ -647,6 +649,21 @@ Employee detail page gains a permission-gated "HR Documents" link to
 `/hr-documents?employeeId={id}`, the same `?employeeId=` filter
 convention Checkpoint 33 established for `/lifecycle`. See
 `docs/security.md#hr-documents--letter-generation-foundation-checkpoint-34`.
+
+**HR Document Template Versioning Foundation UI (Checkpoint 36)**
+reuses the new `/api/v1/hr-document-templates/{id}/versions` and
+`/api/v1/hr-document-template-versions/{id}` endpoints documented
+above. The template Edit page's `content_template` textarea moved into
+two new pages (`VersionCreate`, `VersionEdit`) plus an inline "Versions"
+card (list, status badges, Publish button, "(current)" marker) on Edit
+itself — no dedicated template Show page was added, keeping this
+checkpoint's new UI surface to exactly what versioning needs.
+`VersionEdit` loads and displays a non-draft version read-only (form
+disabled, explanatory banner) rather than 404ing on a status it can't
+edit. The `/hr-documents/create` template picker now also filters to
+`current_version_id !== null`, so a template that's `active` but has
+never had anything published is never offered as a generation source.
+See `docs/security.md#hr-document-template-versioning-foundation-checkpoint-36`.
 
 ### Shared props (every Inertia response)
 
@@ -1180,7 +1197,7 @@ two resources' different trust levels — see `docs/security.md`.
 | `GET` | `/api/v1/hr-document-templates` | `hr_document_templates.view` | Paginated |
 | `POST` | `/api/v1/hr-document-templates` | `hr_document_templates.create` | `slug` auto-generated from `title` if omitted |
 | `GET` | `/api/v1/hr-document-templates/{hrDocumentTemplate}` | `hr_document_templates.view` | |
-| `PATCH` | `/api/v1/hr-document-templates/{hrDocumentTemplate}` | `hr_document_templates.update` | |
+| `PATCH` | `/api/v1/hr-document-templates/{hrDocumentTemplate}` | `hr_document_templates.update` | Metadata only (Checkpoint 36) — `content_template` is not a field here; see "HR Document Template Versions" below |
 | `DELETE` | `/api/v1/hr-document-templates/{hrDocumentTemplate}` | `hr_document_templates.delete` | Soft delete only ("archive") |
 | `GET` | `/api/v1/hr-generated-documents` | `hr_generated_documents.view` | Paginated; optional `?employee_id=` filter, validated against the current tenant (`404` if the employee belongs to another tenant) |
 | `POST` | `/api/v1/hr-generated-documents` | `hr_generated_documents.generate` | Both creates and renders in one step — see "Generation is a single action" below. Body: `{"employee_id": "...", "hr_document_template_id": "...", "title": "..." (optional)}` |
@@ -1196,17 +1213,21 @@ as the existing unused `audit.export` permission.
 
 ### Generation is a single action, not a two-step draft-then-render flow
 
-`POST /api/v1/hr-generated-documents` validates `employee_id` and
-`hr_document_template_id` both belong to the current tenant (and that
-the template is `active`) at the FormRequest layer, re-checks both in
-the controller, renders `content_template` via
+`POST /api/v1/hr-generated-documents` validates `employee_id` belongs
+to the current tenant and `hr_document_template_id` belongs to the
+current tenant, is `active`, *and has a published version*
+(`current_version_id` non-null — Checkpoint 36) at the FormRequest
+layer, re-checks both in the controller (including that the resolved
+version is genuinely `published`, guarding a race), renders the
+template's **current published version's** `content_template` via
 `App\Services\HrDocuments\PlaceholderRenderer::render()`, and persists
-the result as `status: "generated"` immediately — there is no
-intermediate unrendered "draft" state reachable through this API.
-`document_type`/`title` are copied from the template at generation time
-(a `title` override in the request body is optional), so editing or
-archiving a template later never changes a document already generated
-from it.
+the result as `status: "generated"` immediately, along with
+`hr_document_template_version_id` recording exactly which version was
+used — there is no intermediate unrendered "draft" state reachable
+through this API. `document_type`/`title` are copied from the template
+at generation time (a `title` override in the request body is
+optional), so editing/archiving a template or publishing a new version
+later never changes a document already generated.
 
 ### Placeholder allowlist
 
@@ -1232,8 +1253,8 @@ for the exact cases covered.
     "slug": "employment-letter",
     "description": null,
     "document_type": "employment_letter",
-    "content_template": "Dear {{employee.name}}, ...",
     "status": "active",
+    "current_version_id": "01h...",
     "created_at": "2026-07-05T00:00:00+00:00",
     "updated_at": "2026-07-05T00:00:00+00:00"
   }
@@ -1246,6 +1267,7 @@ for the exact cases covered.
     "employee_id": "01h...",
     "employee": { "id": "01h...", "full_name": "Jane Doe", "employee_number": "EMP-00042" },
     "hr_document_template_id": "01h...",
+    "hr_document_template_version_id": "01h...",
     "employee_document_id": null,
     "title": "Employment Letter",
     "document_type": "employment_letter",
@@ -1277,6 +1299,73 @@ for the full comparison against `barryvdh/laravel-dompdf`, `mpdf/mpdf`,
 and headless-browser options (`spatie/browsershot`, wkhtmltopdf), all
 of which were reviewed and rejected before this one was chosen.
 
+## HR Document Template Versions
+
+Checkpoint 36 — HR Document Template Versioning Foundation.
+`content_template` moved from `hr_document_templates` to a new
+`hr_document_template_versions` table — `title`/`description`/`document_type`
+deliberately stay template-only (your approved design). Reuses the
+existing `hr_document_templates.*` permission set, plus one new key,
+`hr_document_templates.publish` — see `docs/security.md`.
+
+| Method | Path | Permission | Notes |
+|---|---|---|---|
+| `GET` | `/api/v1/hr-document-templates/{hrDocumentTemplate}/versions` | `hr_document_templates.view` | Paginated, scoped through `$template->versions()` (never a free query by template ID) — same pattern as `GET /policies/{policy}/versions` |
+| `POST` | `/api/v1/hr-document-templates/{hrDocumentTemplate}/versions` | `hr_document_templates.update` | Always creates a `draft`; `version_number` auto-computed (`max(...) + 1`, including soft-deleted versions, so a discarded draft's number is never reused) |
+| `GET` | `/api/v1/hr-document-template-versions/{hrDocumentTemplateVersion}` | `hr_document_templates.view` | |
+| `PATCH` | `/api/v1/hr-document-template-versions/{hrDocumentTemplateVersion}` | `hr_document_templates.update` | `content_template` only; rejected (`422`) unless the version is currently `draft` |
+| `POST` | `/api/v1/hr-document-template-versions/{hrDocumentTemplateVersion}/publish` | `hr_document_templates.publish` | Sets `status: published`, `published_at`/`published_by` (server-side only), demotes the template's previously-published version (if any) to `archived`, and updates `hr_document_templates.current_version_id` |
+| `DELETE` | `/api/v1/hr-document-template-versions/{hrDocumentTemplateVersion}` | `hr_document_templates.delete` | Soft delete — only when `status` is `draft` (`422` for `published`/`archived`); old versions are never deleted |
+
+### Response shape
+
+```json
+// GET /hr-document-templates/{id}/versions
+{
+  "data": [
+    {
+      "id": "01h...",
+      "hr_document_template_id": "01h...",
+      "version_number": 2,
+      "content_template": "Dear {{employee.name}}, revised wording...",
+      "status": "draft",
+      "published_at": null,
+      "published_by": null,
+      "created_at": "2026-07-06T00:00:00+00:00",
+      "updated_at": "2026-07-06T00:00:00+00:00"
+    },
+    {
+      "id": "01h...",
+      "hr_document_template_id": "01h...",
+      "version_number": 1,
+      "content_template": "Dear {{employee.name}}, original wording...",
+      "status": "published",
+      "published_at": "2026-07-05T00:00:00+00:00",
+      "published_by": 7,
+      "created_at": "2026-07-05T00:00:00+00:00",
+      "updated_at": "2026-07-05T00:00:00+00:00"
+    }
+  ]
+}
+```
+
+### Backfill (existing installs)
+
+Three schema migrations plus one data migration
+(`2026_07_06_150300_backfill_hr_document_template_versions.php`, using
+the query builder directly, not the Eloquent model classes) ran once,
+in this checkpoint's deploy: every existing `HrDocumentTemplate` gets a
+`published` version 1 from its prior `content_template`, with
+`current_version_id` set to match; every existing `HrGeneratedDocument`
+gets `hr_document_template_version_id` backfilled to that same
+version — accurate, not a guess, since before this checkpoint a
+template only ever had one live `content_template`. `content_template`
+is then dropped from `hr_document_templates`. See `docs/testing.md` for
+how this was verified directly (rolling the migrations back, inserting
+raw pre-checkpoint-shaped data, and replaying them forward) rather than
+just assumed correct from a fresh install (which has no HR document
+templates in its seed data to backfill in the first place).
+
 ## Current limitations
 
 - No export endpoint (`employees.export` permission is seeded but unused — explicitly out of scope this checkpoint).
@@ -1295,7 +1384,7 @@ of which were reviewed and rejected before this one was chosen.
 - Session-based auth only — see "Authentication" above for the full future Sanctum/token plan.
 - No task templates, task dependencies/ordering, approval routing, notifications, or reminders for lifecycle processes/tasks (Checkpoint 33) — see `docs/security.md#onboarding--offboarding-foundation-checkpoint-33`.
 - No standalone `GET` for a single lifecycle task — see "Lifecycle Processes & Tasks" above.
-- No DOCX file generation, e-signature, approval workflow, automated sending, template versioning, bulk generation, or employee self-service download for HR Documents (Checkpoint 34/35) — see `docs/security.md#hr-documents--letter-generation-foundation-checkpoint-34`. PDF export exists (Checkpoint 35) but is generate-on-demand only — every download re-renders from `rendered_content`, nothing is ever persisted.
+- No DOCX file generation, e-signature, approval workflow, automated sending, bulk generation, or employee self-service download for HR Documents (Checkpoint 34/35/36) — see `docs/security.md#hr-documents--letter-generation-foundation-checkpoint-34`. PDF export exists (Checkpoint 35) but is generate-on-demand only — every download re-renders from `rendered_content`, nothing is ever persisted. Template version history exists (Checkpoint 36) but has no diff/compare UI and no publish-approval workflow.
 
 ## Future
 
@@ -1328,5 +1417,6 @@ of which were reviewed and rejected before this one was chosen.
 - A general tenant-level (non-employee-scoped) document table — would resolve the `employee_document_id` schema mismatch on `policy_versions` cleanly.
 - Persisted PDF storage for HR Documents (Option C — generate once, save to the private disk, attach via the existing, still-unused `hr_generated_documents.employee_document_id` column), if re-downloading identical bytes without re-rendering or Document Repository integration is ever needed. On-demand generation (Option B) shipped in Checkpoint 35 — see above.
 - DOCX file generation for HR Documents, if a real need for an editable (not just final) format is shown.
+- A diff/compare view between two template versions, and an approval/review step before publishing — both explicitly out of scope for Checkpoint 36's versioning foundation.
 - Template versioning, e-signature, and approval-routing workflows for HR Documents, once a real need is scoped — deliberately not built in Checkpoint 34.
 - Bulk HR document generation (e.g., the same letter for a whole department) and employee self-service download.

@@ -37,9 +37,15 @@ class GenerateHrDocumentRequest extends FormRequest
             ],
             'hr_document_template_id' => [
                 'required', 'string',
+                // Checkpoint 36 — whereNotNull('current_version_id') means
+                // an active template that's never had a version published
+                // (e.g. brand new, no publish yet) is correctly rejected
+                // here (422) rather than reaching the controller and
+                // failing there instead.
                 Rule::exists('hr_document_templates', 'id')->where(fn ($q) => $q
                     ->where('tenant_id', $tenantId)
                     ->where('status', HrDocumentTemplateStatus::Active->value)
+                    ->whereNotNull('current_version_id')
                     ->whereNull('deleted_at')),
             ],
             // Optional override — defaults to the template's own title if

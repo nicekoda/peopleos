@@ -10,6 +10,7 @@ use App\Http\Controllers\Api\V1\EmployeeHierarchyController;
 use App\Http\Controllers\Api\V1\EmployeeManagerController;
 use App\Http\Controllers\Api\V1\EmployeeUserLinkController;
 use App\Http\Controllers\Api\V1\HrDocumentTemplateController;
+use App\Http\Controllers\Api\V1\HrDocumentTemplateVersionController;
 use App\Http\Controllers\Api\V1\HrGeneratedDocumentController;
 use App\Http\Controllers\Api\V1\LeaveBalanceController;
 use App\Http\Controllers\Api\V1\LeaveRequestController;
@@ -249,6 +250,19 @@ Route::middleware(['auth', 'tenant.matches'])->prefix('api/v1')->group(function 
     Route::get('hr-document-templates/{hrDocumentTemplate}', [HrDocumentTemplateController::class, 'show'])->middleware('permission:hr_document_templates.view');
     Route::patch('hr-document-templates/{hrDocumentTemplate}', [HrDocumentTemplateController::class, 'update'])->middleware('permission:hr_document_templates.update');
     Route::delete('hr-document-templates/{hrDocumentTemplate}', [HrDocumentTemplateController::class, 'destroy'])->middleware('permission:hr_document_templates.delete');
+
+    // Checkpoint 36 — HR Document Template Versioning Foundation.
+    // Version creation/editing reuses hr_document_templates.update (same
+    // reasoning PolicyController::storeVersion uses policies.update, not
+    // a separate permission — a version is the template's own history,
+    // not a distinct resource with distinct trust). Publishing gets its
+    // one new permission, hr_document_templates.publish.
+    Route::get('hr-document-templates/{hrDocumentTemplate}/versions', [HrDocumentTemplateVersionController::class, 'index'])->middleware('permission:hr_document_templates.view');
+    Route::post('hr-document-templates/{hrDocumentTemplate}/versions', [HrDocumentTemplateVersionController::class, 'store'])->middleware('permission:hr_document_templates.update');
+    Route::get('hr-document-template-versions/{hrDocumentTemplateVersion}', [HrDocumentTemplateVersionController::class, 'show'])->middleware('permission:hr_document_templates.view');
+    Route::patch('hr-document-template-versions/{hrDocumentTemplateVersion}', [HrDocumentTemplateVersionController::class, 'update'])->middleware('permission:hr_document_templates.update');
+    Route::post('hr-document-template-versions/{hrDocumentTemplateVersion}/publish', [HrDocumentTemplateVersionController::class, 'publish'])->middleware('permission:hr_document_templates.publish');
+    Route::delete('hr-document-template-versions/{hrDocumentTemplateVersion}', [HrDocumentTemplateVersionController::class, 'destroy'])->middleware('permission:hr_document_templates.delete');
 
     // store() both creates and renders in one step ("generate") — there
     // is no separate draft-without-rendering state in this checkpoint,

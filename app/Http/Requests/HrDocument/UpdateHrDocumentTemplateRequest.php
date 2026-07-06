@@ -21,7 +21,10 @@ class UpdateHrDocumentTemplateRequest extends FormRequest
      * PATCH semantics: every field optional. Slug is never
      * auto-regenerated from a changed title here — an existing slug is a
      * stable identifier; it only changes if explicitly provided. Same
-     * pattern as UpdateDocumentCategoryRequest.
+     * pattern as UpdateDocumentCategoryRequest. No `content_template`
+     * field — content moved to HrDocumentTemplateVersion in Checkpoint
+     * 36; use POST .../versions and PATCH .../hr-document-template-versions/{id}
+     * to change wording.
      *
      * @return array<string, mixed>
      */
@@ -46,7 +49,6 @@ class UpdateHrDocumentTemplateRequest extends FormRequest
             ],
             'description' => ['nullable', 'string', 'max:1000'],
             'document_type' => ['sometimes', new Enum(HrDocumentType::class)],
-            'content_template' => ['sometimes', 'required', 'string', 'max:20000'],
             'status' => ['sometimes', new Enum(HrDocumentTemplateStatus::class)],
         ];
     }

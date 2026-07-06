@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api\V1;
 
+use App\Enums\HrDocumentTemplateVersionStatus;
 use App\Enums\HrGeneratedDocumentStatus;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\HrDocument\GenerateHrDocumentRequest;
@@ -54,15 +55,27 @@ class HrGeneratedDocumentController extends Controller
         $this->ensureEmployeeBelongsToCurrentTenant($employee);
 
         /** @var HrDocumentTemplate $template */
-        $template = HrDocumentTemplate::query()->findOrFail($validated['hr_document_template_id']);
+        $template = HrDocumentTemplate::query()->with('currentVersion')->findOrFail($validated['hr_document_template_id']);
         $this->ensureTemplateBelongsToCurrentTenant($template);
 
-        $renderedContent = PlaceholderRenderer::render($template->content_template, $employee, $tenant);
+        // Defense in depth beyond GenerateHrDocumentRequest's
+        // whereNotNull('current_version_id') check — guards the race
+        // where a version is archived/unpublished between validation and
+        // this line.
+        $version = $template->currentVersion;
+        abort_unless(
+            $version && $version->status === HrDocumentTemplateVersionStatus::Published,
+            422,
+            'This template has no published version to generate from.',
+        );
+
+        $renderedContent = PlaceholderRenderer::render($version->content_template, $employee, $tenant);
 
         $document = HrGeneratedDocument::query()->create([
             'tenant_id' => $tenant->id,
             'employee_id' => $employee->id,
             'hr_document_template_id' => $template->id,
+            'hr_document_template_version_id' => $version->id,
             'title' => $validated['title'] ?? $template->title,
             'document_type' => $template->document_type,
             'status' => HrGeneratedDocumentStatus::Generated,

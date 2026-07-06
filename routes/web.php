@@ -199,6 +199,11 @@ Route::middleware(['auth', 'tenant.matches'])->group(function () {
         ->middleware('permission:hr_document_templates.create')->name('settings.hr-document-templates.create');
     Route::get('settings/hr-document-templates/{hrDocumentTemplate}/edit', [HrDocumentTemplateUiController::class, 'edit'])
         ->middleware('permission:hr_document_templates.update')->name('settings.hr-document-templates.edit');
+    // Checkpoint 36 — HR Document Template Versioning Foundation.
+    Route::get('settings/hr-document-templates/{hrDocumentTemplate}/versions/create', [HrDocumentTemplateUiController::class, 'versionCreate'])
+        ->middleware('permission:hr_document_templates.update')->name('settings.hr-document-templates.versions.create');
+    Route::get('settings/hr-document-template-versions/{hrDocumentTemplateVersion}/edit', [HrDocumentTemplateUiController::class, 'versionEdit'])
+        ->middleware('permission:hr_document_templates.update')->name('settings.hr-document-template-versions.edit');
 
     // Employee Lifecycle Foundation (Checkpoint 32) — Departments/
     // Positions/Locations Admin UI, same thin-page-route pattern. 'create'

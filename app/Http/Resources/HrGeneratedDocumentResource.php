@@ -29,6 +29,7 @@ class HrGeneratedDocumentResource extends JsonResource
                 'employee_number' => $this->employee->employee_number,
             ]),
             'hr_document_template_id' => $this->hr_document_template_id,
+            'hr_document_template_version_id' => $this->hr_document_template_version_id,
             'employee_document_id' => $this->employee_document_id,
             'title' => $this->title,
             'document_type' => $this->document_type->value,

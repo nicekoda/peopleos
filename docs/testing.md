@@ -1402,6 +1402,51 @@ etc., left unset by the factory) appeared as a spurious "new" key in
 the diff even though nothing had actually changed. Fixed by capturing
 `$before` from a fresh re-fetch too, not the in-memory instance.
 
+## Verifying a data migration by actually replaying it against pre-checkpoint data, not just trusting a fresh install (Checkpoint 36)
+
+A `migrate:fresh --seed` alone doesn't meaningfully exercise
+`2026_07_06_150300_backfill_hr_document_template_versions.php` — this
+app's demo seed data deliberately contains zero HR document templates
+(Checkpoint 34's "no demo data pre-seeded" choice), so a fresh install
+runs the backfill loop over an empty table and proves nothing about its
+actual logic. Verified instead by: rolling back the backfill and
+column-drop migrations two steps (`migrate:rollback --step=2`), which
+restores the pre-Checkpoint-36 schema shape (`content_template` back on
+`hr_document_templates`, `current_version_id`/`hr_document_template_version_id`
+present but unused); inserting a raw template row via `DB::table()`
+with `content_template` set directly and no `current_version_id` (the
+exact shape every template had before this checkpoint), plus a
+generated document referencing it; replaying the two migrations forward
+(`migrate`); and confirming via `tinker` that the template got a
+`published` version 1 with matching content, the generated document's
+`hr_document_template_version_id` was backfilled to that same version,
+and `content_template` was genuinely dropped from `hr_document_templates`
+afterward. This is real verification of the migration's actual behavior
+against actual pre-checkpoint data shape, not an assumption from
+reading the migration file.
+
+`HrDocumentTemplateVersionApiTest` (24 tests) and 6 new tests appended
+to `HrDocumentUiTest` cover the rest: guest/permission gating in both
+directions, tenant isolation (including that a cross-tenant version ID
+404s before `UpdateHrDocumentTemplateVersionRequest`'s `withValidator()`
+ever runs, since `BelongsToTenant`'s global scope already filters route
+model binding itself), Platform Super Admin blocked, draft-editable/
+published-immutable (both directions — a draft edit succeeds, a
+published or archived edit 422s), publish smuggled-field rejection
+(`published_at`/`published_by` forged in the request body are silently
+ignored — set server-side only), old-version-never-deleted (archived
+after a publish, `deleted_at` still null), draft-only deletion (a draft
+deletes, a published version 422s), resource field safety, and audit
+logging for create/update/publish/archive with an explicit assertion
+that a marker string in `content_template` never appears in the
+resulting audit log row. Three pre-existing Checkpoint 34 tests that
+called `HrDocumentTemplate::factory()->create(['content_template' => ...])`
+needed a small fixture fix (the column moved to the version table) —
+not a real bug, just tests written against the old shape; fixed by
+setting content through `$template->currentVersion->update([...])`
+instead, since the factory's `configure()` hook already creates a
+published version 1 by default for every template.
+
 ## Known limitations
 
 - No test coverage reporting configured yet.

@@ -23,14 +23,18 @@ class HrDocumentTemplate extends Model
      * created_by/updated_by are never accepted from *request* input, but
      * must be fillable for the controller's trusted, explicit assignment
      * to actually persist — same reasoning as DocumentCategory.
+     * current_version_id is set only by the controller (on create, and by
+     * HrDocumentTemplateVersionController::publish()), never accepted from
+     * request input. content_template moved to HrDocumentTemplateVersion
+     * in Checkpoint 36 — see docs/architecture.md.
      */
     protected $fillable = [
         'title',
         'slug',
         'description',
         'document_type',
-        'content_template',
         'status',
+        'current_version_id',
         'created_by',
         'updated_by',
     ];
@@ -46,6 +50,16 @@ class HrDocumentTemplate extends Model
     public function generatedDocuments(): HasMany
     {
         return $this->hasMany(HrGeneratedDocument::class);
+    }
+
+    public function versions(): HasMany
+    {
+        return $this->hasMany(HrDocumentTemplateVersion::class);
+    }
+
+    public function currentVersion(): BelongsTo
+    {
+        return $this->belongsTo(HrDocumentTemplateVersion::class, 'current_version_id');
     }
 
     public function createdBy(): BelongsTo

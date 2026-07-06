@@ -135,9 +135,11 @@ class RoleSeeder extends Seeder
             'lifecycle.assign_task', 'lifecycle.complete_task',
             // Checkpoint 34 — HR Documents & Letter Generation Foundation.
             // Full manage rights on both templates and generated
-            // documents, per your explicit approved mapping.
+            // documents, per your explicit approved mapping. .publish
+            // added Checkpoint 36 (template version publishing) — same
+            // "full manage" tier as create/update/delete.
             'hr_document_templates.view', 'hr_document_templates.create',
-            'hr_document_templates.update', 'hr_document_templates.delete',
+            'hr_document_templates.update', 'hr_document_templates.delete', 'hr_document_templates.publish',
             'hr_generated_documents.view', 'hr_generated_documents.create',
             'hr_generated_documents.update', 'hr_generated_documents.delete', 'hr_generated_documents.generate',
         ]);
@@ -149,7 +151,7 @@ class RoleSeeder extends Seeder
         // module stays untouched/empty for this role.
         $this->grantByKeys($roles['HR Director'], [
             'hr_document_templates.view', 'hr_document_templates.create',
-            'hr_document_templates.update', 'hr_document_templates.delete',
+            'hr_document_templates.update', 'hr_document_templates.delete', 'hr_document_templates.publish',
             'hr_generated_documents.view', 'hr_generated_documents.create',
             'hr_generated_documents.update', 'hr_generated_documents.delete', 'hr_generated_documents.generate',
         ]);

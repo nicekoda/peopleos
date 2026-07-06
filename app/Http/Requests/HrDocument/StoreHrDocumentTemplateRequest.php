@@ -47,8 +47,12 @@ class StoreHrDocumentTemplateRequest extends FormRequest
             ],
             'description' => ['nullable', 'string', 'max:1000'],
             'document_type' => ['required', new Enum(HrDocumentType::class)],
-            // Plain text/markdown-like only, no HTML rendering — see
-            // App\Services\HrDocuments\PlaceholderRenderer.
+            // Not a column on hr_document_templates itself (Checkpoint 36
+            // moved content to HrDocumentTemplateVersion) — the controller
+            // uses this to create the template's first (published) version
+            // in the same request, preserving the single-step create UX
+            // approved for this checkpoint. Plain text/markdown-like only,
+            // no HTML rendering — see App\Services\HrDocuments\PlaceholderRenderer.
             'content_template' => ['required', 'string', 'max:20000'],
             'status' => ['nullable', new Enum(HrDocumentTemplateStatus::class)],
         ];

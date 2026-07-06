@@ -29,6 +29,7 @@ class HrGeneratedDocument extends Model
     protected $fillable = [
         'employee_id',
         'hr_document_template_id',
+        'hr_document_template_version_id',
         'employee_document_id',
         'title',
         'document_type',
@@ -57,6 +58,11 @@ class HrGeneratedDocument extends Model
     public function template(): BelongsTo
     {
         return $this->belongsTo(HrDocumentTemplate::class, 'hr_document_template_id');
+    }
+
+    public function templateVersion(): BelongsTo
+    {
+        return $this->belongsTo(HrDocumentTemplateVersion::class, 'hr_document_template_version_id');
     }
 
     public function document(): BelongsTo

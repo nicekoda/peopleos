@@ -3,11 +3,13 @@
 namespace App\Http\Controllers\Api\V1;
 
 use App\Enums\HrDocumentTemplateStatus;
+use App\Enums\HrDocumentTemplateVersionStatus;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\HrDocument\StoreHrDocumentTemplateRequest;
 use App\Http\Requests\HrDocument\UpdateHrDocumentTemplateRequest;
 use App\Http\Resources\HrDocumentTemplateResource;
 use App\Models\HrDocumentTemplate;
+use App\Models\HrDocumentTemplateVersion;
 use App\Models\Tenant;
 use App\Services\Audit\AuditLogger;
 use Illuminate\Http\JsonResponse;
@@ -23,15 +25,44 @@ class HrDocumentTemplateController extends Controller
         return HrDocumentTemplateResource::collection($templates);
     }
 
+    /**
+     * Checkpoint 36 — approved single-step create: this request still
+     * accepts content_template (preserving the existing Create.tsx UX
+     * unchanged) but it's no longer a column on hr_document_templates
+     * itself; the controller creates the template row and its first,
+     * already-published version together, in one transaction-free but
+     * atomic-enough sequence (both writes happen before any response is
+     * returned; a failure between them would leave an orphaned template
+     * with no current_version_id, the same "active but unpublished" edge
+     * case GenerateHrDocumentRequest already guards against).
+     */
     public function store(StoreHrDocumentTemplateRequest $request): JsonResponse
     {
         $validated = $request->validated();
+        $contentTemplate = $validated['content_template'];
+        unset($validated['content_template']);
+
         $validated['status'] ??= HrDocumentTemplateStatus::Active->value;
-        $validated['tenant_id'] = app(Tenant::class)->id;
+        $tenantId = app(Tenant::class)->id;
+        $validated['tenant_id'] = $tenantId;
         $validated['created_by'] = $request->user()->id;
         $validated['updated_by'] = $request->user()->id;
 
         $template = HrDocumentTemplate::query()->create($validated);
+
+        $version = HrDocumentTemplateVersion::query()->create([
+            'tenant_id' => $tenantId,
+            'hr_document_template_id' => $template->id,
+            'version_number' => 1,
+            'content_template' => $contentTemplate,
+            'status' => HrDocumentTemplateVersionStatus::Published,
+            'published_by' => $request->user()->id,
+            'published_at' => now(),
+            'created_by' => $request->user()->id,
+            'updated_by' => $request->user()->id,
+        ]);
+
+        $template->update(['current_version_id' => $version->id]);
 
         AuditLogger::logFor(
             actor: $request->user(),
@@ -42,11 +73,12 @@ class HrDocumentTemplateController extends Controller
             auditableId: $template->id,
             description: "HR document template '{$template->title}' created.",
             newValues: $template->only(['title', 'slug', 'document_type', 'status']),
+            metadata: ['current_version_id' => $version->id, 'version_number' => 1],
             ipAddress: $request->ip(),
             userAgent: $request->userAgent(),
         );
 
-        return (new HrDocumentTemplateResource($template))->response()->setStatusCode(201);
+        return (new HrDocumentTemplateResource($template->fresh()))->response()->setStatusCode(201);
     }
 
     public function show(Request $request, HrDocumentTemplate $hrDocumentTemplate): HrDocumentTemplateResource

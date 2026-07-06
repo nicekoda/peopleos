@@ -46,7 +46,12 @@ class PermissionSeeder extends Seeder
             // a route yet this checkpoint — the only write path is
             // generation (.generate), which both creates and renders in
             // one step. Same "seeded ahead of use" posture as audit.export.
-            'hr_document_templates' => ['view', 'create', 'update', 'delete'],
+            // Checkpoint 36 — .publish added for template version
+            // publishing (mirrors policies.publish alongside
+            // policies.update); version list/create/edit/archive reuse
+            // the existing view/update/delete keys — a version is the
+            // template's own history, not a separate-trust resource.
+            'hr_document_templates' => ['view', 'create', 'update', 'delete', 'publish'],
             'hr_generated_documents' => ['view', 'create', 'update', 'delete', 'generate'],
         ];
 

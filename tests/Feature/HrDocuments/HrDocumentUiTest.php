@@ -188,4 +188,70 @@ class HrDocumentUiTest extends TestCase
         $page = $response->viewData('page');
         $this->assertContains('hr_generated_documents.view', $page['props']['auth']['user']['permissions']);
     }
+
+    // Checkpoint 36 — HR Document Template Versioning Foundation UI.
+    public function test_guest_cannot_access_template_version_ui(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $template = HrDocumentTemplate::factory()->create(['tenant_id' => $tenant->id]);
+        $version = $template->currentVersion;
+
+        $this->get($this->url($tenant, "settings/hr-document-templates/{$template->id}/versions/create"))
+            ->assertRedirect(route('login'));
+        $this->get($this->url($tenant, "settings/hr-document-template-versions/{$version->id}/edit"))
+            ->assertRedirect(route('login'));
+    }
+
+    public function test_user_without_permission_cannot_access_template_version_ui(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $user = User::factory()->create(['tenant_id' => $tenant->id]);
+        $template = HrDocumentTemplate::factory()->create(['tenant_id' => $tenant->id]);
+        $version = $template->currentVersion;
+
+        $this->actingAs($user)->get($this->url($tenant, "settings/hr-document-templates/{$template->id}/versions/create"))->assertForbidden();
+        $this->actingAs($user)->get($this->url($tenant, "settings/hr-document-template-versions/{$version->id}/edit"))->assertForbidden();
+    }
+
+    public function test_user_with_permission_can_access_template_version_ui(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $user = $this->userWithPermissions($tenant, 'hr_document_templates.update');
+        $template = HrDocumentTemplate::factory()->create(['tenant_id' => $tenant->id]);
+        $version = $template->currentVersion;
+
+        $this->actingAs($user)->get($this->url($tenant, "settings/hr-document-templates/{$template->id}/versions/create"))
+            ->assertOk()->assertInertia(fn ($page) => $page->component('Settings/HrDocumentTemplates/VersionCreate')->where('hrDocumentTemplateId', $template->id));
+        $this->actingAs($user)->get($this->url($tenant, "settings/hr-document-template-versions/{$version->id}/edit"))
+            ->assertOk()->assertInertia(fn ($page) => $page->component('Settings/HrDocumentTemplates/VersionEdit')->where('hrDocumentTemplateVersionId', $version->id));
+    }
+
+    public function test_cross_tenant_version_id_returns_404_on_version_edit_page(): void
+    {
+        $tenantA = Tenant::factory()->create();
+        $tenantB = Tenant::factory()->create();
+        $userA = $this->userWithPermissions($tenantA, 'hr_document_templates.update');
+        $templateB = HrDocumentTemplate::factory()->create(['tenant_id' => $tenantB->id]);
+        $versionB = $templateB->currentVersion;
+
+        $this->actingAs($userA)->get($this->url($tenantA, "settings/hr-document-template-versions/{$versionB->id}/edit"))->assertNotFound();
+    }
+
+    public function test_version_edit_page_props_contain_only_version_id(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $user = $this->userWithPermissions($tenant, 'hr_document_templates.update');
+        $template = HrDocumentTemplate::factory()->create(['tenant_id' => $tenant->id]);
+        $version = $template->currentVersion;
+        $version->update(['content_template' => 'CONFIDENTIAL-VERSION-CONTENT']);
+
+        $response = $this->actingAs($user)->get($this->url($tenant, "settings/hr-document-template-versions/{$version->id}/edit"));
+
+        $page = $response->viewData('page');
+        $this->assertSame(
+            ['hrDocumentTemplateVersionId'],
+            array_keys(array_diff_key($page['props'], ['errors' => 1, 'auth' => 1, 'tenant' => 1])),
+        );
+        $this->assertStringNotContainsString('CONFIDENTIAL-VERSION-CONTENT', json_encode($page['props']));
+    }
 }

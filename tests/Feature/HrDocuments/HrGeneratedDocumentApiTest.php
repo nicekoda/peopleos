@@ -72,11 +72,8 @@ class HrGeneratedDocumentApiTest extends TestCase
         $tenant = Tenant::factory()->create(['name' => 'Acme Corp']);
         $user = $this->userWithPermissions($tenant, 'hr_generated_documents.generate');
         $employee = Employee::factory()->create(['tenant_id' => $tenant->id, 'first_name' => 'Jane', 'last_name' => 'Doe']);
-        $template = HrDocumentTemplate::factory()->create([
-            'tenant_id' => $tenant->id,
-            'title' => 'Employment Letter',
-            'content_template' => 'Dear {{employee.name}}, welcome to {{tenant.name}}.',
-        ]);
+        $template = HrDocumentTemplate::factory()->create(['tenant_id' => $tenant->id, 'title' => 'Employment Letter']);
+        $template->currentVersion->update(['content_template' => 'Dear {{employee.name}}, welcome to {{tenant.name}}.']);
 
         $response = $this->actingAs($user)->postJson($this->url($tenant, 'hr-generated-documents'), [
             'employee_id' => $employee->id,
@@ -148,10 +145,8 @@ class HrGeneratedDocumentApiTest extends TestCase
         $tenant = Tenant::factory()->create(['name' => 'Acme Corp']);
         $user = $this->userWithPermissions($tenant, 'hr_generated_documents.generate');
         $employee = Employee::factory()->create(['tenant_id' => $tenant->id, 'first_name' => 'Jane', 'last_name' => 'Doe']);
-        $template = HrDocumentTemplate::factory()->create([
-            'tenant_id' => $tenant->id,
-            'content_template' => 'Dear {{employee.name}}, welcome to {{tenant.name}}. {{employee.unknown}}',
-        ]);
+        $template = HrDocumentTemplate::factory()->create(['tenant_id' => $tenant->id]);
+        $template->currentVersion->update(['content_template' => 'Dear {{employee.name}}, welcome to {{tenant.name}}. {{employee.unknown}}']);
 
         $response = $this->actingAs($user)->postJson($this->url($tenant, 'hr-generated-documents'), [
             'employee_id' => $employee->id,
@@ -188,10 +183,8 @@ class HrGeneratedDocumentApiTest extends TestCase
         $tenant = Tenant::factory()->create();
         $user = $this->userWithPermissions($tenant, 'hr_generated_documents.generate');
         $employee = Employee::factory()->create(['tenant_id' => $tenant->id]);
-        $template = HrDocumentTemplate::factory()->create([
-            'tenant_id' => $tenant->id,
-            'content_template' => 'CONFIDENTIAL-MARKER-TEXT {{employee.name}}',
-        ]);
+        $template = HrDocumentTemplate::factory()->create(['tenant_id' => $tenant->id]);
+        $template->currentVersion->update(['content_template' => 'CONFIDENTIAL-MARKER-TEXT {{employee.name}}']);
 
         $this->actingAs($user)->postJson($this->url($tenant, 'hr-generated-documents'), [
             'employee_id' => $employee->id,

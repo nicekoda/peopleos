@@ -10,7 +10,9 @@ use Illuminate\Http\Resources\Json\JsonResource;
  * `deleted_at` — same "narrow, internal fields excluded" convention as
  * DocumentCategoryResource. Tenant isolation is enforced by
  * BelongsToTenant + the controller's explicit ownership check, not by
- * anything in this resource.
+ * anything in this resource. `content_template` moved to
+ * HrDocumentTemplateVersion in Checkpoint 36 — see
+ * `current_version_id`/`GET .../versions` instead.
  */
 class HrDocumentTemplateResource extends JsonResource
 {
@@ -25,8 +27,8 @@ class HrDocumentTemplateResource extends JsonResource
             'slug' => $this->slug,
             'description' => $this->description,
             'document_type' => $this->document_type->value,
-            'content_template' => $this->content_template,
             'status' => $this->status->value,
+            'current_version_id' => $this->current_version_id,
             'created_at' => $this->created_at?->toIso8601String(),
             'updated_at' => $this->updated_at?->toIso8601String(),
         ];

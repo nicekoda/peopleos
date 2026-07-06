@@ -10,18 +10,12 @@ import PermissionGate from '@/Components/PermissionGate';
 import { InputField } from '@/Components/FormField';
 import { api, toApiError, redirectIfUnauthenticated, ApiError } from '@/lib/api';
 import { downloadHrGeneratedDocumentPdf } from '@/lib/download';
-import { HR_DOCUMENT_TYPE_LABELS, HrGeneratedDocument, HrGeneratedDocumentStatus } from '@/types/hrDocument';
+import { HR_DOCUMENT_TYPE_LABELS, HR_GENERATED_DOCUMENT_STATUS_TONE, HrGeneratedDocument } from '@/types/hrDocument';
 import { PageProps } from '@/types';
 
 interface ShowProps extends PageProps {
     hrGeneratedDocumentId: string;
 }
-
-const statusTone: Record<HrGeneratedDocumentStatus, 'neutral' | 'success' | 'warning' | 'danger'> = {
-    draft: 'neutral',
-    generated: 'success',
-    archived: 'neutral',
-};
 
 function Field({ label, value }: { label: string; value: string | null | undefined }) {
     return (
@@ -37,6 +31,7 @@ function Field({ label, value }: { label: string; value: string | null | undefin
  * `dangerouslySetInnerHTML`. React already escapes text children, so
  * `{content}` here cannot execute markup even if the rendered letter
  * happened to contain HTML-looking text. Same rule as Policies/Show.tsx.
+ * rejection_reason (Checkpoint 37) follows the identical rule below.
  */
 export default function HrDocumentShow() {
     const { hrGeneratedDocumentId } = usePage<ShowProps>().props;
@@ -54,6 +49,13 @@ export default function HrDocumentShow() {
 
     const [downloadingPdf, setDownloadingPdf] = useState(false);
     const [downloadError, setDownloadError] = useState<string | null>(null);
+
+    const [submitting, setSubmitting] = useState(false);
+    const [workflowError, setWorkflowError] = useState<string | null>(null);
+    const [approving, setApproving] = useState(false);
+    const [rejecting, setRejecting] = useState(false);
+    const [rejectionReasonInput, setRejectionReasonInput] = useState('');
+    const [showRejectForm, setShowRejectForm] = useState(false);
 
     const load = () => {
         api.get<{ data: HrGeneratedDocument }>(`/hr-generated-documents/${hrGeneratedDocumentId}`)
@@ -127,6 +129,60 @@ export default function HrDocumentShow() {
             .finally(() => setArchiving(false));
     };
 
+    const handleSubmit = () => {
+        setSubmitting(true);
+        setWorkflowError(null);
+
+        api.post(`/hr-generated-documents/${hrGeneratedDocumentId}/submit`)
+            .then(() => load())
+            .catch((err) => {
+                const apiError = toApiError(err);
+                if (!redirectIfUnauthenticated(apiError)) {
+                    setWorkflowError(apiError.message);
+                }
+            })
+            .finally(() => setSubmitting(false));
+    };
+
+    const handleApprove = () => {
+        if (!window.confirm('Approve this document? It cannot be edited once approved.')) {
+            return;
+        }
+
+        setApproving(true);
+        setWorkflowError(null);
+
+        api.post(`/hr-generated-documents/${hrGeneratedDocumentId}/approve`)
+            .then(() => load())
+            .catch((err) => {
+                const apiError = toApiError(err);
+                if (!redirectIfUnauthenticated(apiError)) {
+                    setWorkflowError(apiError.message);
+                }
+            })
+            .finally(() => setApproving(false));
+    };
+
+    const handleReject: FormEventHandler = (e) => {
+        e.preventDefault();
+        setRejecting(true);
+        setWorkflowError(null);
+
+        api.post(`/hr-generated-documents/${hrGeneratedDocumentId}/reject`, { rejection_reason: rejectionReasonInput })
+            .then(() => {
+                setShowRejectForm(false);
+                setRejectionReasonInput('');
+                load();
+            })
+            .catch((err) => {
+                const apiError = toApiError(err);
+                if (!redirectIfUnauthenticated(apiError)) {
+                    setWorkflowError(apiError.errors?.rejection_reason?.[0] ?? apiError.message);
+                }
+            })
+            .finally(() => setRejecting(false));
+    };
+
     if (error) {
         return (
             <AppLayout>
@@ -145,6 +201,10 @@ export default function HrDocumentShow() {
         );
     }
 
+    const titleEditable = document.status === 'draft' || document.status === 'rejected';
+    const canSubmit = document.status === 'draft' || document.status === 'rejected';
+    const canReview = document.status === 'pending_approval';
+
     return (
         <AppLayout>
             <Head title={document.title} />
@@ -154,7 +214,7 @@ export default function HrDocumentShow() {
                 description={
                     <>
                         {document.employee?.full_name ?? 'Unknown employee'} · {HR_DOCUMENT_TYPE_LABELS[document.document_type]} ·{' '}
-                        <Badge tone={statusTone[document.status]}>{document.status}</Badge>
+                        <Badge tone={HR_GENERATED_DOCUMENT_STATUS_TONE[document.status]}>{document.status.replace('_', ' ')}</Badge>
                     </>
                 }
                 actions={
@@ -172,6 +232,9 @@ export default function HrDocumentShow() {
             {downloadError && (
                 <div className="mb-4 rounded-md bg-red-50 px-4 py-3 text-sm text-red-700">{downloadError}</div>
             )}
+            {workflowError && (
+                <div className="mb-4 rounded-md bg-red-50 px-4 py-3 text-sm text-red-700">{workflowError}</div>
+            )}
 
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 <Card title="Overview">
@@ -182,35 +245,112 @@ export default function HrDocumentShow() {
                     </dl>
                 </Card>
 
-                <PermissionGate permission="hr_generated_documents.update">
-                    <Card title="Title">
-                        <form onSubmit={handleSaveTitle} className="flex flex-col gap-3">
-                            {titleSuccess && (
-                                <p className="rounded-md bg-green-50 px-3 py-2 text-sm text-green-700">{titleSuccess}</p>
-                            )}
-                            <InputField
-                                label="Title"
-                                name="title"
-                                required
-                                value={titleInput}
-                                onChange={(e) => setTitleInput(e.target.value)}
-                                error={titleError ?? undefined}
-                            />
-                            <div>
-                                <Button type="submit" variant="secondary" disabled={savingTitle}>
-                                    {savingTitle ? 'Saving…' : 'Save title'}
-                                </Button>
-                            </div>
-                        </form>
+                {titleEditable ? (
+                    <PermissionGate permission="hr_generated_documents.update">
+                        <Card title="Title">
+                            <form onSubmit={handleSaveTitle} className="flex flex-col gap-3">
+                                {titleSuccess && (
+                                    <p className="rounded-md bg-green-50 px-3 py-2 text-sm text-green-700">{titleSuccess}</p>
+                                )}
+                                <InputField
+                                    label="Title"
+                                    name="title"
+                                    required
+                                    value={titleInput}
+                                    onChange={(e) => setTitleInput(e.target.value)}
+                                    error={titleError ?? undefined}
+                                />
+                                <div>
+                                    <Button type="submit" variant="secondary" disabled={savingTitle}>
+                                        {savingTitle ? 'Saving…' : 'Save title'}
+                                    </Button>
+                                </div>
+                            </form>
+                        </Card>
+                    </PermissionGate>
+                ) : (
+                    <Card title="Approval">
+                        <dl className="divide-y divide-slate-100">
+                            <Field label="Submitted" value={document.submitted_at?.slice(0, 10)} />
+                            <Field label="Approved" value={document.approved_at?.slice(0, 10)} />
+                        </dl>
+                        <p className="mt-2 text-xs text-slate-500">Title can no longer be edited in this status.</p>
                     </Card>
-                </PermissionGate>
+                )}
             </div>
 
-            <div className="mt-4">
+            {document.rejection_reason && (
+                <div className="mt-4">
+                    <Card title="Rejection reason">
+                        <dd className="whitespace-pre-wrap rounded-md bg-red-50 p-4 text-sm text-red-700">
+                            {document.rejection_reason}
+                        </dd>
+                    </Card>
+                </div>
+            )}
+
+            <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
                 <Card title="Rendered content">
                     <dd className="whitespace-pre-wrap rounded-md bg-slate-50 p-4 text-sm text-slate-900">
                         {document.rendered_content}
                     </dd>
+                </Card>
+
+                <Card title="Approval actions">
+                    <div className="flex flex-col gap-3">
+                        <PermissionGate permission="hr_generated_documents.submit">
+                            {canSubmit && (
+                                <Button type="button" disabled={submitting} onClick={handleSubmit}>
+                                    {submitting ? 'Submitting…' : document.status === 'rejected' ? 'Resubmit for approval' : 'Submit for approval'}
+                                </Button>
+                            )}
+                        </PermissionGate>
+
+                        <PermissionGate permission="hr_generated_documents.approve">
+                            {canReview && (
+                                <Button type="button" disabled={approving} onClick={handleApprove}>
+                                    {approving ? 'Approving…' : 'Approve'}
+                                </Button>
+                            )}
+                        </PermissionGate>
+
+                        <PermissionGate permission="hr_generated_documents.reject">
+                            {canReview && !showRejectForm && (
+                                <Button type="button" variant="secondary" onClick={() => setShowRejectForm(true)}>
+                                    Reject
+                                </Button>
+                            )}
+                            {canReview && showRejectForm && (
+                                <form onSubmit={handleReject} className="flex flex-col gap-3">
+                                    <div>
+                                        <label htmlFor="rejection_reason" className="block text-sm font-medium text-slate-700">
+                                            Rejection reason
+                                        </label>
+                                        <textarea
+                                            id="rejection_reason"
+                                            required
+                                            rows={3}
+                                            value={rejectionReasonInput}
+                                            onChange={(e) => setRejectionReasonInput(e.target.value)}
+                                            className="mt-1.5 block w-full rounded-md border-0 px-3 py-2 text-sm text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-inset focus:ring-indigo-600"
+                                        />
+                                    </div>
+                                    <div className="flex gap-3">
+                                        <Button type="submit" variant="secondary" disabled={rejecting}>
+                                            {rejecting ? 'Rejecting…' : 'Confirm rejection'}
+                                        </Button>
+                                        <Button type="button" variant="secondary" onClick={() => setShowRejectForm(false)}>
+                                            Cancel
+                                        </Button>
+                                    </div>
+                                </form>
+                            )}
+                        </PermissionGate>
+
+                        {!canSubmit && !canReview && (
+                            <p className="text-sm text-slate-500">No approval actions available for this document's current status.</p>
+                        )}
+                    </div>
                 </Card>
             </div>
 

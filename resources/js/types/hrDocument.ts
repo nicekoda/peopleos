@@ -1,7 +1,8 @@
 // Mirrors HrDocumentTemplateResource/HrGeneratedDocumentResource exactly
 // (Checkpoint 34) — no tenant_id/created_by/updated_by/deleted_at.
 export type HrDocumentTemplateStatus = 'active' | 'inactive';
-export type HrGeneratedDocumentStatus = 'draft' | 'generated' | 'archived';
+// Checkpoint 37 — HR Document Approval Workflow Foundation.
+export type HrGeneratedDocumentStatus = 'draft' | 'pending_approval' | 'approved' | 'rejected' | 'archived';
 // Mirrors HrDocumentTemplateVersionResource (Checkpoint 36).
 export type HrDocumentTemplateVersionStatus = 'draft' | 'published' | 'archived';
 export type HrDocumentType =
@@ -13,6 +14,17 @@ export type HrDocumentType =
     | 'exit_letter'
     | 'reference_letter'
     | 'contractor_engagement_letter';
+
+// Checkpoint 37 — shared across Index.tsx/Show.tsx so both status badges
+// stay in sync with the actual status flow (draft -> pending_approval ->
+// approved | rejected -> archived).
+export const HR_GENERATED_DOCUMENT_STATUS_TONE: Record<HrGeneratedDocumentStatus, 'neutral' | 'success' | 'warning' | 'danger'> = {
+    draft: 'neutral',
+    pending_approval: 'warning',
+    approved: 'success',
+    rejected: 'danger',
+    archived: 'neutral',
+};
 
 export const HR_DOCUMENT_TYPE_LABELS: Record<HrDocumentType, string> = {
     employment_letter: 'Employment letter',
@@ -86,6 +98,13 @@ export interface HrGeneratedDocument {
     rendered_content: string;
     generated_at: string | null;
     generated_by: number | null;
+    submitted_at: string | null;
+    submitted_by: number | null;
+    approved_at: string | null;
+    approved_by: number | null;
+    rejected_at: string | null;
+    rejected_by: number | null;
+    rejection_reason: string | null;
     created_at: string | null;
     updated_at: string | null;
 }

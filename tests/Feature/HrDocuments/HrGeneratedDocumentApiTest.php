@@ -86,7 +86,9 @@ class HrGeneratedDocumentApiTest extends TestCase
             'hr_document_template_id' => $template->id,
             'tenant_id' => $tenant->id,
             'title' => 'Employment Letter',
-            'status' => 'generated',
+            // Checkpoint 37 — always draft on generation, never an
+            // immediately-final status.
+            'status' => 'draft',
         ]);
     }
 
@@ -204,7 +206,7 @@ class HrGeneratedDocumentApiTest extends TestCase
     {
         $tenant = Tenant::factory()->create();
         $user = $this->userWithPermissions($tenant, 'hr_generated_documents.update');
-        $document = HrGeneratedDocument::factory()->create(['tenant_id' => $tenant->id, 'title' => 'Before']);
+        $document = HrGeneratedDocument::factory()->draft()->create(['tenant_id' => $tenant->id, 'title' => 'Before']);
 
         $this->actingAs($user)
             ->patchJson($this->url($tenant, "hr-generated-documents/{$document->id}"), ['title' => 'After'])
@@ -236,7 +238,7 @@ class HrGeneratedDocumentApiTest extends TestCase
     {
         $tenant = Tenant::factory()->create();
         $user = $this->userWithPermissions($tenant, 'hr_generated_documents.update');
-        $document = HrGeneratedDocument::factory()->create(['tenant_id' => $tenant->id, 'status' => 'generated']);
+        $document = HrGeneratedDocument::factory()->draft()->create(['tenant_id' => $tenant->id]);
 
         $this->actingAs($user)->patchJson($this->url($tenant, "hr-generated-documents/{$document->id}"), [
             'title' => 'Updated title',
@@ -247,7 +249,7 @@ class HrGeneratedDocumentApiTest extends TestCase
 
         $fresh = $document->fresh();
         $this->assertSame('Updated title', $fresh->title);
-        $this->assertSame('generated', $fresh->status->value);
+        $this->assertSame('draft', $fresh->status->value);
         $this->assertNotSame('tampered', $fresh->rendered_content);
     }
 

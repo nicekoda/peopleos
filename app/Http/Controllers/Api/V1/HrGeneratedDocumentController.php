@@ -6,6 +6,7 @@ use App\Enums\HrDocumentTemplateVersionStatus;
 use App\Enums\HrGeneratedDocumentStatus;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\HrDocument\GenerateHrDocumentRequest;
+use App\Http\Requests\HrDocument\RejectHrGeneratedDocumentRequest;
 use App\Http\Requests\HrDocument\UpdateHrGeneratedDocumentRequest;
 use App\Http\Resources\HrGeneratedDocumentResource;
 use App\Models\Employee;
@@ -78,7 +79,11 @@ class HrGeneratedDocumentController extends Controller
             'hr_document_template_version_id' => $version->id,
             'title' => $validated['title'] ?? $template->title,
             'document_type' => $template->document_type,
-            'status' => HrGeneratedDocumentStatus::Generated,
+            // Checkpoint 37 — always draft, regardless of the generating
+            // user's permissions (your approved rule: no auto-approve
+            // shortcut). Submit + approve is always a separate, explicit
+            // step from here.
+            'status' => HrGeneratedDocumentStatus::Draft,
             'rendered_content' => $renderedContent,
             'generated_at' => now(),
             'generated_by' => $request->user()->id,
@@ -153,6 +158,129 @@ class HrGeneratedDocumentController extends Controller
     }
 
     /**
+     * Checkpoint 37 — handles both the original submission (draft ->
+     * pending_approval, logged as `.submitted`) and a resubmission after
+     * rejection (rejected -> pending_approval, logged as `.resubmitted`)
+     * through the same endpoint, per the required audit-action list.
+     * `HrGeneratedDocumentStatus::canTransitionTo()` is the single source
+     * of truth for which transition is legal — no other status may
+     * submit.
+     */
+    public function submit(Request $request, HrGeneratedDocument $hrGeneratedDocument): HrGeneratedDocumentResource
+    {
+        $this->ensureBelongsToCurrentTenant($hrGeneratedDocument);
+
+        $fromStatus = $hrGeneratedDocument->status;
+        abort_unless(
+            $fromStatus->canTransitionTo(HrGeneratedDocumentStatus::PendingApproval),
+            422,
+            'This document cannot be submitted for approval from its current status.',
+        );
+
+        $hrGeneratedDocument->update([
+            'status' => HrGeneratedDocumentStatus::PendingApproval,
+            'submitted_at' => now(),
+            'submitted_by' => $request->user()->id,
+            'updated_by' => $request->user()->id,
+        ]);
+
+        AuditLogger::logFor(
+            actor: $request->user(),
+            action: $fromStatus === HrGeneratedDocumentStatus::Rejected
+                ? 'hr_generated_document.resubmitted'
+                : 'hr_generated_document.submitted',
+            module: 'hr_documents',
+            tenantId: $hrGeneratedDocument->tenant_id,
+            auditableType: HrGeneratedDocument::class,
+            auditableId: $hrGeneratedDocument->id,
+            description: "HR document '{$hrGeneratedDocument->title}' submitted for approval.",
+            metadata: ['from_status' => $fromStatus->value],
+            ipAddress: $request->ip(),
+            userAgent: $request->userAgent(),
+        );
+
+        return new HrGeneratedDocumentResource($hrGeneratedDocument->load('employee'));
+    }
+
+    /**
+     * pending_approval -> approved only. approved_at/approved_by are set
+     * here, server-side, never accepted from request input.
+     */
+    public function approve(Request $request, HrGeneratedDocument $hrGeneratedDocument): HrGeneratedDocumentResource
+    {
+        $this->ensureBelongsToCurrentTenant($hrGeneratedDocument);
+
+        abort_unless(
+            $hrGeneratedDocument->status->canTransitionTo(HrGeneratedDocumentStatus::Approved),
+            422,
+            'This document cannot be approved from its current status.',
+        );
+
+        $hrGeneratedDocument->update([
+            'status' => HrGeneratedDocumentStatus::Approved,
+            'approved_at' => now(),
+            'approved_by' => $request->user()->id,
+            'updated_by' => $request->user()->id,
+        ]);
+
+        AuditLogger::logFor(
+            actor: $request->user(),
+            action: 'hr_generated_document.approved',
+            module: 'hr_documents',
+            tenantId: $hrGeneratedDocument->tenant_id,
+            auditableType: HrGeneratedDocument::class,
+            auditableId: $hrGeneratedDocument->id,
+            description: "HR document '{$hrGeneratedDocument->title}' approved.",
+            ipAddress: $request->ip(),
+            userAgent: $request->userAgent(),
+        );
+
+        return new HrGeneratedDocumentResource($hrGeneratedDocument->load('employee'));
+    }
+
+    /**
+     * pending_approval -> rejected only. rejected_at/rejected_by are set
+     * here, server-side; rejection_reason comes from
+     * RejectHrGeneratedDocumentRequest. The reason is stored on the
+     * model (needed for the UI/rejected user to see why) but deliberately
+     * never included in audit metadata — same "free-text content never
+     * passed to the logger" discipline already established for lifecycle
+     * task descriptions and this module's own rendered_content.
+     */
+    public function reject(RejectHrGeneratedDocumentRequest $request, HrGeneratedDocument $hrGeneratedDocument): HrGeneratedDocumentResource
+    {
+        $this->ensureBelongsToCurrentTenant($hrGeneratedDocument);
+
+        abort_unless(
+            $hrGeneratedDocument->status->canTransitionTo(HrGeneratedDocumentStatus::Rejected),
+            422,
+            'This document cannot be rejected from its current status.',
+        );
+
+        $hrGeneratedDocument->update([
+            'status' => HrGeneratedDocumentStatus::Rejected,
+            'rejected_at' => now(),
+            'rejected_by' => $request->user()->id,
+            'rejection_reason' => $request->validated('rejection_reason'),
+            'updated_by' => $request->user()->id,
+        ]);
+
+        AuditLogger::logFor(
+            actor: $request->user(),
+            action: 'hr_generated_document.rejected',
+            module: 'hr_documents',
+            tenantId: $hrGeneratedDocument->tenant_id,
+            auditableType: HrGeneratedDocument::class,
+            auditableId: $hrGeneratedDocument->id,
+            description: "HR document '{$hrGeneratedDocument->title}' rejected.",
+            ipAddress: $request->ip(),
+            userAgent: $request->userAgent(),
+        );
+
+        return new HrGeneratedDocumentResource($hrGeneratedDocument->load('employee'));
+    }
+
+    /**
      * Checkpoint 35 — Option B (approved): renders the PDF on demand from
      * the already-stored rendered_content and streams it straight back;
      * nothing is ever written to any disk, so there is no storage path to
@@ -193,15 +321,29 @@ class HrGeneratedDocumentController extends Controller
     }
 
     /**
-     * Soft delete only ("archive") — same shape as
-     * HrDocumentTemplateController::destroy()/DocumentCategoryController::destroy().
+     * Soft delete ("archive") — same shape as
+     * HrDocumentTemplateController::destroy()/DocumentCategoryController::destroy(),
+     * plus (Checkpoint 37) actually transitions `status` to `archived`
+     * rather than leaving it at whatever it was, now that `archived` is a
+     * real, reachable state in the approval flow. `archived` itself is
+     * terminal — an already-archived row can't be found here at all
+     * (soft-deleted, excluded from queries), so no further guard is needed.
      */
     public function destroy(Request $request, HrGeneratedDocument $hrGeneratedDocument): JsonResponse
     {
         $this->ensureBelongsToCurrentTenant($hrGeneratedDocument);
 
+        abort_unless(
+            $hrGeneratedDocument->status->canTransitionTo(HrGeneratedDocumentStatus::Archived),
+            422,
+            'This document cannot be archived from its current status.',
+        );
+
         $snapshot = $hrGeneratedDocument->only(['title', 'document_type', 'status', 'employee_id']);
 
+        $hrGeneratedDocument->status = HrGeneratedDocumentStatus::Archived;
+        $hrGeneratedDocument->updated_by = $request->user()->id;
+        $hrGeneratedDocument->save();
         $hrGeneratedDocument->delete();
 
         AuditLogger::logFor(

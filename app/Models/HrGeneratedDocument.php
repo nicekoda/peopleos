@@ -37,6 +37,13 @@ class HrGeneratedDocument extends Model
         'rendered_content',
         'generated_at',
         'generated_by',
+        'submitted_at',
+        'submitted_by',
+        'approved_at',
+        'approved_by',
+        'rejected_at',
+        'rejected_by',
+        'rejection_reason',
         'created_by',
         'updated_by',
     ];
@@ -47,6 +54,9 @@ class HrGeneratedDocument extends Model
             'document_type' => HrDocumentType::class,
             'status' => HrGeneratedDocumentStatus::class,
             'generated_at' => 'datetime',
+            'submitted_at' => 'datetime',
+            'approved_at' => 'datetime',
+            'rejected_at' => 'datetime',
         ];
     }
 
@@ -73,6 +83,21 @@ class HrGeneratedDocument extends Model
     public function generatedBy(): BelongsTo
     {
         return $this->belongsTo(User::class, 'generated_by');
+    }
+
+    public function submittedBy(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'submitted_by');
+    }
+
+    public function approvedBy(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'approved_by');
+    }
+
+    public function rejectedBy(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'rejected_by');
     }
 
     public function createdBy(): BelongsTo

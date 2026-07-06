@@ -665,6 +665,19 @@ edit. The `/hr-documents/create` template picker now also filters to
 never had anything published is never offered as a generation source.
 See `docs/security.md#hr-document-template-versioning-foundation-checkpoint-36`.
 
+**HR Document Approval Workflow Foundation UI (Checkpoint 37)** adds no
+new pages or routes — Submit/Approve/Reject are buttons on the existing
+`HrDocuments/Show.tsx`, each wrapped in its own `PermissionGate`
+(`.submit`/`.approve`/`.reject`) and shown only when the document's
+current status makes that action legal (`canSubmit`/`canReview`
+computed client-side purely for UX — the backend's `canTransitionTo()`
+is the actual enforcement). The title-edit card is replaced with a
+read-only "Approval" summary (submitted/approved dates) once the
+document leaves `draft`/`rejected`. Reject opens an inline reason
+textarea rather than a separate page — no new UI surface beyond exactly
+what the workflow needs. See
+`docs/security.md#hr-document-approval-workflow-foundation-checkpoint-37`.
+
 ### Shared props (every Inertia response)
 
 ```json
@@ -1200,11 +1213,14 @@ two resources' different trust levels — see `docs/security.md`.
 | `PATCH` | `/api/v1/hr-document-templates/{hrDocumentTemplate}` | `hr_document_templates.update` | Metadata only (Checkpoint 36) — `content_template` is not a field here; see "HR Document Template Versions" below |
 | `DELETE` | `/api/v1/hr-document-templates/{hrDocumentTemplate}` | `hr_document_templates.delete` | Soft delete only ("archive") |
 | `GET` | `/api/v1/hr-generated-documents` | `hr_generated_documents.view` | Paginated; optional `?employee_id=` filter, validated against the current tenant (`404` if the employee belongs to another tenant) |
-| `POST` | `/api/v1/hr-generated-documents` | `hr_generated_documents.generate` | Both creates and renders in one step — see "Generation is a single action" below. Body: `{"employee_id": "...", "hr_document_template_id": "...", "title": "..." (optional)}` |
+| `POST` | `/api/v1/hr-generated-documents` | `hr_generated_documents.generate` | Both creates and renders in one step, always as `draft` (Checkpoint 37) — see "Generation is a single action" below. Body: `{"employee_id": "...", "hr_document_template_id": "...", "title": "..." (optional)}` |
 | `GET` | `/api/v1/hr-generated-documents/{hrGeneratedDocument}` | `hr_generated_documents.view` | |
-| `GET` | `/api/v1/hr-generated-documents/{hrGeneratedDocument}/download-pdf` | `hr_generated_documents.view` | **New in Checkpoint 35** — renders `rendered_content` to PDF on demand via `dompdf/dompdf` and streams it; nothing is ever written to disk. Same permission as the JSON `show` route above, not a new one. Response: `Content-Type: application/pdf`, `Content-Disposition: attachment; filename="{slug}.pdf"` |
-| `PATCH` | `/api/v1/hr-generated-documents/{hrGeneratedDocument}` | `hr_generated_documents.update` | `title` only — `status`/`rendered_content`/`generated_by` are never accepted here |
-| `DELETE` | `/api/v1/hr-generated-documents/{hrGeneratedDocument}` | `hr_generated_documents.delete` | Soft delete only ("archive") |
+| `GET` | `/api/v1/hr-generated-documents/{hrGeneratedDocument}/download-pdf` | `hr_generated_documents.view` | **New in Checkpoint 35**, watermarked Checkpoint 37 — renders `rendered_content` to PDF on demand via `dompdf/dompdf` and streams it; nothing is ever written to disk. A plain-text banner is added when `status` isn't `approved`. Same permission as the JSON `show` route above, not a new one. Response: `Content-Type: application/pdf`, `Content-Disposition: attachment; filename="{slug}.pdf"` |
+| `PATCH` | `/api/v1/hr-generated-documents/{hrGeneratedDocument}` | `hr_generated_documents.update` | `title` only — `status`/`rendered_content`/`generated_by`/approval fields are never accepted here. Rejected (`422`) unless `status` is `draft` or `rejected` (Checkpoint 37) |
+| `POST` | `/api/v1/hr-generated-documents/{hrGeneratedDocument}/submit` | `hr_generated_documents.submit` | **New in Checkpoint 37** — `draft`/`rejected` → `pending_approval`. Logged as `.submitted` or `.resubmitted` depending on the prior status |
+| `POST` | `/api/v1/hr-generated-documents/{hrGeneratedDocument}/approve` | `hr_generated_documents.approve` | **New in Checkpoint 37** — `pending_approval` → `approved` only. `approved_at`/`approved_by` set server-side |
+| `POST` | `/api/v1/hr-generated-documents/{hrGeneratedDocument}/reject` | `hr_generated_documents.reject` | **New in Checkpoint 37** — `pending_approval` → `rejected` only. Body: `{"rejection_reason": "..."}` (required, plain text, max 1000 chars) |
+| `DELETE` | `/api/v1/hr-generated-documents/{hrGeneratedDocument}` | `hr_generated_documents.delete` | Soft delete ("archive"), reachable from any non-terminal status including `pending_approval` (Checkpoint 37 — unconditional, unchanged from pre-Checkpoint-37 behavior) |
 
 **`hr_generated_documents.create` is seeded but not wired to any route
 this checkpoint** — the only write path is `.generate`, which both
@@ -1221,13 +1237,39 @@ layer, re-checks both in the controller (including that the resolved
 version is genuinely `published`, guarding a race), renders the
 template's **current published version's** `content_template` via
 `App\Services\HrDocuments\PlaceholderRenderer::render()`, and persists
-the result as `status: "generated"` immediately, along with
-`hr_document_template_version_id` recording exactly which version was
-used — there is no intermediate unrendered "draft" state reachable
-through this API. `document_type`/`title` are copied from the template
-at generation time (a `title` override in the request body is
-optional), so editing/archiving a template or publishing a new version
-later never changes a document already generated.
+the result immediately — there is no unrendered intermediate state to
+wait for, `rendered_content` is complete the moment the row is created.
+`status` is always `draft` (Checkpoint 37) regardless of the
+generating user's permissions — submitting for approval is always a
+separate, explicit next step, via `POST .../submit`. `hr_document_template_version_id`
+records exactly which version was used. `document_type`/`title` are
+copied from the template at generation time (a `title` override in the
+request body is optional), so editing/archiving a template or
+publishing a new version later never changes a document already
+generated.
+
+### Approval workflow (Checkpoint 37)
+
+```
+draft ──submit──► pending_approval ──approve──► approved ──archive──► archived
+                        │                                                  ▲
+                        └──reject──► rejected ──submit (resubmit)──────────┘
+draft ──archive────────────────────────────────────────────────────────────►
+```
+
+Centralized in `App\Enums\HrGeneratedDocumentStatus::canTransitionTo()`
+— every submit/approve/reject/archive action checks it server-side
+before writing anything; an invalid transition is rejected (`422`),
+never partially applied. `approved` only transitions to `archived` —
+never editable (the existing `PATCH` is rejected once `status` leaves
+`draft`/`rejected`), never resubmittable. Archiving is reachable from
+every non-terminal status, including `pending_approval` (unconditional,
+matching this endpoint's behavior before this checkpoint). `submitted_at`/`submitted_by`/`approved_at`/`approved_by`/`rejected_at`/`rejected_by`
+are set server-side only, inside their respective action — never
+accepted from request input, regardless of what the request body
+contains. `rejection_reason` is required on reject, stored, and
+returned on the resource (so the submitter can see why) but never
+included in audit-log metadata.
 
 ### Placeholder allowlist
 
@@ -1271,10 +1313,17 @@ for the exact cases covered.
     "employee_document_id": null,
     "title": "Employment Letter",
     "document_type": "employment_letter",
-    "status": "generated",
+    "status": "draft",
     "rendered_content": "Dear Jane Doe, ...",
     "generated_at": "2026-07-05T00:00:00+00:00",
     "generated_by": 7,
+    "submitted_at": null,
+    "submitted_by": null,
+    "approved_at": null,
+    "approved_by": null,
+    "rejected_at": null,
+    "rejected_by": null,
+    "rejection_reason": null,
     "created_at": "2026-07-05T00:00:00+00:00",
     "updated_at": "2026-07-05T00:00:00+00:00"
   }
@@ -1298,6 +1347,16 @@ Option A/C) — see `docs/security.md#pdf-export-dependency-review--prototype-ch
 for the full comparison against `barryvdh/laravel-dompdf`, `mpdf/mpdf`,
 and headless-browser options (`spatie/browsershot`, wkhtmltopdf), all
 of which were reviewed and rejected before this one was chosen.
+
+**Checkpoint 37 adds a plain-text watermark banner** (no images,
+nothing resembling an official seal) whenever the document's `status`
+isn't `approved` — "DRAFT — NOT YET SUBMITTED FOR APPROVAL", "PENDING
+APPROVAL — NOT YET APPROVED", "REJECTED — NOT APPROVED", or "ARCHIVED".
+This was Option A from the approval-workflow gap analysis: PDF download
+stays available at every status (a genuinely useful preview step before
+submitting or after a rejection) rather than being blocked until
+`approved`, but an unapproved letter is never visually indistinguishable
+from a final one. See `docs/security.md#hr-document-approval-workflow-foundation-checkpoint-37`.
 
 ## HR Document Template Versions
 
@@ -1384,7 +1443,7 @@ templates in its seed data to backfill in the first place).
 - Session-based auth only — see "Authentication" above for the full future Sanctum/token plan.
 - No task templates, task dependencies/ordering, approval routing, notifications, or reminders for lifecycle processes/tasks (Checkpoint 33) — see `docs/security.md#onboarding--offboarding-foundation-checkpoint-33`.
 - No standalone `GET` for a single lifecycle task — see "Lifecycle Processes & Tasks" above.
-- No DOCX file generation, e-signature, approval workflow, automated sending, bulk generation, or employee self-service download for HR Documents (Checkpoint 34/35/36) — see `docs/security.md#hr-documents--letter-generation-foundation-checkpoint-34`. PDF export exists (Checkpoint 35) but is generate-on-demand only — every download re-renders from `rendered_content`, nothing is ever persisted. Template version history exists (Checkpoint 36) but has no diff/compare UI and no publish-approval workflow.
+- No DOCX file generation, e-signature, automated sending, bulk generation, or employee self-service download for HR Documents (Checkpoint 34/35/36/37) — see `docs/security.md#hr-documents--letter-generation-foundation-checkpoint-34`. PDF export exists (Checkpoint 35) but is generate-on-demand only — every download re-renders from `rendered_content`, nothing is ever persisted. Template version history exists (Checkpoint 36) but has no diff/compare UI and no publish-approval workflow. A single-approver approval workflow exists (Checkpoint 37) but has no multi-level/routing approval and no notifications when a document changes state.
 
 ## Future
 
@@ -1418,5 +1477,6 @@ templates in its seed data to backfill in the first place).
 - Persisted PDF storage for HR Documents (Option C — generate once, save to the private disk, attach via the existing, still-unused `hr_generated_documents.employee_document_id` column), if re-downloading identical bytes without re-rendering or Document Repository integration is ever needed. On-demand generation (Option B) shipped in Checkpoint 35 — see above.
 - DOCX file generation for HR Documents, if a real need for an editable (not just final) format is shown.
 - A diff/compare view between two template versions, and an approval/review step before publishing — both explicitly out of scope for Checkpoint 36's versioning foundation.
+- Multi-level/routing approval for HR generated documents, notifications/reminders on submit/approve/reject, and a cryptographic/visual (not just plain-text) watermark — all explicitly out of scope for Checkpoint 37's single-approver approval workflow.
 - Template versioning, e-signature, and approval-routing workflows for HR Documents, once a real need is scoped — deliberately not built in Checkpoint 34.
 - Bulk HR document generation (e.g., the same letter for a whole department) and employee self-service download.

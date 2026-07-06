@@ -2,6 +2,7 @@
 
 namespace App\Services\HrDocuments;
 
+use App\Enums\HrGeneratedDocumentStatus;
 use App\Models\HrGeneratedDocument;
 use App\Models\Tenant;
 use Dompdf\Dompdf;
@@ -50,6 +51,7 @@ class HrDocumentPdfRenderer
         $tenantName = e($tenant->name);
         $generatedAt = e($document->generated_at?->toFormattedDateString() ?? '—');
         $content = nl2br(e($document->rendered_content));
+        $watermark = self::watermarkBanner($document->status);
 
         return <<<HTML
             <html>
@@ -60,9 +62,11 @@ class HrDocumentPdfRenderer
                     h1 { font-size: 16px; margin-bottom: 4px; }
                     .meta { color: #64748b; margin-bottom: 24px; font-size: 11px; }
                     .content { line-height: 1.6; white-space: pre-wrap; }
+                    .watermark { background: #fef3c7; color: #92400e; padding: 8px 12px; margin-bottom: 16px; font-size: 11px; font-weight: bold; border-radius: 4px; }
                 </style>
             </head>
             <body>
+                {$watermark}
                 <h1>{$title}</h1>
                 <div class="meta">
                     {$employeeName} &middot; {$tenantName} &middot; Generated {$generatedAt}
@@ -71,5 +75,30 @@ class HrDocumentPdfRenderer
             </body>
             </html>
             HTML;
+    }
+
+    /**
+     * Checkpoint 37 — Option A (approved): a PDF may be downloaded at any
+     * status (preview before/around approval is a real, useful HR
+     * workflow step), but anything not yet `approved` is visibly labeled
+     * as such — plain text, no images, nothing that could be mistaken for
+     * an official watermark/seal, just a clear banner so an unapproved
+     * letter is never confused for a final one.
+     */
+    private static function watermarkBanner(HrGeneratedDocumentStatus $status): string
+    {
+        if ($status === HrGeneratedDocumentStatus::Approved) {
+            return '';
+        }
+
+        $label = match ($status) {
+            HrGeneratedDocumentStatus::Draft => 'DRAFT — NOT YET SUBMITTED FOR APPROVAL',
+            HrGeneratedDocumentStatus::PendingApproval => 'PENDING APPROVAL — NOT YET APPROVED',
+            HrGeneratedDocumentStatus::Rejected => 'REJECTED — NOT APPROVED',
+            HrGeneratedDocumentStatus::Archived => 'ARCHIVED',
+            HrGeneratedDocumentStatus::Approved => '',
+        };
+
+        return '<div class="watermark">'.e($label).'</div>';
     }
 }

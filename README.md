@@ -472,6 +472,26 @@ template's *current published version* and records
 and existing generated documents are entirely unaffected. See
 `docs/architecture.md` and `docs/security.md` for the full design.
 
+## HR Document Approval Workflow Foundation (Checkpoint 37)
+
+Generated HR documents now go through a real single-approver workflow —
+`draft → pending_approval → approved | rejected`, with `archived`
+reachable from any non-terminal state and `rejected → pending_approval`
+(resubmit) closing the loop. Centralized in
+`HrGeneratedDocumentStatus::canTransitionTo()`, the same pattern
+`LifecycleProcessStatus` established in Checkpoint 33 — every
+submit/approve/reject/archive action checks it server-side, never
+inferred from which endpoint was called. Three new permissions
+(`hr_generated_documents.{submit,approve,reject}`) keep HR Officer able
+to generate/submit without ever self-approving. A PDF download is
+allowed at any status (a real, useful preview step), but a plain-text
+banner ("DRAFT — NOT YET SUBMITTED", "PENDING APPROVAL", etc.) is added
+to anything that isn't `approved`, so an unapproved letter is never
+mistaken for a final one. A migration backfills every pre-existing
+`generated` document to `approved` (the closest accurate reading of
+"already finalized" under the old content-only model). See
+`docs/architecture.md` and `docs/security.md` for the full design.
+
 ## Documentation
 
 - [`docs/architecture.md`](docs/architecture.md) — multi-tenancy, tenant resolution, RBAC overview, internal-vs-public IDs, frontend architecture.

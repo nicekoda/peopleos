@@ -4465,6 +4465,147 @@ over zero rows.
   a specific `hr_document_template_version_id` implicitly via the
   generated document it's derived from — no new design needed there.
 
+## HR Document Approval Workflow Foundation (Checkpoint 37)
+
+Adds a single-approver approval workflow for HR generated documents —
+`draft → pending_approval → approved | rejected`, with `archived`
+reachable from any non-terminal status. See
+[`architecture.md`](architecture.md#hr-document-approval-workflow-foundation-checkpoint-37)
+for the schema/technical writeup; this section covers the security
+design.
+
+### Same three-layer tenant-isolation pattern, transitions centrally guarded
+
+`submit()`/`approve()`/`reject()` on `HrGeneratedDocumentController`
+follow the identical shape every other action on this controller
+already uses: `tenant.matches` middleware → `BelongsToTenant` global
+scope → the controller's explicit `ensureBelongsToCurrentTenant()`
+check. Every transition is checked against
+`HrGeneratedDocumentStatus::canTransitionTo()` before anything is
+written — an invalid transition (approving a draft, rejecting an
+already-approved document, submitting an archived one) is rejected
+(422), never silently coerced or partially applied.
+
+### Permission model: three new keys, deliberately not folded into `.update`
+
+```
+hr_generated_documents.submit  — draft/rejected -> pending_approval (new)
+hr_generated_documents.approve — pending_approval -> approved (new)
+hr_generated_documents.reject  — pending_approval -> rejected (new)
+```
+
+| Role | submit | approve | reject |
+|---|---|---|---|
+| Tenant Admin | ✓ (wildcard) | ✓ | ✓ |
+| HR Manager | ✓ | ✓ | ✓ |
+| HR Director | ✓ | ✓ | ✓ |
+| HR Officer | ✓ | — | — |
+| Auditor | — | — | — |
+| Line Manager / Employee | — | — | — |
+
+The split is the entire point: HR Officer can generate and submit a
+letter but can never approve or reject one, including its own —
+self-approval is structurally impossible (no permission grant makes it
+possible), not merely discouraged by UI convention. Auditor keeps its
+existing view-only access (no new grant needed — `rejection_reason`
+and the approval timeline are already visible via the existing
+`hr_generated_documents.view`-gated resource).
+
+### Server-controlled fields, verified directly
+
+`submitted_at`/`submitted_by`/`approved_at`/`approved_by`/`rejected_at`/`rejected_by`
+are set only inside their respective controller action, from `now()`
+and `$request->user()->id` — never accepted from request input. Tested
+directly: both `submit()` and `approve()` tests submit forged
+`submitted_at`/`approved_at`/`approved_by` values in the request body
+and assert they're silently ignored in favor of the real server-set
+values.
+
+### Editability is a status gate, not a new endpoint
+
+`UpdateHrGeneratedDocumentRequest::withValidator()` rejects (422) a
+title edit unless the route-bound document is currently `draft` or
+`rejected` — the same "checked in withValidator() against the
+route-bound record's current status" pattern
+`UpdateHrDocumentTemplateVersionRequest` already established in
+Checkpoint 36. A `pending_approval` or `approved` document's title is
+permanent from that point until either rejected (revisable again) or
+archived.
+
+### Rejection reason: stored and shown, never audited
+
+`rejection_reason` is real, persisted, plain text — exposed on
+`HrGeneratedDocumentResource` (the entire purpose of rejecting is that
+the submitter can see why; masking it from the API would defeat the
+feature) but deliberately never passed to `AuditLogger::logFor()` as
+metadata for the `.rejected` action, the same "free-text content never
+reaches the logger" rule already applied to lifecycle task descriptions
+and this module's own `rendered_content`. Tested directly: a marker
+string placed in `rejection_reason` is asserted present in the resource
+response and absent from the resulting audit log row.
+
+### PDF watermark: Option A (approved) — preview allowed at every status, clearly labeled when not final
+
+`HrDocumentPdfRenderer` adds a plain-text banner (no images, nothing
+resembling an official seal) whenever a document's status isn't
+`approved` — "DRAFT — NOT YET SUBMITTED FOR APPROVAL", "PENDING
+APPROVAL — NOT YET APPROVED", "REJECTED — NOT APPROVED", or "ARCHIVED".
+No new permission or route was introduced — the existing
+`hr_generated_documents.view`-gated download works identically
+regardless of status; only the rendered bytes differ. This preserves a
+genuinely useful HR workflow (preview the actual PDF layout before
+submitting or after a rejection) while making an unapproved letter
+visually impossible to mistake for a final, approved one.
+
+### Archiving stays unconditional, including mid-review
+
+`destroy()` (soft-delete-as-archive) is reachable from every
+non-terminal status, including `pending_approval` — matching this
+controller's behavior before this checkpoint (there was never a status
+guard on archiving at all) rather than introducing a new blocking rule
+nobody asked for. `archived` is genuinely terminal now, though: unlike
+before, `destroy()` actually writes `status: archived` to the row (not
+just `deleted_at`) before soft-deleting, so the status column now
+accurately reflects reality — a small, deliberate correction alongside
+the new workflow, not a new capability.
+
+### Migration/backfill is verified directly, the same rigor as Checkpoint 36's version backfill
+
+`2026_07_06_193100_backfill_hr_generated_document_approval_status.php`
+maps every pre-existing `generated` row to `approved`, with
+`approved_at`/`approved_by` copied from `generated_at`/`generated_by` —
+the closest accurate reading of "already finalized" under the old
+content-only model (your approved choice over resetting them to
+`draft`, which would have forced HR to retroactively re-approve
+documents that were never meant to require it). `submitted_at`/`submitted_by`
+stay null — fabricating a submission that never happened would be
+worse than leaving it absent. Verified by rolling back the migration,
+inserting a raw pre-Checkpoint-37 `generated` row via the query
+builder, replaying it forward, and confirming the resulting
+`approved`/`approved_at`/`approved_by` values match `generated_at`/`generated_by`
+exactly and `submitted_at` stays null — see `docs/testing.md`.
+
+### Current limitations
+
+- Single-approver only — no multi-level/routing approval chain, per
+  your explicit "do not build multi-level approvals" instruction.
+- No approval-routing designer, email reminders, or notifications when
+  a document changes state.
+- No e-signature, external sharing, or legal review workflow.
+- The PDF watermark is a plain-text banner, not a cryptographic or
+  visual seal — sufficient to prevent an unapproved letter from being
+  mistaken for final by a human reader, not a tamper-evidence mechanism.
+
+### Future
+
+- Multi-level/routing approval, if a real organizational need for more
+  than one approver is shown — explicitly out of scope for this
+  foundation.
+- Notifications/reminders when a document is submitted, approved, or
+  rejected.
+- E-signature and external sharing, once scoped as their own
+  checkpoints.
+
 ## Local Demo Credentials
 
 **Local development only — these are not real secrets and only work against your own local database.** Password comes from `SEED_USER_PASSWORD` in `.env` (not committed; `.env.example` has an empty placeholder).
@@ -4534,4 +4675,4 @@ data these six `uesl` logins see (Checkpoint 26's `DemoDataSeeder`).
 - **Departments/Positions/Locations (Checkpoint 32) have no hierarchy, no usage-count guard before archiving, and no bulk import/export** — see [Employee Lifecycle Foundation](#employee-lifecycle-foundation-checkpoint-32) above.
 - **Employment Type remains a fixed enum, not a tenant-configurable lookup table** (Checkpoint 32, deliberate scope decision) — see [Employee Lifecycle Foundation](#employee-lifecycle-foundation-checkpoint-32) above.
 - **Onboarding & Offboarding (Checkpoint 33) has no task templates, task dependencies/ordering, approval routing, notifications, IT/asset provisioning integration, document generation, e-signature, recruitment-to-employee conversion, or performance/probation review integration; Line Manager visibility is direct-reports only, not the full reporting tree** — see [Onboarding & Offboarding Foundation](#onboarding--offboarding-foundation-checkpoint-33) above.
-- **HR Documents & Letter Generation (Checkpoint 34) has no DOCX file, e-signature, approval workflow, automated sending, or bulk/employee-self-service generation — PDF export was added in Checkpoint 35 (generate-on-demand, never stored) and template version history in Checkpoint 36 (no diff/compare UI, no publish-approval workflow)** — see [HR Documents & Letter Generation Foundation](#hr-documents--letter-generation-foundation-checkpoint-34), [PDF Export Dependency Review & Prototype](#pdf-export-dependency-review--prototype-checkpoint-35), and [HR Document Template Versioning Foundation](#hr-document-template-versioning-foundation-checkpoint-36) above.
+- **HR Documents & Letter Generation (Checkpoint 34) has no DOCX file, e-signature, automated sending, or bulk/employee-self-service generation — PDF export was added in Checkpoint 35 (generate-on-demand, never stored), template version history in Checkpoint 36 (no diff/compare UI, no publish-approval workflow), and a single-approver approval workflow in Checkpoint 37 (no multi-level/routing approval, no notifications)** — see [HR Documents & Letter Generation Foundation](#hr-documents--letter-generation-foundation-checkpoint-34), [PDF Export Dependency Review & Prototype](#pdf-export-dependency-review--prototype-checkpoint-35), [HR Document Template Versioning Foundation](#hr-document-template-versioning-foundation-checkpoint-36), and [HR Document Approval Workflow Foundation](#hr-document-approval-workflow-foundation-checkpoint-37) above.

@@ -1447,6 +1447,50 @@ setting content through `$template->currentVersion->update([...])`
 instead, since the factory's `configure()` hook already creates a
 published version 1 by default for every template.
 
+## Verifying a second data migration the same way — rollback, insert, replay (Checkpoint 37)
+
+`2026_07_06_193100_backfill_hr_generated_document_approval_status.php`
+was verified with the identical rigor Checkpoint 36 established for its
+version backfill, not a fresh-install assumption: `migrate:rollback --step=1`
+to undo just the status-backfill migration, a raw `DB::table()` insert
+of a pre-Checkpoint-37-shaped row (`status: 'generated'`, `generated_at`/
+`generated_by` set, `approved_at`/`approved_by`/`submitted_at` all
+null — the exact shape every row had before this checkpoint), `migrate`
+to replay the backfill forward, then a `tinker` check confirming
+`status` became `approved`, `approved_at`/`approved_by` exactly match
+`generated_at`/`generated_by`, and `submitted_at` stayed null. A fresh
+`migrate:fresh --seed` alone would prove nothing here either — this
+app's demo seed data contains zero HR generated documents, same gap
+Checkpoint 36 already noted for its own backfill.
+
+`HrGeneratedDocumentApprovalApiTest` (31 tests) covers the workflow
+itself: guest/permission gating for submit/approve/reject in both
+directions, every valid transition (draft→pending_approval,
+pending_approval→approved, pending_approval→rejected, rejected→
+pending_approval/resubmit, any non-terminal status→archived) and
+representative invalid ones (approving a draft, rejecting a draft,
+submitting an already-approved document, re-approving an approved
+one), tenant isolation, Platform Super Admin blocked, forged
+`submitted_at`/`submitted_by`/`approved_at`/`approved_by` silently
+ignored, `rejection_reason` present on the resource but absent from
+the resulting audit log row, resource field safety, and — the one
+genuinely new kind of assertion this checkpoint's tests needed — that a
+`draft` and an `approved` document with byte-identical `rendered_content`
+produce *different* PDF bytes, proving the watermark banner is actually
+present rather than just assumed from reading the renderer code.
+
+Three pre-existing Checkpoint 34 tests needed small fixture updates —
+not real bugs, just written against the old `draft`/`generated`/`archived`
+enum and unconditional-editability assumptions: an assertion expecting
+`status: generated` after generation now expects `draft`; a title-update
+test needed its fixture document created via the new `->draft()` factory
+state (an `approved`-by-default document, the new factory default,
+can no longer be edited); and the status-tampering test's fixture
+needed the same `->draft()` state, plus its assertion updated from
+`'generated'` to `'draft'` (the tampering itself — attempting to set
+`status: archived` in the request body — was already correctly ignored
+before and after; only the fixture's starting status needed to change).
+
 ## Known limitations
 
 - No test coverage reporting configured yet.

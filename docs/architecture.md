@@ -1846,3 +1846,82 @@ necessarily generated from what is now "version 1". Verified directly
 migrations, inserting a raw pre-checkpoint-shaped row, replaying them
 forward, and confirming the resulting version/reference/column state —
 see `docs/testing.md`.
+
+## HR Document Approval Workflow Foundation (Checkpoint 37)
+
+A single-approver approval workflow for `HrGeneratedDocument`, per your
+approved gap analysis. See
+[`security.md`](security.md#hr-document-approval-workflow-foundation-checkpoint-37)
+for the full security model and
+[`api.md`](api.md#hr-generated-document-approval-workflow) for the
+route reference.
+
+**Status flow is centralized in `HrGeneratedDocumentStatus::canTransitionTo()`,
+the exact `LifecycleProcessStatus` pattern from Checkpoint 33 — not a
+new mechanism.** `draft → pending_approval → approved | rejected`,
+`rejected → pending_approval` (resubmit), and `archived` reachable from
+every non-terminal status including `pending_approval` (unconditional
+archiving matches this controller's pre-Checkpoint-37 behavior —
+`destroy()` never had a status guard at all — so no new blocking rule
+was introduced where none was asked for). `approved` only transitions to
+`archived`: never editable, never resubmittable, exactly as specified.
+
+**A newly generated document always starts `draft` — no auto-approve
+shortcut for a user who already holds `.approve`, your explicit
+approved simplification.** `HrGeneratedDocumentController::store()`
+unconditionally sets `status: Draft`; submit + approve is always a
+separate, explicit step regardless of who generated it.
+
+**`submit()` handles both the original submission and a resubmission
+through one endpoint, distinguished only by audit action.** `draft →
+pending_approval` logs `hr_generated_document.submitted`; `rejected →
+pending_approval` logs `hr_generated_document.resubmitted` — the
+`$fromStatus` captured before the transition is the only thing that
+differs, matching your required audit-action list without a second
+route.
+
+**Three new permissions, not folded into `.update`.** `hr_generated_documents.{submit,approve,reject}`
+exist specifically so HR Officer can hold `.submit` without ever being
+able to hold `.approve`/`.reject` — self-approval is structurally
+impossible for that role, not just discouraged by convention.
+
+**Editability is a status gate on the existing update endpoint, not a
+new one.** `UpdateHrGeneratedDocumentRequest::withValidator()` rejects
+(422) a title edit unless the route-bound document's status is
+`draft` or `rejected` — your explicit approved rule (not editable while
+`pending_approval` or once `approved`). Same "withValidator() against
+the route-bound record's current status" pattern
+`UpdateHrDocumentTemplateVersionRequest` already established in
+Checkpoint 36.
+
+**PDF export gets a plain-text watermark banner for anything not
+`approved` — Option A, your approved choice over blocking non-approved
+downloads entirely.** `HrDocumentPdfRenderer::watermarkBanner()` adds
+one extra `<div>` (no images, nothing that could pass for an official
+seal) reading e.g. "DRAFT — NOT YET SUBMITTED FOR APPROVAL" or
+"PENDING APPROVAL — NOT YET APPROVED", conditioned purely on the
+document's own `status` — no new permission, no new route, the
+existing `hr_generated_documents.view`-gated download still works
+identically for every status, just visibly labeled when it isn't final.
+
+**Rejection reason is stored and returned, but never audited.**
+`rejection_reason` is a real column, exposed on `HrGeneratedDocumentResource`
+(the whole point of rejecting is that the submitter can see why — hiding
+it would defeat the feature) but never passed to `AuditLogger::logFor()`
+as metadata, the same "free-text content never reaches the logger"
+discipline already applied to lifecycle task descriptions and this
+module's own `rendered_content`.
+
+**Backfill maps every pre-existing `generated` document to `approved`,
+with `approved_at`/`approved_by` copied from `generated_at`/`generated_by` —
+your approved reading of "already finalized" under the old content-only
+model.** `submitted_at`/`submitted_by` stay null — these documents were
+never actually submitted through a workflow that didn't exist yet, and
+backfilling a submission that never happened would be a fabrication,
+unlike the generator-as-approver proxy which is the only real actor on
+record. Verified directly (not just assumed) the same way Checkpoint
+36's version backfill was: rolling back the status-backfill migration,
+inserting a raw pre-Checkpoint-37 `generated` row via the query
+builder, replaying the migration forward, and confirming the resulting
+`approved`/`approved_at`/`approved_by`/`submitted_at` state — see
+`docs/testing.md`.

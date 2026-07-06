@@ -279,4 +279,11 @@ Route::middleware(['auth', 'tenant.matches'])->prefix('api/v1')->group(function 
     Route::get('hr-generated-documents/{hrGeneratedDocument}/download-pdf', [HrGeneratedDocumentController::class, 'downloadPdf'])->middleware('permission:hr_generated_documents.view');
     Route::patch('hr-generated-documents/{hrGeneratedDocument}', [HrGeneratedDocumentController::class, 'update'])->middleware('permission:hr_generated_documents.update');
     Route::delete('hr-generated-documents/{hrGeneratedDocument}', [HrGeneratedDocumentController::class, 'destroy'])->middleware('permission:hr_generated_documents.delete');
+
+    // Checkpoint 37 — HR Document Approval Workflow Foundation. submit()
+    // handles both draft->pending_approval and rejected->pending_approval
+    // (resubmit) through the same route/permission.
+    Route::post('hr-generated-documents/{hrGeneratedDocument}/submit', [HrGeneratedDocumentController::class, 'submit'])->middleware('permission:hr_generated_documents.submit');
+    Route::post('hr-generated-documents/{hrGeneratedDocument}/approve', [HrGeneratedDocumentController::class, 'approve'])->middleware('permission:hr_generated_documents.approve');
+    Route::post('hr-generated-documents/{hrGeneratedDocument}/reject', [HrGeneratedDocumentController::class, 'reject'])->middleware('permission:hr_generated_documents.reject');
 });

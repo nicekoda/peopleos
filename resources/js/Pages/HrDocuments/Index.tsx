@@ -7,13 +7,7 @@ import EmptyState from '@/Components/EmptyState';
 import LoadingState from '@/Components/LoadingState';
 import PermissionGate from '@/Components/PermissionGate';
 import { api, toApiError, redirectIfUnauthenticated, ApiError } from '@/lib/api';
-import { HR_DOCUMENT_TYPE_LABELS, HrGeneratedDocument, HrGeneratedDocumentStatus, PaginatedResponse } from '@/types/hrDocument';
-
-const statusTone: Record<HrGeneratedDocumentStatus, 'neutral' | 'success' | 'warning' | 'danger'> = {
-    draft: 'neutral',
-    generated: 'success',
-    archived: 'neutral',
-};
+import { HR_DOCUMENT_TYPE_LABELS, HR_GENERATED_DOCUMENT_STATUS_TONE, HrGeneratedDocument, PaginatedResponse } from '@/types/hrDocument';
 
 /**
  * Checkpoint 34 — generated document list, fetched client-side from
@@ -102,7 +96,7 @@ export default function HrDocumentsIndex() {
                                         {HR_DOCUMENT_TYPE_LABELS[document.document_type]}
                                     </td>
                                     <td className="whitespace-nowrap px-4 py-3">
-                                        <Badge tone={statusTone[document.status]}>{document.status}</Badge>
+                                        <Badge tone={HR_GENERATED_DOCUMENT_STATUS_TONE[document.status]}>{document.status.replace('_', ' ')}</Badge>
                                     </td>
                                     <td className="whitespace-nowrap px-4 py-3 text-slate-500">
                                         {document.generated_at?.slice(0, 10) ?? '—'}

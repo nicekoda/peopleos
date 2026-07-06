@@ -140,8 +140,12 @@ class RoleSeeder extends Seeder
             // "full manage" tier as create/update/delete.
             'hr_document_templates.view', 'hr_document_templates.create',
             'hr_document_templates.update', 'hr_document_templates.delete', 'hr_document_templates.publish',
+            // Checkpoint 37 — submit/approve/reject added, per your
+            // explicit approved mapping ("HR Manager / HR Director:
+            // submit, approve, reject").
             'hr_generated_documents.view', 'hr_generated_documents.create',
             'hr_generated_documents.update', 'hr_generated_documents.delete', 'hr_generated_documents.generate',
+            'hr_generated_documents.submit', 'hr_generated_documents.approve', 'hr_generated_documents.reject',
         ]);
 
         // Checkpoint 34 — HR Director previously had no permissions
@@ -154,6 +158,7 @@ class RoleSeeder extends Seeder
             'hr_document_templates.update', 'hr_document_templates.delete', 'hr_document_templates.publish',
             'hr_generated_documents.view', 'hr_generated_documents.create',
             'hr_generated_documents.update', 'hr_generated_documents.delete', 'hr_generated_documents.generate',
+            'hr_generated_documents.submit', 'hr_generated_documents.approve', 'hr_generated_documents.reject',
         ]);
 
         $this->grantByKeys($roles['Employee'], [
@@ -240,6 +245,10 @@ class RoleSeeder extends Seeder
             'hr_document_templates.view',
             'hr_generated_documents.view', 'hr_generated_documents.create',
             'hr_generated_documents.update', 'hr_generated_documents.generate',
+            // Checkpoint 37 — submit only, per your explicit approved
+            // mapping ("HR Officer: create/update/generate/submit, but
+            // not approve/reject") — HR Officer can never self-approve.
+            'hr_generated_documents.submit',
         ]);
 
         $this->grantByKeys($roles['Auditor'], [

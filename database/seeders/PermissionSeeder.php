@@ -52,7 +52,11 @@ class PermissionSeeder extends Seeder
             // the existing view/update/delete keys — a version is the
             // template's own history, not a separate-trust resource.
             'hr_document_templates' => ['view', 'create', 'update', 'delete', 'publish'],
-            'hr_generated_documents' => ['view', 'create', 'update', 'delete', 'generate'],
+            // Checkpoint 37 — .submit/.approve/.reject added for the
+            // approval workflow. Split deliberately (not folded into
+            // .update) so HR Officer can generate/submit without ever
+            // being able to self-approve.
+            'hr_generated_documents' => ['view', 'create', 'update', 'delete', 'generate', 'submit', 'approve', 'reject'],
         ];
 
         foreach ($tenantPermissions as $category => $actions) {

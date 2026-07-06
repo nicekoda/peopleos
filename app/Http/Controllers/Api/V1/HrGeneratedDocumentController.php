@@ -12,10 +12,13 @@ use App\Models\HrDocumentTemplate;
 use App\Models\HrGeneratedDocument;
 use App\Models\Tenant;
 use App\Services\Audit\AuditLogger;
+use App\Services\HrDocuments\HrDocumentPdfRenderer;
 use App\Services\HrDocuments\PlaceholderRenderer;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
+use Illuminate\Http\Response;
+use Illuminate\Support\Str;
 
 class HrGeneratedDocumentController extends Controller
 {
@@ -134,6 +137,46 @@ class HrGeneratedDocumentController extends Controller
         }
 
         return new HrGeneratedDocumentResource($hrGeneratedDocument->load('employee'));
+    }
+
+    /**
+     * Checkpoint 35 — Option B (approved): renders the PDF on demand from
+     * the already-stored rendered_content and streams it straight back;
+     * nothing is ever written to any disk, so there is no storage path to
+     * leak and no file lifecycle to manage. Gated by the same
+     * hr_generated_documents.view permission as GET .../{id} — downloading
+     * a PDF of a document you can already view in JSON is not a new
+     * capability, so no new permission was introduced for it.
+     */
+    public function downloadPdf(Request $request, HrGeneratedDocument $hrGeneratedDocument): Response
+    {
+        $this->ensureBelongsToCurrentTenant($hrGeneratedDocument);
+
+        $tenant = app(Tenant::class);
+        $pdfBytes = HrDocumentPdfRenderer::render($hrGeneratedDocument->load('employee'), $tenant);
+
+        AuditLogger::logFor(
+            actor: $request->user(),
+            action: 'hr_generated_document.pdf_downloaded',
+            module: 'hr_documents',
+            tenantId: $hrGeneratedDocument->tenant_id,
+            auditableType: HrGeneratedDocument::class,
+            auditableId: $hrGeneratedDocument->id,
+            description: "HR document '{$hrGeneratedDocument->title}' downloaded as PDF.",
+            metadata: [
+                'employee_id' => $hrGeneratedDocument->employee_id,
+                'document_type' => $hrGeneratedDocument->document_type->value,
+            ],
+            ipAddress: $request->ip(),
+            userAgent: $request->userAgent(),
+        );
+
+        $filename = Str::slug($hrGeneratedDocument->title).'.pdf';
+
+        return response($pdfBytes, 200, [
+            'Content-Type' => 'application/pdf',
+            'Content-Disposition' => "attachment; filename=\"{$filename}\"",
+        ]);
     }
 
     /**

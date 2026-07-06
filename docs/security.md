@@ -4217,6 +4217,108 @@ populate it without a schema change.
 - Bulk generation (e.g., generate the same letter for a department) and
   employee self-service download, once real demand is shown.
 
+## PDF Export Dependency Review & Prototype (Checkpoint 35)
+
+Adds on-demand PDF download for HR generated documents —
+`dompdf/dompdf`, Option B (generate, never store), both approved after
+a dedicated dependency/environment review before any code was written.
+See [`architecture.md`](architecture.md#pdf-export-dependency-review--prototype-checkpoint-35)
+for the technical writeup; this section covers the security design.
+
+### Same three-layer tenant-isolation pattern, no new permission
+
+`HrGeneratedDocumentController::downloadPdf()` follows the identical
+shape every other action on this controller already uses: `tenant.matches`
+middleware → `BelongsToTenant` global scope → the controller's explicit
+`ensureBelongsToCurrentTenant()` check. It is gated by the existing
+`hr_generated_documents.view` permission, not a new one — a PDF is just
+another rendering of data the caller can already see in JSON via
+`GET .../{id}`, so no new permission key was introduced for it, the
+same reasoning already applied to `policies.view` covering the
+read-only `GET .../versions` endpoint in Checkpoint 20.
+
+### The PDF pipeline is entirely code-owned HTML — no user/HR-authored markup ever reaches dompdf
+
+`HrDocumentPdfRenderer::render()` builds a fixed HTML string itself;
+every value it interpolates (`title`, employee full name, tenant name,
+formatted `generated_at`, and `rendered_content`) is passed through
+`e()` first. `rendered_content` — the one field that ultimately
+originated from an HR-authored `content_template` plus employee data —
+is additionally run through `nl2br()`, but only *after* escaping, so a
+line break renders as a real `<br>` without ever opening a path for
+injected markup. This is the same "never trust content as markup" rule
+the frontend already applies (no `dangerouslySetInnerHTML`, established
+for Policy content in Checkpoint 20 and reused for HR document content
+in Checkpoint 34) — extended here to the one other place this content
+gets rendered.
+
+### dompdf's own risk surfaces are explicitly disabled, not relied upon by default
+
+- `Options::setIsRemoteEnabled(false)` — dompdf's own default, set
+  explicitly rather than trusted implicitly, so a future dompdf upgrade
+  changing its default would not silently reopen this. Prevents any
+  `<img src="https://...">`/`@import url(...)`-style remote fetch
+  from a future template — no SSRF path from template content to an
+  internal or external URL.
+- `Options::setIsJavascriptEnabled(false)` — dompdf's limited JS subset
+  (used by some templates for dynamic page numbering) is never needed
+  here and is turned off explicitly.
+- `Options::setChroot(sys_get_temp_dir())` restricts any local file
+  access dompdf's rendering internals might attempt to a harmless
+  temp directory, never the application's own source tree.
+
+### Option B means there is no new storage path to secure at all
+
+Nothing is written to `Storage::disk(...)` — `HrDocumentPdfRenderer::render()`
+returns raw PDF bytes, and the controller streams them directly in the
+HTTP response. There is no file path to leak in a response, log, or
+error message, because no file exists past the single request/response
+cycle. This is a stronger privacy guarantee than "the file lives on a
+private disk" (Checkpoint 8's pattern for `employee_documents`) — there
+is no disk involved at all. `hr_generated_documents.employee_document_id`
+remains unused, unchanged since Checkpoint 34, reserved for a future
+Option C that would reuse the exact private `local` disk pattern
+`EmployeeDocumentController` already established.
+
+### Why headless-browser PDF generation was rejected before it was ever tried
+
+`spatie/browsershot` (headless Chrome) and `wkhtmltopdf`/Snappy were
+compared and ruled out at the dependency-review stage: both require
+installing and keeping patched a browser or standalone binary on the
+server, which is workable on a fully-controlled VPS but incompatible
+with the cheap shared hosting `docs/quality-gate.md` already treats as
+a real constraint — most shared PHP hosts have no shell access to
+install one at all. `dompdf/dompdf` is pure PHP with no such
+requirement, and a single-page text letter has no layout complexity
+that would justify the added attack surface and operational cost of a
+full browser engine.
+
+### Current limitations
+
+- No PDF is ever stored — every download re-renders from `rendered_content`,
+  which is fine for a single-page letter with no images but would be
+  wasteful for a much larger document. Not a concern at this content
+  scale.
+- No DOCX export (still out of scope, unchanged from Checkpoint 34).
+- No e-signature, approval workflow, automated sending, external
+  sharing, template versioning, or bulk generation (all unchanged from
+  Checkpoint 34's stated limitations).
+- The rendered PDF has no header/footer branding, page numbers, or
+  letterhead — plain title + metadata line + content, matching the
+  content-only spirit of this feature so far.
+
+### Future
+
+- Option C (generate once, persist to the private `local` disk, attach
+  via `hr_generated_documents.employee_document_id`) if a real need for
+  re-downloading identical bytes without re-rendering, or for
+  attaching the PDF to the broader Document Repository, is shown.
+- Letterhead/branding, page numbers, and a footer, once a real design
+  requirement exists — the current plain layout was a deliberate
+  minimum, not a placeholder.
+- DOCX export, if a real customer need for an editable format
+  (as opposed to a final, non-editable letter) is shown.
+
 ## Local Demo Credentials
 
 **Local development only — these are not real secrets and only work against your own local database.** Password comes from `SEED_USER_PASSWORD` in `.env` (not committed; `.env.example` has an empty placeholder).
@@ -4286,4 +4388,4 @@ data these six `uesl` logins see (Checkpoint 26's `DemoDataSeeder`).
 - **Departments/Positions/Locations (Checkpoint 32) have no hierarchy, no usage-count guard before archiving, and no bulk import/export** — see [Employee Lifecycle Foundation](#employee-lifecycle-foundation-checkpoint-32) above.
 - **Employment Type remains a fixed enum, not a tenant-configurable lookup table** (Checkpoint 32, deliberate scope decision) — see [Employee Lifecycle Foundation](#employee-lifecycle-foundation-checkpoint-32) above.
 - **Onboarding & Offboarding (Checkpoint 33) has no task templates, task dependencies/ordering, approval routing, notifications, IT/asset provisioning integration, document generation, e-signature, recruitment-to-employee conversion, or performance/probation review integration; Line Manager visibility is direct-reports only, not the full reporting tree** — see [Onboarding & Offboarding Foundation](#onboarding--offboarding-foundation-checkpoint-33) above.
-- **HR Documents & Letter Generation (Checkpoint 34) is content-only — no PDF/DOCX file, no e-signature, no approval workflow, no automated sending, no template versioning, no bulk generation, no employee self-service download** — see [HR Documents & Letter Generation Foundation](#hr-documents--letter-generation-foundation-checkpoint-34) above.
+- **HR Documents & Letter Generation (Checkpoint 34) has no DOCX file, e-signature, approval workflow, automated sending, template versioning, bulk generation, or employee self-service download — PDF export was added in Checkpoint 35 (generate-on-demand, never stored)** — see [HR Documents & Letter Generation Foundation](#hr-documents--letter-generation-foundation-checkpoint-34) and [PDF Export Dependency Review & Prototype](#pdf-export-dependency-review--prototype-checkpoint-35) above.

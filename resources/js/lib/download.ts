@@ -41,6 +41,32 @@ export async function downloadEmployeeDocument(
 }
 
 /**
+ * Checkpoint 35 — Option B: the PDF is rendered on demand server-side,
+ * never stored, so this is just another authenticated blob download,
+ * same shape as downloadEmployeeDocument above.
+ */
+export async function downloadHrGeneratedDocumentPdf(documentId: string, filename: string): Promise<ApiError | null> {
+    try {
+        const response = await api.get(`/hr-generated-documents/${documentId}/download-pdf`, {
+            responseType: 'blob',
+        });
+
+        const url = URL.createObjectURL(response.data as Blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = filename;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        URL.revokeObjectURL(url);
+
+        return null;
+    } catch (error) {
+        return toDownloadApiError(error);
+    }
+}
+
+/**
  * With `responseType: 'blob'`, a failed request's `error.response.data`
  * is itself a Blob (containing the JSON error body as raw bytes), not
  * parsed JSON — `toApiError()` can't read `.message`/`.errors` off a

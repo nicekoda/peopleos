@@ -259,6 +259,10 @@ Route::middleware(['auth', 'tenant.matches'])->prefix('api/v1')->group(function 
     Route::get('hr-generated-documents', [HrGeneratedDocumentController::class, 'index'])->middleware('permission:hr_generated_documents.view');
     Route::post('hr-generated-documents', [HrGeneratedDocumentController::class, 'store'])->middleware('permission:hr_generated_documents.generate');
     Route::get('hr-generated-documents/{hrGeneratedDocument}', [HrGeneratedDocumentController::class, 'show'])->middleware('permission:hr_generated_documents.view');
+    // Checkpoint 35 — Option B (approved): PDF generated on demand from
+    // rendered_content, never stored. Same permission as the JSON show
+    // route above — downloading a PDF isn't a new capability.
+    Route::get('hr-generated-documents/{hrGeneratedDocument}/download-pdf', [HrGeneratedDocumentController::class, 'downloadPdf'])->middleware('permission:hr_generated_documents.view');
     Route::patch('hr-generated-documents/{hrGeneratedDocument}', [HrGeneratedDocumentController::class, 'update'])->middleware('permission:hr_generated_documents.update');
     Route::delete('hr-generated-documents/{hrGeneratedDocument}', [HrGeneratedDocumentController::class, 'destroy'])->middleware('permission:hr_generated_documents.delete');
 });

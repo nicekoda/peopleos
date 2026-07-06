@@ -1185,6 +1185,7 @@ two resources' different trust levels — see `docs/security.md`.
 | `GET` | `/api/v1/hr-generated-documents` | `hr_generated_documents.view` | Paginated; optional `?employee_id=` filter, validated against the current tenant (`404` if the employee belongs to another tenant) |
 | `POST` | `/api/v1/hr-generated-documents` | `hr_generated_documents.generate` | Both creates and renders in one step — see "Generation is a single action" below. Body: `{"employee_id": "...", "hr_document_template_id": "...", "title": "..." (optional)}` |
 | `GET` | `/api/v1/hr-generated-documents/{hrGeneratedDocument}` | `hr_generated_documents.view` | |
+| `GET` | `/api/v1/hr-generated-documents/{hrGeneratedDocument}/download-pdf` | `hr_generated_documents.view` | **New in Checkpoint 35** — renders `rendered_content` to PDF on demand via `dompdf/dompdf` and streams it; nothing is ever written to disk. Same permission as the JSON `show` route above, not a new one. Response: `Content-Type: application/pdf`, `Content-Disposition: attachment; filename="{slug}.pdf"` |
 | `PATCH` | `/api/v1/hr-generated-documents/{hrGeneratedDocument}` | `hr_generated_documents.update` | `title` only — `status`/`rendered_content`/`generated_by` are never accepted here |
 | `DELETE` | `/api/v1/hr-generated-documents/{hrGeneratedDocument}` | `hr_generated_documents.delete` | Soft delete only ("archive") |
 
@@ -1258,6 +1259,24 @@ for the exact cases covered.
 }
 ```
 
+### PDF export (Checkpoint 35) — generate on demand, never store
+
+`GET /hr-generated-documents/{id}/download-pdf` calls
+`App\Services\HrDocuments\HrDocumentPdfRenderer::render()`, which
+builds a small, code-owned HTML document (title, employee name, tenant
+name, generated date, and `rendered_content` — every value passed
+through `e()` before interpolation, `rendered_content` additionally
+through `nl2br()` *after* escaping) and renders it via `dompdf/dompdf`
+with `isRemoteEnabled`/`isJavascriptEnabled` both explicitly `false`.
+The response streams the resulting bytes directly — `Storage::disk(...)`
+is never touched, so there is no file, and therefore no storage path,
+to ever appear in a response, log, or error message. This was a
+deliberate dependency/environment review decision (Option B over
+Option A/C) — see `docs/security.md#pdf-export-dependency-review--prototype-checkpoint-35`
+for the full comparison against `barryvdh/laravel-dompdf`, `mpdf/mpdf`,
+and headless-browser options (`spatie/browsershot`, wkhtmltopdf), all
+of which were reviewed and rejected before this one was chosen.
+
 ## Current limitations
 
 - No export endpoint (`employees.export` permission is seeded but unused — explicitly out of scope this checkpoint).
@@ -1276,7 +1295,7 @@ for the exact cases covered.
 - Session-based auth only — see "Authentication" above for the full future Sanctum/token plan.
 - No task templates, task dependencies/ordering, approval routing, notifications, or reminders for lifecycle processes/tasks (Checkpoint 33) — see `docs/security.md#onboarding--offboarding-foundation-checkpoint-33`.
 - No standalone `GET` for a single lifecycle task — see "Lifecycle Processes & Tasks" above.
-- No PDF/DOCX file generation, e-signature, approval workflow, automated sending, template versioning, bulk generation, or employee self-service download for HR Documents (Checkpoint 34) — see `docs/security.md#hr-documents--letter-generation-foundation-checkpoint-34`.
+- No DOCX file generation, e-signature, approval workflow, automated sending, template versioning, bulk generation, or employee self-service download for HR Documents (Checkpoint 34/35) — see `docs/security.md#hr-documents--letter-generation-foundation-checkpoint-34`. PDF export exists (Checkpoint 35) but is generate-on-demand only — every download re-renders from `rendered_content`, nothing is ever persisted.
 
 ## Future
 
@@ -1307,6 +1326,7 @@ for the exact cases covered.
 - Acknowledgement compliance reports/dashboard, and the export endpoint (`policies.export_acknowledgements` already reserved).
 - Frontend UI for policy authoring, publishing, and the acknowledgement experience — this checkpoint is API-only, same as every module so far.
 - A general tenant-level (non-employee-scoped) document table — would resolve the `employee_document_id` schema mismatch on `policy_versions` cleanly.
-- PDF (and/or DOCX) file generation for HR Documents, once a specific library is separately reviewed and approved as its own dependency decision — attaching the result via the existing (currently unused) `hr_generated_documents.employee_document_id` column, no schema change needed.
+- Persisted PDF storage for HR Documents (Option C — generate once, save to the private disk, attach via the existing, still-unused `hr_generated_documents.employee_document_id` column), if re-downloading identical bytes without re-rendering or Document Repository integration is ever needed. On-demand generation (Option B) shipped in Checkpoint 35 — see above.
+- DOCX file generation for HR Documents, if a real need for an editable (not just final) format is shown.
 - Template versioning, e-signature, and approval-routing workflows for HR Documents, once a real need is scoped — deliberately not built in Checkpoint 34.
 - Bulk HR document generation (e.g., the same letter for a whole department) and employee self-service download.

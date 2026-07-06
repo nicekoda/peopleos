@@ -60,7 +60,9 @@ jobs:
         uses: shivammathur/setup-php@v2
         with:
           php-version: '8.3'
-          extensions: pdo_pgsql, pgsql, mbstring, bcmath, ctype, fileinfo, openssl, tokenizer, xml
+          # gd added Checkpoint 35 — dompdf/dompdf uses it for font
+          # metrics/image embedding when rendering HR document PDFs.
+          extensions: pdo_pgsql, pgsql, mbstring, bcmath, ctype, fileinfo, openssl, tokenizer, xml, gd
           coverage: none
 
       - name: Setup Node

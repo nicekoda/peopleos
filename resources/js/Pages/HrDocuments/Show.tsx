@@ -9,6 +9,7 @@ import LoadingState from '@/Components/LoadingState';
 import PermissionGate from '@/Components/PermissionGate';
 import { InputField } from '@/Components/FormField';
 import { api, toApiError, redirectIfUnauthenticated, ApiError } from '@/lib/api';
+import { downloadHrGeneratedDocumentPdf } from '@/lib/download';
 import { HR_DOCUMENT_TYPE_LABELS, HrGeneratedDocument, HrGeneratedDocumentStatus } from '@/types/hrDocument';
 import { PageProps } from '@/types';
 
@@ -51,6 +52,9 @@ export default function HrDocumentShow() {
     const [archiving, setArchiving] = useState(false);
     const [archiveError, setArchiveError] = useState<string | null>(null);
 
+    const [downloadingPdf, setDownloadingPdf] = useState(false);
+    const [downloadError, setDownloadError] = useState<string | null>(null);
+
     const load = () => {
         api.get<{ data: HrGeneratedDocument }>(`/hr-generated-documents/${hrGeneratedDocumentId}`)
             .then((response) => {
@@ -88,6 +92,20 @@ export default function HrDocumentShow() {
                 }
             })
             .finally(() => setSavingTitle(false));
+    };
+
+    const handleDownloadPdf = async () => {
+        if (!document) return;
+
+        setDownloadingPdf(true);
+        setDownloadError(null);
+
+        const apiError = await downloadHrGeneratedDocumentPdf(hrGeneratedDocumentId, `${document.title}.pdf`);
+        if (apiError && !redirectIfUnauthenticated(apiError)) {
+            setDownloadError(apiError.message);
+        }
+
+        setDownloadingPdf(false);
     };
 
     const handleArchive = () => {
@@ -140,11 +158,20 @@ export default function HrDocumentShow() {
                     </>
                 }
                 actions={
-                    <Link href="/hr-documents" className="text-sm font-medium text-indigo-600 hover:text-indigo-500">
-                        Back to HR Documents
-                    </Link>
+                    <div className="flex flex-wrap items-center gap-3">
+                        <Button type="button" variant="secondary" disabled={downloadingPdf} onClick={handleDownloadPdf}>
+                            {downloadingPdf ? 'Downloading…' : 'Download PDF'}
+                        </Button>
+                        <Link href="/hr-documents" className="text-sm font-medium text-indigo-600 hover:text-indigo-500">
+                            Back to HR Documents
+                        </Link>
+                    </div>
                 }
             />
+
+            {downloadError && (
+                <div className="mb-4 rounded-md bg-red-50 px-4 py-3 text-sm text-red-700">{downloadError}</div>
+            )}
 
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 <Card title="Overview">

@@ -1691,3 +1691,64 @@ generate form needs to *pick* the employee (not have it fixed by the
 URL), and an Employee detail page's "HR Documents" link filters the
 same flat list — the same shape already proven for Lifecycle, not a
 new one invented for this checkpoint.
+
+## PDF Export Dependency Review & Prototype (Checkpoint 35)
+
+A dedicated dependency/environment review preceded any implementation,
+per your explicit instruction — no library was added until you approved
+one. See [`security.md`](security.md#pdf-export-dependency-review--prototype-checkpoint-35)
+for the full security design and [`api.md`](api.md#hr-document-templates--hr-generated-documents)
+for the route reference.
+
+**`dompdf/dompdf` (direct), not `barryvdh/laravel-dompdf`.** The
+Laravel wrapper adds a facade/config-publishing layer this app doesn't
+need — nothing here renders a Blade view through dompdf's integration;
+`HrDocumentPdfRenderer` builds its own small, code-owned HTML string
+(the same "own the whole pipeline, don't adopt a general-purpose engine
+for a narrow job" reasoning `PlaceholderRenderer` already established
+in Checkpoint 34), so the wrapper's only value — Blade integration —
+is unused. Depending on `dompdf/dompdf` directly also avoids coupling
+this app's PDF feature to a *second* package's own Laravel-version
+support cadence on top of dompdf's own.
+
+**Headless-browser PDF generation (Browsershot/Puppeteer/wkhtmltopdf)
+was ruled out at the review stage, not implemented and then reverted.**
+All three require installing and maintaining a browser or standalone
+binary on whatever server runs this app — workable on a fully-controlled
+VPS, but incompatible with the cheap shared hosting this project's
+`docs/quality-gate.md` "GitHub Free" reasoning already treats as a real
+constraint to plan around. A single-page text letter has no layout
+complexity that would justify that operational cost; `dompdf/dompdf`'s
+pure-PHP, no-binary rendering was sufficient.
+
+**Option B (generate-on-demand, never stored) over Option C (generate
+and persist).** `HrGeneratedDocumentController::downloadPdf()` calls
+`HrDocumentPdfRenderer::render()` synchronously inside the request and
+returns the bytes directly — `Storage::disk(...)` is never touched.
+This sidesteps every file-lifecycle question (orphaned files, disk
+growth, what happens if the underlying `rendered_content` is later
+edited) that Option C would raise, at the cost of re-rendering the PDF
+on every download rather than paying that cost once — an acceptable
+tradeoff for a single-page letter with no images. `hr_generated_documents.employee_document_id`
+(added in Checkpoint 34, still unused) remains the intended attach
+point if a future checkpoint moves to Option C.
+
+**`HrDocumentPdfRenderer` reuses the "own the entire markup, never
+trust content as HTML" rule from `PlaceholderRenderer`/the frontend.**
+Every interpolated value (document title, employee name, tenant name,
+generated date, and `rendered_content` itself) is passed through `e()`
+before being placed in the HTML string this class builds; `rendered_content`
+additionally goes through `nl2br()` *after* escaping (never before) so
+line breaks render correctly without opening any markup-injection path.
+dompdf's `Options::setIsRemoteEnabled(false)` (its own default, set
+explicitly rather than relied upon) and `setIsJavascriptEnabled(false)`
+mean the rendering pipeline can never fetch a remote URL or execute
+script, regardless of what ends up in a future template's `content_template`.
+
+**No new permission was introduced for downloading a PDF.** The route
+is gated by the existing `hr_generated_documents.view` — the same
+permission that already gates `GET /api/v1/hr-generated-documents/{id}`
+(the JSON view). Downloading a PDF rendering of a document you can
+already view in full isn't a new capability worth its own permission
+key, the same reasoning already applied to policy-version reads in
+Checkpoint 20.

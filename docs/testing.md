@@ -1376,6 +1376,32 @@ skip) passed on the first full-suite run after implementation — no
 fixture bugs or table-name surprises this time, unlike Checkpoint 33's
 `employee_lifecycle_processes` table-name mismatch above.
 
+## Testing a real binary response, not another JSON fixture (Checkpoint 35)
+
+`HrGeneratedDocumentPdfDownloadTest` (10 tests) is the first suite in
+this app asserting against real PDF bytes rather than a JSON body —
+`assertStringStartsWith('%PDF-', $response->getContent())` confirms
+dompdf actually produced a PDF, not just a 200 status with an empty or
+malformed body. Covers: guest/permission/tenant-isolation/Platform
+Super Admin gating (same shape as every other endpoint), correct
+`Content-Type`/`Content-Disposition` headers, no `storage_path()` value
+anywhere in the response body *or* headers (meaningful here specifically
+because Option B stores nothing — this test would fail loudly if a
+future change accidentally started writing to disk and leaking the
+path), no mutation of the underlying record from a read-only download,
+and an audit-log assertion that a marker string placed in
+`rendered_content` never appears in the resulting log row.
+
+**One test-only bug, not an implementation bug, found by the first
+run:** the mutation-check test originally compared `$document->toArray()`
+(captured immediately after `factory()->create()`) against
+`$document->fresh()->toArray()` — Eloquent only populates `$attributes`
+with what was explicitly mass-assigned until a model is reloaded, so
+every DB-default-`null` column (`hr_document_template_id`, `generated_by`,
+etc., left unset by the factory) appeared as a spurious "new" key in
+the diff even though nothing had actually changed. Fixed by capturing
+`$before` from a fresh re-fetch too, not the in-memory instance.
+
 ## Known limitations
 
 - No test coverage reporting configured yet.

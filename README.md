@@ -437,6 +437,22 @@ reflection-driven property access. An unknown token is left completely
 unchanged rather than erroring or executing. See `docs/architecture.md`
 and `docs/security.md` for the full design.
 
+## PDF Export for HR Documents (Checkpoint 35)
+
+A dependency/environment review (comparing `barryvdh/laravel-dompdf`,
+`dompdf/dompdf`, `mpdf/mpdf`, `spatie/browsershot`, wkhtmltopdf, and
+headless Chrome against Windows/Laragon, GitHub Actions, and cheap
+shared-hosting constraints) recommended, and you approved, `dompdf/dompdf`
+(direct, not the Laravel wrapper) with **Option B: generate the PDF on
+demand, never store it**. `GET /api/v1/hr-generated-documents/{id}/download-pdf`
+renders `rendered_content` into PDF bytes and streams them back —
+nothing is written to any disk, so there's no new storage path to
+secure and no file lifecycle to manage. Gated by the same
+`hr_generated_documents.view` permission the JSON `show` route already
+uses (downloading a PDF of a document you can already view isn't a new
+capability). See `docs/architecture.md` and `docs/security.md` for the
+full design and why headless-browser PDF generation was ruled out.
+
 ## Documentation
 
 - [`docs/architecture.md`](docs/architecture.md) — multi-tenancy, tenant resolution, RBAC overview, internal-vs-public IDs, frontend architecture.

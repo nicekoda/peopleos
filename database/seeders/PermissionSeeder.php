@@ -41,6 +41,13 @@ class PermissionSeeder extends Seeder
             'lifecycle' => ['view', 'create', 'update', 'delete', 'assign_task', 'complete_task'],
             'announcements' => ['view', 'create', 'publish'],
             'audit' => ['view', 'export'],
+            // Checkpoint 34 — HR Documents & Letter Generation Foundation.
+            // .create is seeded for forward compatibility but not wired to
+            // a route yet this checkpoint — the only write path is
+            // generation (.generate), which both creates and renders in
+            // one step. Same "seeded ahead of use" posture as audit.export.
+            'hr_document_templates' => ['view', 'create', 'update', 'delete'],
+            'hr_generated_documents' => ['view', 'create', 'update', 'delete', 'generate'],
         ];
 
         foreach ($tenantPermissions as $category => $actions) {

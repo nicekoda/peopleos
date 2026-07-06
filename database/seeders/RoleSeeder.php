@@ -133,6 +133,25 @@ class RoleSeeder extends Seeder
             // manage rights, per your explicit approved mapping.
             'lifecycle.view', 'lifecycle.create', 'lifecycle.update', 'lifecycle.delete',
             'lifecycle.assign_task', 'lifecycle.complete_task',
+            // Checkpoint 34 — HR Documents & Letter Generation Foundation.
+            // Full manage rights on both templates and generated
+            // documents, per your explicit approved mapping.
+            'hr_document_templates.view', 'hr_document_templates.create',
+            'hr_document_templates.update', 'hr_document_templates.delete',
+            'hr_generated_documents.view', 'hr_generated_documents.create',
+            'hr_generated_documents.update', 'hr_generated_documents.delete', 'hr_generated_documents.generate',
+        ]);
+
+        // Checkpoint 34 — HR Director previously had no permissions
+        // anywhere (a placeholder role, see the class-level note above).
+        // Per your explicit approval, it gets the identical HR document
+        // grant as HR Manager for this checkpoint only — every other
+        // module stays untouched/empty for this role.
+        $this->grantByKeys($roles['HR Director'], [
+            'hr_document_templates.view', 'hr_document_templates.create',
+            'hr_document_templates.update', 'hr_document_templates.delete',
+            'hr_generated_documents.view', 'hr_generated_documents.create',
+            'hr_generated_documents.update', 'hr_generated_documents.delete', 'hr_generated_documents.generate',
         ]);
 
         $this->grantByKeys($roles['Employee'], [
@@ -212,6 +231,13 @@ class RoleSeeder extends Seeder
             // delete/cancel, per your explicit "safer" option.
             'lifecycle.view', 'lifecycle.create', 'lifecycle.update',
             'lifecycle.assign_task', 'lifecycle.complete_task',
+            // Checkpoint 34 — view templates only (no manage rights over
+            // the template catalog); view/create/generate/update on
+            // generated documents, no delete/archive — per your explicit
+            // approved mapping.
+            'hr_document_templates.view',
+            'hr_generated_documents.view', 'hr_generated_documents.create',
+            'hr_generated_documents.update', 'hr_generated_documents.generate',
         ]);
 
         $this->grantByKeys($roles['Auditor'], [
@@ -231,6 +257,8 @@ class RoleSeeder extends Seeder
             'departments.view', 'positions.view', 'locations.view',
             // Checkpoint 33 — view only, per your explicit approved mapping.
             'lifecycle.view',
+            // Checkpoint 34 — view only, per your explicit approved mapping.
+            'hr_document_templates.view', 'hr_generated_documents.view',
         ]);
 
         // Line Manager (Checkpoint 13: employees.view_team only).
@@ -259,9 +287,9 @@ class RoleSeeder extends Seeder
             'lifecycle.view', 'lifecycle.complete_task',
         ]);
 
-        // Remaining roles (HR Director, Department Head, etc.) are
-        // intentionally left as placeholders with no permissions
-        // attached yet.
+        // Remaining roles (Department Head, etc.) are intentionally left
+        // as placeholders with no permissions attached yet. HR Director
+        // is no longer fully empty — see its grant above (Checkpoint 34).
     }
 
     /**

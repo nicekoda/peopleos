@@ -1610,3 +1610,84 @@ substring) — here, the free-text fields are simply never passed to
 schema; HR adds tasks directly when creating a process instead. A
 reusable checklist library is documented future work, not a silent
 scope cut — see "Current limitations" in `security.md`.
+
+## HR Documents & Letter Generation Foundation (Checkpoint 34)
+
+Two new tables, `hr_document_templates` and `hr_generated_documents`,
+added per your approved minimal schema — the same `Policy`/`PolicyVersion`
+template-and-instance shape from Checkpoint 20, not a new pattern. See
+[`security.md`](security.md#hr-documents--letter-generation-foundation-checkpoint-34)
+for the full security model and
+[`api.md`](api.md#hr-document-templates--hr-generated-documents) for the
+route reference.
+
+**Content-only (Option A, your explicit approved choice) — no PDF/DOCX
+library was added this checkpoint.** Neither existed in `composer.json`/
+`package.json` before this checkpoint (verified during the gap
+analysis, not assumed); adding one was flagged as a separate dependency
+decision rather than bundled into this one. `hr_generated_documents.rendered_content`
+stores the resolved letter as plain text; `employee_document_id` stays
+nullable and unused, the same forward-compatible-placeholder shape
+`policy_versions.employee_document_id` already established in
+Checkpoint 20 for an analogous "no real file yet" gap.
+
+**Generation is a single action, not a two-step draft-then-render
+flow.** `POST /api/v1/hr-generated-documents` both creates the row and
+renders `content_template` in one request — there is no intermediate
+"draft, unrendered" state in this checkpoint's schema (the `draft`
+value in `HrGeneratedDocumentStatus` exists for forward compatibility,
+not reachable by any code path yet). Consequently the write route is
+gated by `hr_generated_documents.generate`, not `.create` — `.create`
+is seeded in the permission catalog (matching your suggested split) but
+not wired to any route yet, the same "seeded ahead of use" posture the
+existing unused `audit.export` permission already established.
+
+**`PlaceholderRenderer` is deliberately not a template engine.**
+`App\Services\HrDocuments\PlaceholderRenderer::render()` calls PHP's
+`strtr()` once, with a fixed, hardcoded array of exactly ten
+`{{employee.*}}`/`{{tenant.name}}`/`{{today}}` keys mapped to real
+values resolved from the `Employee`/`Tenant` models passed in. `strtr()`'s
+array form does a single, simultaneous, non-recursive pass over the
+subject string — there is no code path from a stored `content_template`
+string to Blade compilation, `eval`, reflection, or dynamic
+property/method access. A token not in the fixed map (a typo, a
+different casing, an attacker-supplied `{{system.env.APP_KEY}}` or
+`{{employee.delete()}}`) is simply never matched, so it passes through
+completely unchanged — never executed, never a validation error. See
+`tests/Unit/PlaceholderRendererTest.php` for the exact cases this
+guards (unknown tokens, near-miss casing, null relations rendering as
+empty string rather than `null`/a PHP notice).
+
+**`document_type` is a shared enum (`HrDocumentType`), not a free
+string or a new lookup table.** The eight example letter types you
+listed (employment/offer/confirmation/promotion/warning/exit/reference/
+contractor-engagement) are fixed, known values — the same reasoning
+`DocumentCategoryStatus`/`DocumentAppliesTo` already apply to a small,
+enumerable classification. `hr_generated_documents.document_type` is
+copied from the template at generation time (not a live FK-resolved
+lookup), so a template edited or archived later never rewrites the
+history of documents already generated from it — the same "copy, don't
+reference" reasoning `hr_generated_documents.title` also follows when
+no override is given.
+
+**Archiving is soft-delete only, on both resources — the
+`DocumentCategoryController`/`HrDocumentTemplateController::destroy()`
+pattern, not a new one.** A template referenced by existing generated
+documents is always safe to archive (`hr_generated_documents.hr_document_template_id`
+is `nullOnDelete`, and `GenerateHrDocumentRequest` already excludes
+inactive/soft-deleted templates from new generation); a generated
+document's own `DELETE` similarly just soft-deletes ("archives") it.
+Update endpoints on both resources never accept a `status` field at
+all — `UpdateHrGeneratedDocumentRequest` accepts `title` only — so a
+status transition can never be smuggled in through a generic update
+body, avoiding the need for per-transition validation logic entirely.
+
+**No employee-scoped nesting (`/employees/{employee}/hr-generated-documents`)
+— a flat `/hr-generated-documents` resource with an optional
+`?employee_id=` filter instead**, matching the `/lifecycle-processes`/
+`/lifecycle?employeeId=` convention from Checkpoint 33 rather than the
+`/employees/{employee}/documents` nesting from Checkpoint 8. A
+generate form needs to *pick* the employee (not have it fixed by the
+URL), and an Employee detail page's "HR Documents" link filters the
+same flat list — the same shape already proven for Lifecycle, not a
+new one invented for this checkpoint.

@@ -6,6 +6,8 @@ use App\Http\Controllers\DepartmentUiController;
 use App\Http\Controllers\DocumentCategoryUiController;
 use App\Http\Controllers\EmployeeDocumentUiController;
 use App\Http\Controllers\EmployeeUiController;
+use App\Http\Controllers\HrDocumentTemplateUiController;
+use App\Http\Controllers\HrGeneratedDocumentUiController;
 use App\Http\Controllers\LeaveTypeUiController;
 use App\Http\Controllers\LeaveUiController;
 use App\Http\Controllers\LifecycleUiController;
@@ -103,6 +105,19 @@ Route::middleware(['auth', 'tenant.matches'])->group(function () {
     Route::get('documents', fn () => Inertia::render('Documents/Index'))
         ->middleware('permission:documents.view')->name('documents.index');
 
+    // HR Documents & Letter Generation Foundation UI (Checkpoint 34) —
+    // same thin-page-route pattern as every other module: document data
+    // is fetched client-side from the existing /api/v1/hr-generated-documents
+    // endpoints, never passed through as an Inertia prop beyond the ID.
+    // 'create' must be registered before '{hrGeneratedDocument}' so
+    // Laravel doesn't treat "create" as a route parameter.
+    Route::get('hr-documents', [HrGeneratedDocumentUiController::class, 'index'])
+        ->middleware('permission:hr_generated_documents.view')->name('hr-documents.index');
+    Route::get('hr-documents/create', [HrGeneratedDocumentUiController::class, 'create'])
+        ->middleware('permission:hr_generated_documents.generate')->name('hr-documents.create');
+    Route::get('hr-documents/{hrGeneratedDocument}', [HrGeneratedDocumentUiController::class, 'show'])
+        ->middleware('permission:hr_generated_documents.view')->name('hr-documents.show');
+
     // Policy Management UI (Checkpoint 20) — same thin-page-route pattern
     // as every other module: policy/version/acknowledgement data is
     // fetched client-side from the existing /api/v1/policies endpoints,
@@ -173,6 +188,17 @@ Route::middleware(['auth', 'tenant.matches'])->group(function () {
         ->middleware('permission:document_categories.create')->name('settings.document-categories.create');
     Route::get('settings/document-categories/{documentCategory}/edit', [DocumentCategoryUiController::class, 'edit'])
         ->middleware('permission:document_categories.update')->name('settings.document-categories.edit');
+
+    // HR Document Templates Admin UI (Checkpoint 34) — same thin-page-
+    // route pattern as Document Categories above. 'create' must be
+    // registered before '{hrDocumentTemplate}/edit' so Laravel doesn't
+    // collide the two.
+    Route::get('settings/hr-document-templates', [HrDocumentTemplateUiController::class, 'index'])
+        ->middleware('permission:hr_document_templates.view')->name('settings.hr-document-templates');
+    Route::get('settings/hr-document-templates/create', [HrDocumentTemplateUiController::class, 'create'])
+        ->middleware('permission:hr_document_templates.create')->name('settings.hr-document-templates.create');
+    Route::get('settings/hr-document-templates/{hrDocumentTemplate}/edit', [HrDocumentTemplateUiController::class, 'edit'])
+        ->middleware('permission:hr_document_templates.update')->name('settings.hr-document-templates.edit');
 
     // Employee Lifecycle Foundation (Checkpoint 32) — Departments/
     // Positions/Locations Admin UI, same thin-page-route pattern. 'create'

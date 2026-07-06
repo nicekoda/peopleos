@@ -540,6 +540,9 @@ served through the `web` middleware group, session-based auth same as
 | `GET` | `/policies/{policy}/versions/create` | `auth`, `tenant.matches`, `permission:policies.update` | Version create form — same permission as `POST .../versions` |
 | `GET` | `/policies/{policy}/assign` | `auth`, `tenant.matches`, `permission:policies.assign` | Assignment form — employee multi-select from `/api/v1/employees` |
 | `GET` | `/policies/{policy}/acknowledgements` | `auth`, `tenant.matches`, `permission:policies.view_acknowledgements` | Acknowledgement records list |
+| `GET` | `/hr-documents` | `auth`, `tenant.matches`, `permission:hr_generated_documents.view` | Real UI (Checkpoint 34) — list, fetched client-side from `/api/v1/hr-generated-documents`; optional `?employeeId=` query filter (from an Employee detail page link) |
+| `GET` | `/hr-documents/create` | `auth`, `tenant.matches`, `permission:hr_generated_documents.generate` | Generate form — employee/template picker; registered before `/hr-documents/{id}` to avoid route-param collision |
+| `GET` | `/hr-documents/{hrGeneratedDocument}` | `auth`, `tenant.matches`, `permission:hr_generated_documents.view` | Detail — passes only `hrGeneratedDocumentId` as a prop, never document data (see `docs/architecture.md`); `404` if cross-tenant |
 | `GET` | `/settings` | `auth`, `tenant.matches` | Real UI (Checkpoint 22) — explicit `tenant.settings.view`-or-platform-admin check in the controller (no blanket `permission:` middleware, same reason as `/dashboard` — see `docs/security.md#settings-foundation`); each section card independently permission-gated |
 | `GET` | `/settings/company` | `auth`, `tenant.matches`, `permission:tenant.view` | Real UI — view/edit, fetched client-side from `/api/v1/tenant` |
 | `GET` | `/settings/access` | `auth`, `tenant.matches`, `permission:users.view` | Real hub UI (Checkpoint 23) — cards linking to Users and Roles pages |
@@ -561,6 +564,9 @@ served through the `web` middleware group, session-based auth same as
 | `GET` | `/settings/locations` | `auth`, `tenant.matches`, `permission:locations.view` | Real UI (Checkpoint 32) — list, fetched client-side from `/api/v1/locations` |
 | `GET` | `/settings/locations/create` | `auth`, `tenant.matches`, `permission:locations.create` | Create form |
 | `GET` | `/settings/locations/{location}/edit` | `auth`, `tenant.matches`, `permission:locations.update` | Edit form — passes only `locationId` as a prop; `404` if cross-tenant |
+| `GET` | `/settings/hr-document-templates` | `auth`, `tenant.matches`, `permission:hr_document_templates.view` | Real UI (Checkpoint 34) — list, fetched client-side from `/api/v1/hr-document-templates` |
+| `GET` | `/settings/hr-document-templates/create` | `auth`, `tenant.matches`, `permission:hr_document_templates.create` | Create form |
+| `GET` | `/settings/hr-document-templates/{hrDocumentTemplate}/edit` | `auth`, `tenant.matches`, `permission:hr_document_templates.update` | Edit form — passes only `hrDocumentTemplateId` as a prop; `404` if cross-tenant |
 | `GET` | `/settings/security` | `auth`, `tenant.matches`, `permission:audit.view` | Real hub UI (Checkpoint 24) — links to Audit Logs |
 | `GET` | `/settings/security/audit-logs` | `auth`, `tenant.matches`, `permission:audit.view` | Real UI — list with filters, fetched client-side from `/api/v1/audit-logs` |
 | `GET` | `/settings/security/audit-logs/{auditLog}` | `auth`, `tenant.matches`, `permission:audit.view` | Detail — passes only `auditLogId` as a prop, never audit data; `404` if cross-tenant |
@@ -629,6 +635,18 @@ the existing `/api/v1/document-categories` (Checkpoint 9) and
 the `created_by`/`updated_by` removal documented above — no new backend
 endpoint was needed for this checkpoint at all. See
 `docs/security.md#document-categories--leave-types-admin-ui`.
+
+**HR Documents & Letter Generation Foundation UI (Checkpoint 34)**
+reuses the new `/api/v1/hr-document-templates`/`/api/v1/hr-generated-documents`
+endpoints documented above. `content_template`/`rendered_content` are
+always rendered as plain text (a `<textarea>` on the template
+Create/Edit forms, `{content}` inside a `whitespace-pre-wrap` `<div>`
+on the generated-document Show page) — never `dangerouslySetInnerHTML`,
+the same rule Checkpoint 20 established for Policy content. The
+Employee detail page gains a permission-gated "HR Documents" link to
+`/hr-documents?employeeId={id}`, the same `?employeeId=` filter
+convention Checkpoint 33 established for `/lifecycle`. See
+`docs/security.md#hr-documents--letter-generation-foundation-checkpoint-34`.
 
 ### Shared props (every Inertia response)
 
@@ -1150,6 +1168,96 @@ resolved department/position/location. The raw `employee_id`/
 | `description` (task) | nullable, max 2000 |
 | `assigned_to_user_id` (task) | nullable, must exist, belong to the current tenant, not a platform admin, and `status: active`; requires `lifecycle.assign_task` |
 
+## HR Document Templates & Generated Documents
+
+Checkpoint 34 — HR Documents & Letter Generation Foundation.
+Content-only (Option A, approved) — `rendered_content` is plain text,
+no PDF/DOCX file is generated. Two split permission sets, matching the
+two resources' different trust levels — see `docs/security.md`.
+
+| Method | Path | Permission | Notes |
+|---|---|---|---|
+| `GET` | `/api/v1/hr-document-templates` | `hr_document_templates.view` | Paginated |
+| `POST` | `/api/v1/hr-document-templates` | `hr_document_templates.create` | `slug` auto-generated from `title` if omitted |
+| `GET` | `/api/v1/hr-document-templates/{hrDocumentTemplate}` | `hr_document_templates.view` | |
+| `PATCH` | `/api/v1/hr-document-templates/{hrDocumentTemplate}` | `hr_document_templates.update` | |
+| `DELETE` | `/api/v1/hr-document-templates/{hrDocumentTemplate}` | `hr_document_templates.delete` | Soft delete only ("archive") |
+| `GET` | `/api/v1/hr-generated-documents` | `hr_generated_documents.view` | Paginated; optional `?employee_id=` filter, validated against the current tenant (`404` if the employee belongs to another tenant) |
+| `POST` | `/api/v1/hr-generated-documents` | `hr_generated_documents.generate` | Both creates and renders in one step — see "Generation is a single action" below. Body: `{"employee_id": "...", "hr_document_template_id": "...", "title": "..." (optional)}` |
+| `GET` | `/api/v1/hr-generated-documents/{hrGeneratedDocument}` | `hr_generated_documents.view` | |
+| `PATCH` | `/api/v1/hr-generated-documents/{hrGeneratedDocument}` | `hr_generated_documents.update` | `title` only — `status`/`rendered_content`/`generated_by` are never accepted here |
+| `DELETE` | `/api/v1/hr-generated-documents/{hrGeneratedDocument}` | `hr_generated_documents.delete` | Soft delete only ("archive") |
+
+**`hr_generated_documents.create` is seeded but not wired to any route
+this checkpoint** — the only write path is `.generate`, which both
+creates and renders in one request. Same "seeded ahead of use" posture
+as the existing unused `audit.export` permission.
+
+### Generation is a single action, not a two-step draft-then-render flow
+
+`POST /api/v1/hr-generated-documents` validates `employee_id` and
+`hr_document_template_id` both belong to the current tenant (and that
+the template is `active`) at the FormRequest layer, re-checks both in
+the controller, renders `content_template` via
+`App\Services\HrDocuments\PlaceholderRenderer::render()`, and persists
+the result as `status: "generated"` immediately — there is no
+intermediate unrendered "draft" state reachable through this API.
+`document_type`/`title` are copied from the template at generation time
+(a `title` override in the request body is optional), so editing or
+archiving a template later never changes a document already generated
+from it.
+
+### Placeholder allowlist
+
+Only these exact `{{...}}` tokens are substituted in `content_template`:
+`{{employee.name}}`, `{{employee.employee_number}}`, `{{employee.email}}`,
+`{{employee.department}}`, `{{employee.position}}`, `{{employee.location}}`,
+`{{employee.employment_type}}`, `{{employee.start_date}}`,
+`{{tenant.name}}`, `{{today}}`. Any other `{{...}}` text (a typo, an
+unrecognized field, an attempted injection) is left completely
+unchanged in `rendered_content` — never executed, never a validation
+error. See `docs/security.md#hr-documents--letter-generation-foundation-checkpoint-34`
+for the full safety design and `tests/Unit/PlaceholderRendererTest.php`
+for the exact cases covered.
+
+### Response shapes
+
+```json
+// GET /hr-document-templates/{id}
+{
+  "data": {
+    "id": "01h...",
+    "title": "Employment Letter",
+    "slug": "employment-letter",
+    "description": null,
+    "document_type": "employment_letter",
+    "content_template": "Dear {{employee.name}}, ...",
+    "status": "active",
+    "created_at": "2026-07-05T00:00:00+00:00",
+    "updated_at": "2026-07-05T00:00:00+00:00"
+  }
+}
+
+// POST /hr-generated-documents
+{
+  "data": {
+    "id": "01h...",
+    "employee_id": "01h...",
+    "employee": { "id": "01h...", "full_name": "Jane Doe", "employee_number": "EMP-00042" },
+    "hr_document_template_id": "01h...",
+    "employee_document_id": null,
+    "title": "Employment Letter",
+    "document_type": "employment_letter",
+    "status": "generated",
+    "rendered_content": "Dear Jane Doe, ...",
+    "generated_at": "2026-07-05T00:00:00+00:00",
+    "generated_by": 7,
+    "created_at": "2026-07-05T00:00:00+00:00",
+    "updated_at": "2026-07-05T00:00:00+00:00"
+  }
+}
+```
+
 ## Current limitations
 
 - No export endpoint (`employees.export` permission is seeded but unused — explicitly out of scope this checkpoint).
@@ -1168,6 +1276,7 @@ resolved department/position/location. The raw `employee_id`/
 - Session-based auth only — see "Authentication" above for the full future Sanctum/token plan.
 - No task templates, task dependencies/ordering, approval routing, notifications, or reminders for lifecycle processes/tasks (Checkpoint 33) — see `docs/security.md#onboarding--offboarding-foundation-checkpoint-33`.
 - No standalone `GET` for a single lifecycle task — see "Lifecycle Processes & Tasks" above.
+- No PDF/DOCX file generation, e-signature, approval workflow, automated sending, template versioning, bulk generation, or employee self-service download for HR Documents (Checkpoint 34) — see `docs/security.md#hr-documents--letter-generation-foundation-checkpoint-34`.
 
 ## Future
 
@@ -1198,3 +1307,6 @@ resolved department/position/location. The raw `employee_id`/
 - Acknowledgement compliance reports/dashboard, and the export endpoint (`policies.export_acknowledgements` already reserved).
 - Frontend UI for policy authoring, publishing, and the acknowledgement experience — this checkpoint is API-only, same as every module so far.
 - A general tenant-level (non-employee-scoped) document table — would resolve the `employee_document_id` schema mismatch on `policy_versions` cleanly.
+- PDF (and/or DOCX) file generation for HR Documents, once a specific library is separately reviewed and approved as its own dependency decision — attaching the result via the existing (currently unused) `hr_generated_documents.employee_document_id` column, no schema change needed.
+- Template versioning, e-signature, and approval-routing workflows for HR Documents, once a real need is scoped — deliberately not built in Checkpoint 34.
+- Bulk HR document generation (e.g., the same letter for a whole department) and employee self-service download.

@@ -1346,6 +1346,36 @@ CI-specific reason, when the actual reason the suite runs on SQLite
 `docs/production-readiness.md` for the production database
 requirements this doesn't change.
 
+## A genuine unit test, not another feature test, for the one piece of pure logic (Checkpoint 34)
+
+`PlaceholderRenderer::render()` is pure string substitution with no
+database, HTTP, or tenant-resolution dependency — the first module
+this app has added where "just call the method directly" is the
+correct test shape, rather than another `RefreshDatabase` feature test
+hitting a route. `tests/Unit/PlaceholderRendererTest.php` (4 tests)
+exercises exactly the security-relevant boundary: every allowed
+placeholder substitutes correctly, an unknown/attacker-shaped token
+(`{{system.env.APP_KEY}}`, `{{employee.delete()}}`) passes through
+completely unchanged, a near-miss (wrong casing, missing brace) is
+never fuzzy-matched, and a null department/position/location relation
+renders as an empty string rather than the literal string `"null"` or
+triggering a PHP notice on a null property access. `HrDocumentTemplateApiTest`
+(24 tests), `HrGeneratedDocumentApiTest` (16 tests), and
+`HrDocumentUiTest` (10 tests) round out the checkpoint with the
+now-standard shape: guest rejection, permission gating in both
+directions, tenant isolation (including the FormRequest-level
+rejection of a cross-tenant `employee_id`/`hr_document_template_id` at
+generation time, asserted as a 422 validation error rather than a 404,
+since that check happens in validation before the controller runs),
+Platform Super Admin blocked, resource field safety, audit logging for
+every write action (with an explicit assertion that a marker string
+placed in `content_template` never appears in the resulting audit log
+row), `tenant.matches` middleware coverage, and inactive-user/
+inactive-tenant fail-closed. All 815 tests (814 passed, 1 pre-existing
+skip) passed on the first full-suite run after implementation — no
+fixture bugs or table-name surprises this time, unlike Checkpoint 33's
+`employee_lifecycle_processes` table-name mismatch above.
+
 ## Known limitations
 
 - No test coverage reporting configured yet.

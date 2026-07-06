@@ -62,6 +62,14 @@ const sections: Section[] = [
         comingLater: false,
     },
     {
+        key: 'hr_document_templates',
+        title: 'HR Document Templates',
+        description: 'Manage templates for HR letter and document generation.',
+        href: '/settings/hr-document-templates',
+        permission: 'hr_document_templates.view',
+        comingLater: false,
+    },
+    {
         key: 'leave_types',
         title: 'Leave Types',
         description: 'Manage leave types and entitlements.',

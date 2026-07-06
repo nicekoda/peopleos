@@ -4055,6 +4055,168 @@ exceeded the approved "keep it minimal" scope.
 - Integration points for IT provisioning, asset assignment, and
   document generation once those modules exist.
 
+## HR Documents & Letter Generation Foundation (Checkpoint 34)
+
+Adds a foundation for HR-generated employee letters/documents — two
+new tables (`hr_document_templates`, `hr_generated_documents`),
+content-only (Option A, your explicit approved choice: no PDF/DOCX
+file, `rendered_content` stored as plain text). See
+[`architecture.md`](architecture.md#hr-documents--letter-generation-foundation-checkpoint-34)
+for the schema/technical writeup; this section covers the security
+design.
+
+### Same three-layer tenant-isolation pattern as every other top-level module
+
+`HrDocumentTemplateController`/`HrGeneratedDocumentController` follow
+the exact shape established since Checkpoint 6: `tenant.matches`
+middleware → `BelongsToTenant` global scope → an explicit
+controller-level tenant-ownership check on every action
+(`ensureBelongsToCurrentTenant()`). Generation additionally validates
+both `employee_id` and `hr_document_template_id` against the current
+tenant at the FormRequest layer (`Rule::exists(...)->where('tenant_id', ...)`)
+*and* re-checks both in the controller after `findOrFail()` — the same
+two-layer belt-and-suspenders pattern every tenant-scoped write in this
+app uses, not a new one invented here.
+
+### Permission model: two resources, five roles with real access, HR Director added deliberately
+
+```
+hr_document_templates.view / .create / .update / .delete
+hr_generated_documents.view / .create / .update / .delete / .generate
+```
+
+`.create` on `hr_generated_documents` is seeded but not wired to any
+route this checkpoint — the only write path is `.generate`, which both
+creates and renders in one step (see `architecture.md`). Split, rather
+than a single umbrella `hr_documents.*` set, per your explicit
+suggested "cleaner split" — templates and generated documents carry
+different trust levels (editing a template shapes every future
+letter; generating one only affects a single employee's record).
+
+| Role | templates.view | templates.create/update/delete | documents.view | documents.create/update/generate | documents.delete |
+|---|---|---|---|---|---|
+| Tenant Admin | ✓ (wildcard) | ✓ | ✓ | ✓ | ✓ |
+| HR Manager | ✓ | ✓ | ✓ | ✓ | ✓ |
+| HR Director | ✓ | ✓ | ✓ | ✓ | ✓ |
+| HR Officer | ✓ | — | ✓ | ✓ | — |
+| Auditor | ✓ | — | ✓ | — | — |
+| Line Manager | — | — | — | — | — |
+| Employee | — | — | — | — | — |
+
+**HR Director previously held no permissions anywhere** (a placeholder
+role since Checkpoint 4, per the class-level note in `RoleSeeder`).
+Per your explicit approval, it receives the identical HR document
+grant as HR Manager for this checkpoint only — every other module
+stays untouched/empty for this role, so this is a scoped exception, not
+a general "activate HR Director" decision.
+
+**Line Manager and Employee get no access by default**, per your
+explicit instruction — this is a deliberate, narrower default than
+most other modules in this app grant those two roles, reflecting that
+HR letters are an HR-administrative function, not a self-service or
+team-management one, unlike Leave or Lifecycle.
+
+### Placeholder rendering: an allowlist substitution, never a template engine
+
+`App\Services\HrDocuments\PlaceholderRenderer::render()` is the entire
+attack surface for template content. It calls PHP's `strtr()` exactly
+once, with a fixed array of exactly ten keys
+(`{{employee.name}}`, `{{employee.employee_number}}`, `{{employee.email}}`,
+`{{employee.department}}`, `{{employee.position}}`, `{{employee.location}}`,
+`{{employee.employment_type}}`, `{{employee.start_date}}`,
+`{{tenant.name}}`, `{{today}}`) mapped to real, already-resolved scalar
+values. There is no code path from stored `content_template` text to:
+
+- Blade compilation or any other template-engine execution.
+- `eval()` or dynamic code execution of any kind.
+- Reflection or dynamic property/method access driven by the template
+  string (the map's keys are a hardcoded PHP array literal, never
+  derived from the input).
+- Raw HTML rendering — `rendered_content` is displayed in React as
+  `{content}` (escaped by React) or a Laravel `<textarea>`/plain-text
+  field, never `dangerouslySetInnerHTML`, the exact rule Checkpoint 20
+  established for Policy content.
+
+**An unknown or malformed token is left completely unchanged** — not
+executed, not an error, not silently stripped. `strtr()`'s array form
+only matches the exact keys given; anything else (a typo, wrong
+casing, an attacker-supplied `{{system.env.APP_KEY}}` or
+`{{employee.delete()}}`) simply isn't in the map and passes through
+verbatim. See `tests/Unit/PlaceholderRendererTest.php` for the exact
+cases exercised: allowed substitution, unknown tokens, near-miss
+casing, and null department/position/location relations rendering as
+an empty string (never `null`, never a PHP notice).
+
+### Audit logging never carries the rendered letter's full content
+
+`hr_generated_document.generated`/`.updated`/`.archived` log only
+`employee_id`, `hr_document_template_id`, `document_type`, and `title`
+as metadata — `rendered_content` is never passed to
+`AuditLogger::logFor()` at all, per your explicit "do not log full
+letter content if avoidable" instruction. This is the same "never pass
+the free-text field to the logger" discipline Checkpoint 33 applied to
+lifecycle task descriptions — stricter than `AuditLogger`'s own
+mask-by-field-name fallback, which would only catch a field if its
+*name* happened to match a known-sensitive substring.
+
+### Update is title-only — a status transition can never be smuggled through it
+
+`UpdateHrDocumentTemplateRequest` accepts `status`, but
+`UpdateHrGeneratedDocumentRequest` accepts `title` only — a generated
+document's `status`/`rendered_content`/`generated_by`/`tenant_id` are
+never accepted from request input on any route, at any point after
+generation. Archiving is a dedicated `DELETE` (soft-delete) action on
+both resources, the same `DocumentCategoryController::destroy()`
+pattern from Checkpoint 9/25 — not a generic status field a client
+could set to any value.
+
+### Content-only was a deliberate dependency decision, not a silent scope cut
+
+No PDF (`dompdf`/`mpdf`/Spatie Laravel-PDF/etc.) or DOCX
+(`PHPOffice/PHPWord`/etc.) library existed in `composer.json`/
+`package.json` before this checkpoint — verified directly during the
+gap analysis, not assumed. Rather than add one inline, the choice was
+flagged as a separate dependency decision and you approved Option A
+(content-only) for this checkpoint. `employee_document_id` on
+`hr_generated_documents` stays nullable and unused — the same
+forward-compatible-placeholder shape `policy_versions.employee_document_id`
+already established in Checkpoint 20 for an analogous "no real file
+yet" gap — so a future checkpoint that adds real PDF generation can
+populate it without a schema change.
+
+### Current limitations
+
+- No PDF or DOCX file generation — `rendered_content` is plain text in
+  the database only; `employee_document_id` stays `null` on every row
+  this checkpoint.
+- No e-signature, no approval/review workflow before a document is
+  considered final — generation is immediate and final (`status`
+  becomes `generated` in the same request).
+- No automated sending/email delivery, no external sharing links.
+- No template versioning — editing a template's `content_template`
+  changes it in place; already-generated documents keep their
+  `rendered_content` as rendered at the time, but there is no history
+  of prior template revisions the way `PolicyVersion` keeps for policies.
+- No bulk generation (one employee per generation request) and no
+  employee self-service download — generation and viewing are both
+  HR-administrative actions in this checkpoint.
+- No notifications when a document is generated.
+
+### Future
+
+- PDF (and/or DOCX) file generation, once a specific library is
+  separately reviewed and approved as its own dependency decision —
+  attaching the resulting file via the existing (currently unused)
+  `employee_document_id` column, no schema change needed.
+- Template versioning, if template content actually needs a
+  publish/draft history the way policies do — deliberately not built
+  this checkpoint per your "keep template versioning out unless very
+  easy and safe" instruction.
+- E-signature and approval-routing workflows, once a real
+  legal/compliance need is scoped.
+- Bulk generation (e.g., generate the same letter for a department) and
+  employee self-service download, once real demand is shown.
+
 ## Local Demo Credentials
 
 **Local development only — these are not real secrets and only work against your own local database.** Password comes from `SEED_USER_PASSWORD` in `.env` (not committed; `.env.example` has an empty placeholder).
@@ -4124,3 +4286,4 @@ data these six `uesl` logins see (Checkpoint 26's `DemoDataSeeder`).
 - **Departments/Positions/Locations (Checkpoint 32) have no hierarchy, no usage-count guard before archiving, and no bulk import/export** — see [Employee Lifecycle Foundation](#employee-lifecycle-foundation-checkpoint-32) above.
 - **Employment Type remains a fixed enum, not a tenant-configurable lookup table** (Checkpoint 32, deliberate scope decision) — see [Employee Lifecycle Foundation](#employee-lifecycle-foundation-checkpoint-32) above.
 - **Onboarding & Offboarding (Checkpoint 33) has no task templates, task dependencies/ordering, approval routing, notifications, IT/asset provisioning integration, document generation, e-signature, recruitment-to-employee conversion, or performance/probation review integration; Line Manager visibility is direct-reports only, not the full reporting tree** — see [Onboarding & Offboarding Foundation](#onboarding--offboarding-foundation-checkpoint-33) above.
+- **HR Documents & Letter Generation (Checkpoint 34) is content-only — no PDF/DOCX file, no e-signature, no approval workflow, no automated sending, no template versioning, no bulk generation, no employee self-service download** — see [HR Documents & Letter Generation Foundation](#hr-documents--letter-generation-foundation-checkpoint-34) above.

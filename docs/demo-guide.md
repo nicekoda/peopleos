@@ -2,7 +2,8 @@
 
 **Checkpoint 26** (updated Checkpoint 27 with a reset-command warning;
 updated Checkpoint 32 with Departments/Positions/Locations admin;
-updated Checkpoint 33 with Onboarding & Offboarding).
+updated Checkpoint 33 with Onboarding & Offboarding;
+updated Checkpoint 34 with HR Documents & Letter Generation).
 This is the practical "how to run a demo" companion to
 `docs/security.md`/`docs/architecture.md` — it doesn't restate the RBAC
 design or the tenant-isolation model, only how to log in, what to click,
@@ -98,17 +99,18 @@ A natural order to show the app, each login building on the last:
 - **Settings** — as Tenant Admin, tour the full hub (Company, Users & Access, Document Categories, Leave Types, Departments, Positions, Locations, Security & Audit) — every card now reflects real, working pages, not "Coming later" placeholders.
 - **Departments/Positions/Locations** — as HR Manager, open Settings → Departments, edit one, archive another (status flips to Inactive, no hard delete); show the same for Positions and Locations. Then open the Employee edit form and show the three new dropdowns only ever offer active entities — an archived one silently disappears from the list, and the backend independently rejects it even if a stale ID were submitted directly.
 - **Onboarding & Offboarding** — no demo data is pre-seeded for this module (deliberately, to keep the seed set small); create it live instead. As Tenant Admin or HR Manager, open an employee's profile and click "Start Onboarding," add a couple of tasks (e.g. "Set up laptop," assigned to the HR Manager demo user), then switch to that assigned user and show them completing their own task from `/lifecycle`. Switch to Line Manager (Tunde Adeyemi) and show they only ever see Chidi Okafor's (their direct report's) lifecycle processes, never an unrelated employee's.
+- **HR Documents & Letter Generation** — no demo data is pre-seeded (deliberately, same reasoning as Onboarding & Offboarding); create it live instead. As Tenant Admin or HR Manager, go to Settings → HR Document Templates, create a simple Employment Letter template using a couple of placeholders (e.g. `Dear {{employee.name}}, this confirms your role as {{employee.position}} in {{employee.department}}, effective {{employee.start_date}}.`), then go to `/hr-documents/create`, pick an employee and that template, and generate — show the rendered letter with the employee's real details substituted in. Switch to Employee or Line Manager and show `/hr-documents` and `/settings/hr-document-templates` are both inaccessible (403) — HR letters are an HR-administrative function, not self-service, by deliberate design this checkpoint.
 - **Users & Access** — as Tenant Admin, show the Users list/roles list; demonstrate that removing the tenant's last Tenant Admin role is blocked.
 - **Audit Log review** — as Auditor, open the audit log, show the role-assignment entries created during seeding and any entries generated live during the demo (e.g. the leave approval above) — then attempt (and get blocked from) a tenant settings write.
 
 ## 5. What Each Role Should Be Able to See
 
 - **Tenant Admin** — everything within the tenant: all modules, all Settings sections, full Users & Access.
-- **HR Manager** — employees, leave (tenant-wide), documents, policies, Onboarding/Offboarding (full manage, tenant-wide), Settings (Document Categories/Leave Types/Departments/Positions/Locations, full CRUD), but not Users & Access or Audit Log.
-- **HR Officer** — leave (tenant-wide) and policies, Onboarding/Offboarding (create/update/assign/complete, no delete), Settings visible (for Leave Types/Departments/Positions/Locations — view/create/update, no delete), but not Users & Access, Document Categories management, or Audit Log.
-- **Line Manager** — their own profile plus direct reports only; leave approval limited to direct reports; sees and can complete Onboarding/Offboarding tasks only for direct reports or assigned to them; no Settings access.
-- **Employee** — their own profile, own leave, own documents, own policy acknowledgements, and only Onboarding/Offboarding tasks assigned to them personally. No Settings, no visibility into other employees' data.
-- **Auditor** — tenant-wide read access to leave/employees/Onboarding/Offboarding (view-only) and the Audit Log; Settings visible (for Security & Audit) but no admin write actions anywhere.
+- **HR Manager** — employees, leave (tenant-wide), documents, policies, Onboarding/Offboarding (full manage, tenant-wide), HR Document Templates & generated documents (full manage), Settings (Document Categories/Leave Types/Departments/Positions/Locations/HR Document Templates, full CRUD), but not Users & Access or Audit Log.
+- **HR Officer** — leave (tenant-wide) and policies, Onboarding/Offboarding (create/update/assign/complete, no delete), HR document templates (view only) and generated documents (view/create/generate/update, no delete), Settings visible (for Leave Types/Departments/Positions/Locations — view/create/update, no delete), but not Users & Access, Document Categories management, or Audit Log.
+- **Line Manager** — their own profile plus direct reports only; leave approval limited to direct reports; sees and can complete Onboarding/Offboarding tasks only for direct reports or assigned to them; no Settings access; no HR document access (deliberately none by default).
+- **Employee** — their own profile, own leave, own documents, own policy acknowledgements, and only Onboarding/Offboarding tasks assigned to them personally. No Settings, no visibility into other employees' data, no HR document access (deliberately none by default).
+- **Auditor** — tenant-wide read access to leave/employees/Onboarding/Offboarding (view-only) and the Audit Log, plus view-only access to HR document templates and generated documents; Settings visible (for Security & Audit) but no admin write actions anywhere.
 - **Platform Super Admin** — a safe, empty-of-tenant-data dashboard; blocked (403) from every tenant-scoped `/api/v1` endpoint, including its own tenant's settings.
 
 None of the above is enforced by hiding navigation links — every rule is
@@ -120,6 +122,7 @@ the frontend is never the security boundary in this app.
 - No invitation flow, password reset UI, MFA, or SSO — demo users are pre-seeded, not self-registered.
 - No RBAC role/permission *editing* UI yet — roles/permissions are viewable, not editable, from the UI.
 - No payroll, performance, recruitment, notifications, exports, or analytics charts. Onboarding/Offboarding (Checkpoint 33) exists as a foundation — no task templates, approval routing, or notifications yet.
+- HR Documents & Letter Generation (Checkpoint 34) is content-only — no PDF/DOCX file (rendered letters are plain text on screen), no e-signature, no approval workflow before a letter is final, no automated sending, no template versioning, no bulk generation, no employee self-service download.
 - No platform-level dashboard for the Platform Super Admin (deliberately kept minimal/safe instead).
 - Leave balances have no accrual engine or carry-forward automation — the seeded balances are a fixed, consistent snapshot, not a running calculation.
 - Documents use safe fake files on the private `local` disk — there is nothing to actually "view" as a real PDF; the demo shows metadata (title, category, sensitivity, expiry), not real document contents.
@@ -127,4 +130,4 @@ the frontend is never the security boundary in this app.
 
 ## 7. What Not to Demo Yet
 
-Don't attempt to show, or promise as working: full RBAC permission editing, self-service invitation/registration, MFA/SSO, payroll, performance/recruitment modules, AI features, notifications, data exports, analytics dashboards, a platform-wide admin dashboard, billing/subscription management, third-party integrations, a workflow/approval-routing builder for Onboarding/Offboarding, or task templates. If asked about any of these, the honest answer is "not built yet — see the roadmap in `docs/architecture.md`."
+Don't attempt to show, or promise as working: full RBAC permission editing, self-service invitation/registration, MFA/SSO, payroll, performance/recruitment modules, AI features, notifications, data exports, analytics dashboards, a platform-wide admin dashboard, billing/subscription management, third-party integrations, a workflow/approval-routing builder for Onboarding/Offboarding, task templates, PDF/DOCX generation or e-signature for HR Documents, or bulk HR letter generation. If asked about any of these, the honest answer is "not built yet — see the roadmap in `docs/architecture.md`."

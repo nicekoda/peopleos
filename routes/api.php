@@ -9,6 +9,8 @@ use App\Http\Controllers\Api\V1\EmployeeDocumentController;
 use App\Http\Controllers\Api\V1\EmployeeHierarchyController;
 use App\Http\Controllers\Api\V1\EmployeeManagerController;
 use App\Http\Controllers\Api\V1\EmployeeUserLinkController;
+use App\Http\Controllers\Api\V1\HrDocumentTemplateController;
+use App\Http\Controllers\Api\V1\HrGeneratedDocumentController;
 use App\Http\Controllers\Api\V1\LeaveBalanceController;
 use App\Http\Controllers\Api\V1\LeaveRequestController;
 use App\Http\Controllers\Api\V1\LeaveTypeController;
@@ -236,4 +238,27 @@ Route::middleware(['auth', 'tenant.matches'])->prefix('api/v1')->group(function 
     // is necessary but not sufficient for Line Manager/Employee callers.
     Route::post('lifecycle-tasks/{lifecycleTask}/complete', [LifecycleTaskController::class, 'complete'])->middleware('permission:lifecycle.complete_task');
     Route::post('lifecycle-tasks/{lifecycleTask}/skip', [LifecycleTaskController::class, 'skip'])->middleware('permission:lifecycle.complete_task');
+
+    // Checkpoint 34 — HR Documents & Letter Generation Foundation.
+    // Content-only MVP (Option A, approved): rendered_content is stored
+    // as plain text, no PDF/DOCX file is generated. destroy() on both
+    // resources soft-deletes ("archives"), same shape as
+    // document-categories above — no separate archive route needed.
+    Route::get('hr-document-templates', [HrDocumentTemplateController::class, 'index'])->middleware('permission:hr_document_templates.view');
+    Route::post('hr-document-templates', [HrDocumentTemplateController::class, 'store'])->middleware('permission:hr_document_templates.create');
+    Route::get('hr-document-templates/{hrDocumentTemplate}', [HrDocumentTemplateController::class, 'show'])->middleware('permission:hr_document_templates.view');
+    Route::patch('hr-document-templates/{hrDocumentTemplate}', [HrDocumentTemplateController::class, 'update'])->middleware('permission:hr_document_templates.update');
+    Route::delete('hr-document-templates/{hrDocumentTemplate}', [HrDocumentTemplateController::class, 'destroy'])->middleware('permission:hr_document_templates.delete');
+
+    // store() both creates and renders in one step ("generate") — there
+    // is no separate draft-without-rendering state in this checkpoint,
+    // so the write action is gated by hr_generated_documents.generate,
+    // not .create (.create is seeded in the permission catalog for
+    // forward compatibility but not wired to a route yet, same posture
+    // as the existing unused audit.export permission).
+    Route::get('hr-generated-documents', [HrGeneratedDocumentController::class, 'index'])->middleware('permission:hr_generated_documents.view');
+    Route::post('hr-generated-documents', [HrGeneratedDocumentController::class, 'store'])->middleware('permission:hr_generated_documents.generate');
+    Route::get('hr-generated-documents/{hrGeneratedDocument}', [HrGeneratedDocumentController::class, 'show'])->middleware('permission:hr_generated_documents.view');
+    Route::patch('hr-generated-documents/{hrGeneratedDocument}', [HrGeneratedDocumentController::class, 'update'])->middleware('permission:hr_generated_documents.update');
+    Route::delete('hr-generated-documents/{hrGeneratedDocument}', [HrGeneratedDocumentController::class, 'destroy'])->middleware('permission:hr_generated_documents.delete');
 });

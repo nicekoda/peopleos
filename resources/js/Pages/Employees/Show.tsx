@@ -113,6 +113,14 @@ export default function EmployeesShow() {
                                 View Lifecycle
                             </Link>
                         </PermissionGate>
+                        <PermissionGate permission="hr_generated_documents.view">
+                            <Link
+                                href={`/hr-documents?employeeId=${employee.id}`}
+                                className="text-sm font-medium text-indigo-600 hover:text-indigo-500"
+                            >
+                                HR Documents
+                            </Link>
+                        </PermissionGate>
                         <PermissionGate permission="lifecycle.create">
                             <Link
                                 href={`/lifecycle/create?employeeId=${employee.id}&type=onboarding`}

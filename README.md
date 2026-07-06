@@ -411,6 +411,32 @@ owner individually before granting, since `users.view` is a broader,
 more sensitive resource than `employees.view`. See `docs/architecture.md`
 and `docs/security.md` for the full design.
 
+## HR Documents & Letter Generation Foundation (Checkpoint 34)
+
+A templates-and-records foundation, not document automation: two new
+tables (`hr_document_templates`, `hr_generated_documents`), reached at
+`/settings/hr-document-templates(/create)(/{id}/edit)` and
+`/hr-documents(/create)(/{id})` in the UI, `/hr-document-templates` and
+`/hr-generated-documents` in the API. Content-only (Option A, approved)
+— no PDF/DOCX file is generated this checkpoint; `rendered_content` is
+stored as plain text and `employee_document_id` stays `null`, the same
+forward-compatible-placeholder shape `policy_versions.employee_document_id`
+already established. A single `POST /api/v1/hr-generated-documents`
+both creates and renders a document in one step ("generate"), gated by
+`hr_generated_documents.generate` rather than `.create` (seeded for
+forward compatibility, not yet wired to a route — same posture as the
+existing unused `audit.export`).
+
+Template content is plain text with a strict allowlist of `{{...}}`
+placeholders (`employee.name`, `employee.employee_number`, `employee.email`,
+`employee.department`, `employee.position`, `employee.location`,
+`employee.employment_type`, `employee.start_date`, `tenant.name`, `today`),
+substituted via `PlaceholderRenderer` using PHP's `strtr()` — a single,
+non-recursive pass over a fixed map, never Blade compilation, `eval`, or
+reflection-driven property access. An unknown token is left completely
+unchanged rather than erroring or executing. See `docs/architecture.md`
+and `docs/security.md` for the full design.
+
 ## Documentation
 
 - [`docs/architecture.md`](docs/architecture.md) — multi-tenancy, tenant resolution, RBAC overview, internal-vs-public IDs, frontend architecture.

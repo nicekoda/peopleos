@@ -1925,3 +1925,55 @@ inserting a raw pre-Checkpoint-37 `generated` row via the query
 builder, replaying the migration forward, and confirming the resulting
 `approved`/`approved_at`/`approved_by`/`submitted_at` state — see
 `docs/testing.md`.
+
+## HR Document Template Library & Starter Templates (Checkpoint 38)
+
+Eight starter templates, seeded and duplicable, per your approved gap
+analysis (Option A). See
+[`security.md`](security.md#hr-document-template-library--starter-templates-checkpoint-38)
+for the full security model and
+[`api.md`](api.md#hr-document-template-duplication) for the route
+reference.
+
+**Option A over Option B — tenant-specific seeded rows, no global
+library table, your explicit approved choice.** A starter template is
+a completely ordinary `HrDocumentTemplate` + `HrDocumentTemplateVersion`
+pair, seeded via `DemoDataSeeder::seedHrDocumentTemplates()` using the
+exact `firstOrCreate()` idempotent-seeding pattern `seedPolicies()`/
+`seedDocumentCategories()` already established — no `is_starter` flag,
+no distinguishing column, nothing that would need its own access rules.
+Once seeded, HR can edit, version, archive, or duplicate a starter
+template exactly like one they created themselves. Seeded for `uesl`
+only, matching this seeder's existing "uesl gets rich demo data,
+airpeace/ibom stay minimal" scope for every other module — this
+checkpoint does **not** hook starter templates into general
+tenant-creation (`TenantSeeder`), which would be the actual Option B
+"reusable for future tenants" concern, deliberately deferred.
+
+**The 8 example titles map onto the 8 existing `HrDocumentType` cases
+with no new enum value needed** — including the one non-obvious
+mapping: "Probation Completion Letter" uses `ConfirmationLetter`
+(confirming an employee has passed probation is exactly what that case
+already represents), and "Employment Confirmation Letter" (a general
+employment-verification letter) uses `EmploymentLetter`.
+
+**Duplication mirrors `store()`'s single-step create-with-version-1
+flow exactly, your approved choice over a draft-requiring-publish
+copy.** `HrDocumentTemplateController::duplicate()` copies
+`description`/`document_type` as-is, generates a unique
+`"{title} (Copy)"` (then `"(Copy 2)"`, `"(Copy 3)"`... on collision —
+the same auto-increment-on-collision idea `HrDocumentTemplateVersionController`
+already uses for `version_number`) title/slug pair, and creates version
+1 from the **source's current published version's** `content_template`
+(not just "the latest version" — specifically the live one, since
+that's the only version guaranteed to represent what the source
+currently produces), published immediately. A duplicate is a fully
+working, generation-ready template the moment the request completes —
+no separate publish step required, consistent with every other
+template create path in this app.
+
+**No new permission — duplication reuses `hr_document_templates.create`,
+per your explicit instruction.** Duplicating is creating a new
+template pre-filled from an existing one; the trust level is identical
+to a blank create, so a distinct `.duplicate` permission would only add
+a permission-matrix row with no behavioral difference from `.create`.

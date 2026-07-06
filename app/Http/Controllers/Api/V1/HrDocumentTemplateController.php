@@ -15,6 +15,7 @@ use App\Services\Audit\AuditLogger;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
+use Illuminate\Support\Str;
 
 class HrDocumentTemplateController extends Controller
 {
@@ -118,6 +119,96 @@ class HrDocumentTemplateController extends Controller
         }
 
         return new HrDocumentTemplateResource($hrDocumentTemplate);
+    }
+
+    /**
+     * Checkpoint 38 — copies metadata (title with a "(Copy)" suffix,
+     * description, document_type) and the source's *current published*
+     * version's content_template into a brand-new template, immediately
+     * published as version 1 — mirroring store()'s single-step
+     * create-with-version-1 flow (your approved choice, not a draft
+     * requiring a separate publish). Gated by hr_document_templates.create,
+     * not a new permission — duplicating is just creating a new template
+     * pre-filled from an existing one, the same trust level as a blank
+     * create.
+     */
+    public function duplicate(Request $request, HrDocumentTemplate $hrDocumentTemplate): JsonResponse
+    {
+        $this->ensureBelongsToCurrentTenant($hrDocumentTemplate);
+
+        $sourceVersion = $hrDocumentTemplate->currentVersion;
+        abort_unless($sourceVersion !== null, 422, 'This template has no published version to duplicate.');
+
+        $tenantId = $hrDocumentTemplate->tenant_id;
+        [$title, $slug] = $this->uniqueDuplicateTitleAndSlug($hrDocumentTemplate, $tenantId);
+
+        $duplicate = HrDocumentTemplate::query()->create([
+            'tenant_id' => $tenantId,
+            'title' => $title,
+            'slug' => $slug,
+            'description' => $hrDocumentTemplate->description,
+            'document_type' => $hrDocumentTemplate->document_type,
+            'status' => HrDocumentTemplateStatus::Active,
+            'created_by' => $request->user()->id,
+            'updated_by' => $request->user()->id,
+        ]);
+
+        $version = HrDocumentTemplateVersion::query()->create([
+            'tenant_id' => $tenantId,
+            'hr_document_template_id' => $duplicate->id,
+            'version_number' => 1,
+            'content_template' => $sourceVersion->content_template,
+            'status' => HrDocumentTemplateVersionStatus::Published,
+            'published_by' => $request->user()->id,
+            'published_at' => now(),
+            'created_by' => $request->user()->id,
+            'updated_by' => $request->user()->id,
+        ]);
+
+        $duplicate->update(['current_version_id' => $version->id]);
+
+        // Metadata only — never the copied content_template text itself.
+        AuditLogger::logFor(
+            actor: $request->user(),
+            action: 'hr_document_template.duplicated',
+            module: 'hr_documents',
+            tenantId: $tenantId,
+            auditableType: HrDocumentTemplate::class,
+            auditableId: $duplicate->id,
+            description: "HR document template '{$duplicate->title}' duplicated from '{$hrDocumentTemplate->title}'.",
+            newValues: $duplicate->only(['title', 'slug', 'document_type', 'status']),
+            metadata: ['source_template_id' => $hrDocumentTemplate->id, 'current_version_id' => $version->id],
+            ipAddress: $request->ip(),
+            userAgent: $request->userAgent(),
+        );
+
+        return (new HrDocumentTemplateResource($duplicate->fresh()))->response()->setStatusCode(201);
+    }
+
+    /**
+     * "{title} (Copy)", then "(Copy 2)", "(Copy 3)"... on collision — the
+     * same auto-increment-on-collision idea HrDocumentTemplateVersionController
+     * already uses for version_number, applied here to title/slug
+     * uniqueness instead.
+     *
+     * @return array{0: string, 1: string}
+     */
+    protected function uniqueDuplicateTitleAndSlug(HrDocumentTemplate $source, string $tenantId): array
+    {
+        $attempt = 1;
+
+        do {
+            $suffix = $attempt === 1 ? ' (Copy)' : " (Copy {$attempt})";
+            $title = $source->title.$suffix;
+            $slug = Str::slug($title);
+            $exists = HrDocumentTemplate::query()
+                ->where('tenant_id', $tenantId)
+                ->where(fn ($q) => $q->where('title', $title)->orWhere('slug', $slug))
+                ->exists();
+            $attempt++;
+        } while ($exists);
+
+        return [$title, $slug];
     }
 
     /**

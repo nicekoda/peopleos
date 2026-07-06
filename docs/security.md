@@ -4606,6 +4606,94 @@ exactly and `submitted_at` stays null — see `docs/testing.md`.
 - E-signature and external sharing, once scoped as their own
   checkpoints.
 
+## HR Document Template Library & Starter Templates (Checkpoint 38)
+
+Adds 8 seeded starter templates and a "Duplicate Template" action for
+HR document templates. See
+[`architecture.md`](architecture.md#hr-document-template-library--starter-templates-checkpoint-38)
+for the schema/technical writeup; this section covers the security
+design.
+
+### Starter templates are ordinary tenant data, not a special-cased library
+
+There is no global template table, no cross-tenant sharing, and no new
+access-control surface — a starter template is a real
+`HrDocumentTemplate`/`HrDocumentTemplateVersion` row, tenant-scoped by
+`BelongsToTenant` exactly like every other template. This was the whole
+point of choosing Option A over Option B: a global library would need
+its own read-access rules (can every tenant see every other tenant's
+"public" templates? who curates them? can they be edited centrally?) —
+none of those questions exist here, because nothing is actually shared.
+
+### Duplication requires the same permission as creating a blank template
+
+`POST /api/v1/hr-document-templates/{id}/duplicate` is gated by
+`hr_document_templates.create` — the same permission every existing
+template-create path already requires. No new permission key was
+introduced. This means the exact same set of roles that can create a
+template today (Tenant Admin, HR Manager, HR Director) can duplicate
+one; HR Officer (view-only on templates) is correctly blocked from
+duplicating, same as it's already blocked from creating.
+
+### Same three-layer tenant-isolation pattern, plus a real content check
+
+`duplicate()` follows the identical shape every action on this
+controller already uses: `tenant.matches` middleware → `BelongsToTenant`
+global scope → the controller's explicit `ensureBelongsToCurrentTenant()`
+check — a cross-tenant template ID 404s before any copying happens.
+Additionally, `duplicate()` requires the source template to have a
+`current_version_id` (a real published version to copy) — a template
+that's `active` but has never been published (a real, testable edge
+case) is rejected (422) rather than silently creating an empty
+duplicate.
+
+### Audit logging never carries the copied wording
+
+`hr_document_template.duplicated` logs `source_template_id` and the new
+template's own safe metadata (`title`/`slug`/`document_type`/`status`)
+— never the `content_template` text that was actually copied, the same
+"no full free-text content in audit metadata" rule every other HR
+document audit action already follows.
+
+### Starter template content: allowlist-only, no legal/tax/payroll specificity
+
+Every seeded starter template's wording uses only the 10 approved
+placeholder tokens and deliberately generic, professional language —
+no jurisdiction-specific legal claims, no payroll/tax promises, no
+wording that could be mistaken for actual legal advice. Verified
+directly, not just written carefully:
+`DemoDataSeederTest::test_demo_data_seeds_successfully_with_expected_coverage()`
+scans every seeded template's `content_template` for any `{{...}}`
+token and asserts it's one of the 10 allowlisted ones — the same
+regex-based check `PlaceholderRendererTest` already established for the
+rendering engine itself, applied here to the seed data.
+
+### Current limitations
+
+- No global/cross-tenant template library — a new tenant does not
+  automatically receive starter templates; only the seeded `uesl` demo
+  tenant does, via `DemoDataSeeder`, not a general tenant-provisioning
+  hook.
+- No template categories/tags beyond the existing `document_type`
+  classification, and no "based on starter template X" lineage tracking
+  — a duplicate's only link back to its source is the one-time audit
+  log entry (`source_template_id`), not a persisted foreign key on the
+  template itself.
+- No AI-assisted template generation, legal clause library, template
+  marketplace, rating system, or import/export.
+
+### Future
+
+- A genuine global/shared template library (Option B), if real demand
+  from multiple tenants wanting the same curated starting set is shown
+  — would need its own access-control design (who can read/write shared
+  templates, whether tenants can only copy or also see updates)
+  deliberately not designed here.
+- Automatic starter-template seeding for newly-created tenants, once a
+  real tenant-provisioning flow exists to hook into.
+- AI-assisted drafting and a legal-review workflow, both explicitly out
+  of scope for this checkpoint.
+
 ## Local Demo Credentials
 
 **Local development only — these are not real secrets and only work against your own local database.** Password comes from `SEED_USER_PASSWORD` in `.env` (not committed; `.env.example` has an empty placeholder).
@@ -4675,4 +4763,4 @@ data these six `uesl` logins see (Checkpoint 26's `DemoDataSeeder`).
 - **Departments/Positions/Locations (Checkpoint 32) have no hierarchy, no usage-count guard before archiving, and no bulk import/export** — see [Employee Lifecycle Foundation](#employee-lifecycle-foundation-checkpoint-32) above.
 - **Employment Type remains a fixed enum, not a tenant-configurable lookup table** (Checkpoint 32, deliberate scope decision) — see [Employee Lifecycle Foundation](#employee-lifecycle-foundation-checkpoint-32) above.
 - **Onboarding & Offboarding (Checkpoint 33) has no task templates, task dependencies/ordering, approval routing, notifications, IT/asset provisioning integration, document generation, e-signature, recruitment-to-employee conversion, or performance/probation review integration; Line Manager visibility is direct-reports only, not the full reporting tree** — see [Onboarding & Offboarding Foundation](#onboarding--offboarding-foundation-checkpoint-33) above.
-- **HR Documents & Letter Generation (Checkpoint 34) has no DOCX file, e-signature, automated sending, or bulk/employee-self-service generation — PDF export was added in Checkpoint 35 (generate-on-demand, never stored), template version history in Checkpoint 36 (no diff/compare UI, no publish-approval workflow), and a single-approver approval workflow in Checkpoint 37 (no multi-level/routing approval, no notifications)** — see [HR Documents & Letter Generation Foundation](#hr-documents--letter-generation-foundation-checkpoint-34), [PDF Export Dependency Review & Prototype](#pdf-export-dependency-review--prototype-checkpoint-35), [HR Document Template Versioning Foundation](#hr-document-template-versioning-foundation-checkpoint-36), and [HR Document Approval Workflow Foundation](#hr-document-approval-workflow-foundation-checkpoint-37) above.
+- **HR Documents & Letter Generation (Checkpoint 34) has no DOCX file, e-signature, automated sending, or bulk/employee-self-service generation — PDF export was added in Checkpoint 35 (generate-on-demand, never stored), template version history in Checkpoint 36 (no diff/compare UI, no publish-approval workflow), a single-approver approval workflow in Checkpoint 37 (no multi-level/routing approval, no notifications), and 8 seeded starter templates plus template duplication in Checkpoint 38 (tenant-specific only, no global/shared library, no AI generation)** — see [HR Documents & Letter Generation Foundation](#hr-documents--letter-generation-foundation-checkpoint-34), [PDF Export Dependency Review & Prototype](#pdf-export-dependency-review--prototype-checkpoint-35), [HR Document Template Versioning Foundation](#hr-document-template-versioning-foundation-checkpoint-36), [HR Document Approval Workflow Foundation](#hr-document-approval-workflow-foundation-checkpoint-37), and [HR Document Template Library & Starter Templates](#hr-document-template-library--starter-templates-checkpoint-38) above.

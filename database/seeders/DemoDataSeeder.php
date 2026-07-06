@@ -8,6 +8,9 @@ use App\Enums\DocumentCategoryStatus;
 use App\Enums\DocumentStatus;
 use App\Enums\EmployeeStatus;
 use App\Enums\EmploymentType;
+use App\Enums\HrDocumentTemplateStatus;
+use App\Enums\HrDocumentTemplateVersionStatus;
+use App\Enums\HrDocumentType;
 use App\Enums\LeaveRequestStatus;
 use App\Enums\LeaveTypeStatus;
 use App\Enums\PolicyStatus;
@@ -15,6 +18,8 @@ use App\Models\Department;
 use App\Models\DocumentCategory;
 use App\Models\Employee;
 use App\Models\EmployeeDocument;
+use App\Models\HrDocumentTemplate;
+use App\Models\HrDocumentTemplateVersion;
 use App\Models\LeaveBalance;
 use App\Models\LeaveRequest;
 use App\Models\LeaveType;
@@ -70,6 +75,8 @@ class DemoDataSeeder extends Seeder
         $this->seedDocuments($tenant, $employees, $categories);
 
         $this->seedPolicies($tenant, $employees);
+
+        $this->seedHrDocumentTemplates($tenant, $employees);
     }
 
     /**
@@ -607,6 +614,170 @@ class DemoDataSeeder extends Seeder
                     'acknowledged_at' => $status === AcknowledgementStatus::Acknowledged ? now()->subWeeks(2) : null,
                 ],
             );
+        }
+    }
+
+    /**
+     * Checkpoint 38 — starter template library. Option A (approved): each
+     * row is a normal, tenant-owned HrDocumentTemplate/HrDocumentTemplateVersion,
+     * seeded only for uesl (same "uesl gets rich demo data, airpeace/ibom
+     * stay minimal" scope every other module above already follows) — no
+     * global library table, no automatic seeding hook for future tenants.
+     * Every template's content_template uses only the ten allowlisted
+     * placeholders, generic professional wording, no country-specific
+     * legal/tax/payroll claims — see docs/security.md.
+     *
+     * @param  array<string, Employee>  $employees
+     */
+    private function seedHrDocumentTemplates(Tenant $tenant, array $employees): void
+    {
+        $hrManagerUserId = $employees['hr_manager']->user_id;
+
+        $starterTemplates = [
+            [
+                'title' => 'Employment Confirmation Letter',
+                'document_type' => HrDocumentType::EmploymentLetter,
+                'content' => <<<'TEXT'
+                    Dear {{employee.name}},
+
+                    This letter confirms that you are currently employed with {{tenant.name}} as {{employee.position}} in the {{employee.department}} department, based at {{employee.location}}. Your employment began on {{employee.start_date}}.
+
+                    This letter is issued for general confirmation purposes upon request.
+
+                    Employee Number: {{employee.employee_number}}
+                    Employment Type: {{employee.employment_type}}
+
+                    Issued on {{today}}.
+                    TEXT,
+            ],
+            [
+                'title' => 'Offer Letter',
+                'document_type' => HrDocumentType::OfferLetter,
+                'content' => <<<'TEXT'
+                    Dear {{employee.name}},
+
+                    We are pleased to offer you the position of {{employee.position}} within the {{employee.department}} department at {{tenant.name}}, based at {{employee.location}}.
+
+                    Your anticipated start date is {{employee.start_date}}. Further details of your role, responsibilities, and terms of employment will be provided separately and confirmed upon your acceptance of this offer.
+
+                    We look forward to welcoming you to the team.
+
+                    Issued on {{today}}.
+                    TEXT,
+            ],
+            [
+                'title' => 'Promotion Letter',
+                'document_type' => HrDocumentType::PromotionLetter,
+                'content' => <<<'TEXT'
+                    Dear {{employee.name}},
+
+                    We are pleased to inform you that, following a review of your performance and contributions, you have been promoted to {{employee.position}} within the {{employee.department}} department at {{tenant.name}}, effective {{today}}.
+
+                    This promotion reflects the value of your continued dedication and hard work. Further details regarding your updated role and responsibilities will be discussed with you directly.
+
+                    Congratulations on this achievement.
+
+                    Issued on {{today}}.
+                    TEXT,
+            ],
+            [
+                'title' => 'Warning Letter',
+                'document_type' => HrDocumentType::WarningLetter,
+                'content' => <<<'TEXT'
+                    Dear {{employee.name}},
+
+                    This letter serves as a formal notice regarding concerns about your conduct or performance in your role as {{employee.position}} within the {{employee.department}} department at {{tenant.name}}.
+
+                    We encourage you to discuss this matter with your manager or HR representative to address these concerns and agree on a path forward. Continued issues of this nature may result in further action in line with company policy.
+
+                    Please treat this matter with the seriousness it deserves.
+
+                    Issued on {{today}}.
+                    TEXT,
+            ],
+            [
+                'title' => 'Exit / Offboarding Letter',
+                'document_type' => HrDocumentType::ExitLetter,
+                'content' => <<<'TEXT'
+                    Dear {{employee.name}},
+
+                    This letter confirms that your employment with {{tenant.name}} as {{employee.position}} in the {{employee.department}} department will conclude as discussed.
+
+                    We thank you for your contributions during your time with us and wish you well in your future endeavours. Please coordinate with HR regarding the return of any company property and completion of standard offboarding procedures.
+
+                    Issued on {{today}}.
+                    TEXT,
+            ],
+            [
+                'title' => 'Reference Letter',
+                'document_type' => HrDocumentType::ReferenceLetter,
+                'content' => <<<'TEXT'
+                    To Whom It May Concern,
+
+                    This letter is to confirm that {{employee.name}} (Employee Number: {{employee.employee_number}}) has been employed with {{tenant.name}} as {{employee.position}} within the {{employee.department}} department, based at {{employee.location}}, since {{employee.start_date}}.
+
+                    Should you require any further information, please do not hesitate to contact us.
+
+                    Issued on {{today}}.
+                    TEXT,
+            ],
+            [
+                'title' => 'Contractor Engagement Letter',
+                'document_type' => HrDocumentType::ContractorEngagementLetter,
+                'content' => <<<'TEXT'
+                    Dear {{employee.name}},
+
+                    This letter confirms your engagement with {{tenant.name}} as a contractor in the role of {{employee.position}}, supporting the {{employee.department}} department, based at {{employee.location}}, effective {{employee.start_date}}.
+
+                    Further details regarding the scope, duration, and terms of this engagement will be set out in a separate agreement.
+
+                    Issued on {{today}}.
+                    TEXT,
+            ],
+            [
+                'title' => 'Probation Completion Letter',
+                'document_type' => HrDocumentType::ConfirmationLetter,
+                'content' => <<<'TEXT'
+                    Dear {{employee.name}},
+
+                    We are pleased to confirm that you have successfully completed your probationary period and are now a confirmed employee of {{tenant.name}} in the role of {{employee.position}} within the {{employee.department}} department.
+
+                    Congratulations, and thank you for your continued contributions to the team.
+
+                    Employee Number: {{employee.employee_number}}
+
+                    Issued on {{today}}.
+                    TEXT,
+            ],
+        ];
+
+        foreach ($starterTemplates as $starter) {
+            $template = HrDocumentTemplate::query()->firstOrCreate(
+                ['tenant_id' => $tenant->id, 'title' => $starter['title']],
+                [
+                    'slug' => Str::slug($starter['title']),
+                    'document_type' => $starter['document_type'],
+                    'status' => HrDocumentTemplateStatus::Active,
+                    'created_by' => $hrManagerUserId,
+                    'updated_by' => $hrManagerUserId,
+                ],
+            );
+
+            $version = HrDocumentTemplateVersion::query()->firstOrCreate(
+                ['tenant_id' => $tenant->id, 'hr_document_template_id' => $template->id, 'version_number' => 1],
+                [
+                    'content_template' => $starter['content'],
+                    'status' => HrDocumentTemplateVersionStatus::Published,
+                    'published_by' => $hrManagerUserId,
+                    'published_at' => now()->subMonth(),
+                    'created_by' => $hrManagerUserId,
+                    'updated_by' => $hrManagerUserId,
+                ],
+            );
+
+            if ($template->current_version_id === null) {
+                $template->forceFill(['current_version_id' => $version->id])->save();
+            }
         }
     }
 }

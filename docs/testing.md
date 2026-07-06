@@ -1491,6 +1491,33 @@ needed the same `->draft()` state, plus its assertion updated from
 `status: archived` in the request body — was already correctly ignored
 before and after; only the fixture's starting status needed to change).
 
+## Extending an existing seeder test rather than writing a new one (Checkpoint 38)
+
+`DemoDataSeederTest::test_demo_data_seeds_successfully_with_expected_coverage()`
+already existed to assert this seeder's overall output shape (employee
+counts, leave statuses, document/policy coverage) — the 8 starter HR
+document templates were added as more assertions to that same test
+(count, `active` status, a `published` current version, and a regex
+scan of every seeded template's `content_template` for any `{{...}}`
+token outside the 10-item allowlist) rather than a separate test file,
+since they're just more coverage of the same seeder run. The existing
+idempotency test (`test_demo_data_seeder_is_idempotent_on_a_second_run()`)
+needed no changes — `HrDocumentTemplate::firstOrCreate()`/
+`HrDocumentTemplateVersion::firstOrCreate()` keyed on `title`/
+`version_number` are inherently idempotent, the same pattern every
+other seeded module here already uses.
+
+`HrDocumentTemplateDuplicateApiTest` (9 tests) covers the new endpoint:
+permission gating, tenant isolation, Platform Super Admin blocked, the
+"no published version to duplicate" edge case, title/slug uniqueness
+across repeated duplication (`(Copy)`, then `(Copy 2)`), that the
+duplicate's version 1 is genuinely `published` (not draft) with content
+matching the source's *current* version, audit logging with the copied
+`content_template` text asserted absent from the log row, and that a
+document can actually be generated from a freshly duplicated template
+end-to-end — the real regression check that duplication produces a
+fully working template, not just a correctly-shaped database row.
+
 ## Known limitations
 
 - No test coverage reporting configured yet.

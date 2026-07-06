@@ -250,6 +250,10 @@ Route::middleware(['auth', 'tenant.matches'])->prefix('api/v1')->group(function 
     Route::get('hr-document-templates/{hrDocumentTemplate}', [HrDocumentTemplateController::class, 'show'])->middleware('permission:hr_document_templates.view');
     Route::patch('hr-document-templates/{hrDocumentTemplate}', [HrDocumentTemplateController::class, 'update'])->middleware('permission:hr_document_templates.update');
     Route::delete('hr-document-templates/{hrDocumentTemplate}', [HrDocumentTemplateController::class, 'destroy'])->middleware('permission:hr_document_templates.delete');
+    // Checkpoint 38 — HR Document Template Library & Starter Templates.
+    // Reuses .create, not a new permission — duplicating is just
+    // creating a new template pre-filled from an existing one.
+    Route::post('hr-document-templates/{hrDocumentTemplate}/duplicate', [HrDocumentTemplateController::class, 'duplicate'])->middleware('permission:hr_document_templates.create');
 
     // Checkpoint 36 — HR Document Template Versioning Foundation.
     // Version creation/editing reuses hr_document_templates.update (same

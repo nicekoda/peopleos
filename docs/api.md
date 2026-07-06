@@ -1212,6 +1212,7 @@ two resources' different trust levels — see `docs/security.md`.
 | `GET` | `/api/v1/hr-document-templates/{hrDocumentTemplate}` | `hr_document_templates.view` | |
 | `PATCH` | `/api/v1/hr-document-templates/{hrDocumentTemplate}` | `hr_document_templates.update` | Metadata only (Checkpoint 36) — `content_template` is not a field here; see "HR Document Template Versions" below |
 | `DELETE` | `/api/v1/hr-document-templates/{hrDocumentTemplate}` | `hr_document_templates.delete` | Soft delete only ("archive") |
+| `POST` | `/api/v1/hr-document-templates/{hrDocumentTemplate}/duplicate` | `hr_document_templates.create` | **New in Checkpoint 38** — copies metadata + the current published version into a brand-new template (`active`, version 1, `published`) — see "Template duplication" below |
 | `GET` | `/api/v1/hr-generated-documents` | `hr_generated_documents.view` | Paginated; optional `?employee_id=` filter, validated against the current tenant (`404` if the employee belongs to another tenant) |
 | `POST` | `/api/v1/hr-generated-documents` | `hr_generated_documents.generate` | Both creates and renders in one step, always as `draft` (Checkpoint 37) — see "Generation is a single action" below. Body: `{"employee_id": "...", "hr_document_template_id": "...", "title": "..." (optional)}` |
 | `GET` | `/api/v1/hr-generated-documents/{hrGeneratedDocument}` | `hr_generated_documents.view` | |
@@ -1226,6 +1227,39 @@ two resources' different trust levels — see `docs/security.md`.
 this checkpoint** — the only write path is `.generate`, which both
 creates and renders in one request. Same "seeded ahead of use" posture
 as the existing unused `audit.export` permission.
+
+### Template duplication (Checkpoint 38)
+
+`POST /api/v1/hr-document-templates/{hrDocumentTemplate}/duplicate`
+reuses `hr_document_templates.create` rather than a new permission —
+duplicating is just creating a new template pre-filled from an
+existing one, so it's gated the same way as `POST
+/api/v1/hr-document-templates`. Requires the source template to have a
+current published version (`422` otherwise — there's nothing to
+copy). Behavior:
+
+- Copies `description`/`document_type` from the source; `title`/`slug`
+  are auto-generated as `"{source title} (Copy)"`,
+  `"{source title} (Copy 2)"`, etc. until unique within the tenant.
+- The source's current published version's `content_template` is
+  copied into a brand-new version 1, created directly as `published`
+  (matching the existing single-step create-with-version-1 flow —
+  there is no intermediate draft to publish).
+- The new template always starts `active`, regardless of the source
+  template's status.
+- Scoped to the current tenant like every other route here —
+  `404`/`403` on a cross-tenant template ID, and unreachable for
+  platform-admin users (no tenant context).
+- Logged as `hr_document_template.duplicated`, with the source
+  template's ID in the audit metadata — never the copied content
+  itself.
+- Demo data: the `uesl` tenant is seeded with 8 starter templates
+  (offer, promotion, warning, exit, reference, contractor engagement,
+  employment confirmation, probation completion) via
+  `DemoDataSeeder`, each already `active` with a `published` version 1
+  built only from the allowlisted placeholder tokens below — they
+  behave like any other tenant-created template, just pre-populated so
+  a new tenant isn't starting from a blank template list.
 
 ### Generation is a single action, not a two-step draft-then-render flow
 
@@ -1443,7 +1477,7 @@ templates in its seed data to backfill in the first place).
 - Session-based auth only — see "Authentication" above for the full future Sanctum/token plan.
 - No task templates, task dependencies/ordering, approval routing, notifications, or reminders for lifecycle processes/tasks (Checkpoint 33) — see `docs/security.md#onboarding--offboarding-foundation-checkpoint-33`.
 - No standalone `GET` for a single lifecycle task — see "Lifecycle Processes & Tasks" above.
-- No DOCX file generation, e-signature, automated sending, bulk generation, or employee self-service download for HR Documents (Checkpoint 34/35/36/37) — see `docs/security.md#hr-documents--letter-generation-foundation-checkpoint-34`. PDF export exists (Checkpoint 35) but is generate-on-demand only — every download re-renders from `rendered_content`, nothing is ever persisted. Template version history exists (Checkpoint 36) but has no diff/compare UI and no publish-approval workflow. A single-approver approval workflow exists (Checkpoint 37) but has no multi-level/routing approval and no notifications when a document changes state.
+- No DOCX file generation, e-signature, automated sending, bulk generation, or employee self-service download for HR Documents (Checkpoint 34/35/36/37) — see `docs/security.md#hr-documents--letter-generation-foundation-checkpoint-34`. PDF export exists (Checkpoint 35) but is generate-on-demand only — every download re-renders from `rendered_content`, nothing is ever persisted. Template version history exists (Checkpoint 36) but has no diff/compare UI and no publish-approval workflow. A single-approver approval workflow exists (Checkpoint 37) but has no multi-level/routing approval and no notifications when a document changes state. A starter template library and safe duplication exist (Checkpoint 38 — seeded per-tenant, not a global/shared catalogue) but there's no AI-assisted generation, legal clause library, cross-tenant/global marketplace, template rating, or template import/export.
 
 ## Future
 
@@ -1480,3 +1514,4 @@ templates in its seed data to backfill in the first place).
 - Multi-level/routing approval for HR generated documents, notifications/reminders on submit/approve/reject, and a cryptographic/visual (not just plain-text) watermark — all explicitly out of scope for Checkpoint 37's single-approver approval workflow.
 - Template versioning, e-signature, and approval-routing workflows for HR Documents, once a real need is scoped — deliberately not built in Checkpoint 34.
 - Bulk HR document generation (e.g., the same letter for a whole department) and employee self-service download.
+- AI-assisted template/document generation, a legal clause library, a global/shared template marketplace across tenants, template rating, and template import/export — all explicitly out of scope for Checkpoint 38's starter template library and duplication feature.

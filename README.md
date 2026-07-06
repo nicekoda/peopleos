@@ -492,6 +492,24 @@ mistaken for a final one. A migration backfills every pre-existing
 "already finalized" under the old content-only model). See
 `docs/architecture.md` and `docs/security.md` for the full design.
 
+## HR Document Template Library & Starter Templates (Checkpoint 38)
+
+Eight starter HR document templates (Employment Confirmation, Offer,
+Promotion, Warning, Exit/Offboarding, Reference, Contractor Engagement,
+Probation Completion) are now seeded for the `uesl` demo tenant, each
+with a real published version 1 using only the approved placeholder
+tokens and generic, professional wording — no schema changes, no
+global library table (Option A, approved): a starter template is just
+a normal, tenant-owned `HrDocumentTemplate` row, indistinguishable from
+one HR creates by hand. A new `POST /api/v1/hr-document-templates/{id}/duplicate`
+endpoint (reusing the existing `hr_document_templates.create`
+permission — no new permission) copies a template's metadata and its
+current published version's wording into a new template, immediately
+published, with a unique `"(Copy)"`/`"(Copy 2)"`-suffixed title and
+slug — the same single-step create-with-version-1 flow every template
+creation already follows. See `docs/architecture.md` and
+`docs/security.md` for the full design.
+
 ## Documentation
 
 - [`docs/architecture.md`](docs/architecture.md) — multi-tenancy, tenant resolution, RBAC overview, internal-vs-public IDs, frontend architecture.

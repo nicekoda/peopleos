@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Models\Employee;
 use App\Models\EmployeeDocument;
+use App\Models\HrDocumentTemplate;
 use App\Models\LeaveBalance;
 use App\Models\LeaveRequest;
 use App\Models\LeaveType;
@@ -65,6 +66,32 @@ class DemoDataSeederTest extends TestCase
                 User::query()->where('tenant_id', $tenant->id)->where('email', "{$localPart}@uesl.peopleos.test")->exists(),
                 "Expected demo user {$localPart}@uesl.peopleos.test to exist.",
             );
+        }
+
+        // Checkpoint 38 — 8 starter HR document templates, each with a
+        // published version 1 using only allowlisted placeholders.
+        $templates = HrDocumentTemplate::query()->where('tenant_id', $tenant->id)->with('currentVersion')->get();
+        $this->assertCount(8, $templates);
+
+        $allowedPlaceholders = [
+            '{{employee.name}}', '{{employee.employee_number}}', '{{employee.email}}',
+            '{{employee.department}}', '{{employee.position}}', '{{employee.location}}',
+            '{{employee.employment_type}}', '{{employee.start_date}}', '{{tenant.name}}', '{{today}}',
+        ];
+
+        foreach ($templates as $template) {
+            $this->assertSame('active', $template->status->value, "Starter template '{$template->title}' should be active.");
+            $this->assertNotNull($template->currentVersion, "Starter template '{$template->title}' should have a current version.");
+            $this->assertSame('published', $template->currentVersion->status->value, "Starter template '{$template->title}' version should be published.");
+
+            preg_match_all('/\{\{[^}]*\}\}/', $template->currentVersion->content_template, $matches);
+            foreach ($matches[0] as $token) {
+                $this->assertContains(
+                    $token,
+                    $allowedPlaceholders,
+                    "Starter template '{$template->title}' uses an unapproved placeholder: {$token}",
+                );
+            }
         }
     }
 

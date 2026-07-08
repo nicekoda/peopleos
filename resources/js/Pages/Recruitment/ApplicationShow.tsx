@@ -8,9 +8,12 @@ import Button from '@/Components/Button';
 import LoadingState from '@/Components/LoadingState';
 import ErrorMessage from '@/Components/ErrorMessage';
 import PermissionGate from '@/Components/PermissionGate';
-import { SelectField } from '@/Components/FormField';
+import { InputField, SelectField } from '@/Components/FormField';
 import { api, toApiError, redirectIfUnauthenticated, ApiError } from '@/lib/api';
-import { ApplicationStage, JobApplication } from '@/types/recruitment';
+import { ApplicationStage, ConversionFormPayload, JobApplication, PaginatedResponse } from '@/types/recruitment';
+import { Department } from '@/types/department';
+import { Position } from '@/types/position';
+import { Location } from '@/types/location';
 import { PageProps } from '@/types';
 
 interface ShowProps extends PageProps {
@@ -53,13 +56,37 @@ export default function RecruitmentApplicationShow() {
     const [notingError, setNotingError] = useState<string | null>(null);
     const [addingNote, setAddingNote] = useState(false);
     const [updatingReadiness, setUpdatingReadiness] = useState(false);
+    const [departments, setDepartments] = useState<Department[] | null>(null);
+    const [positions, setPositions] = useState<Position[] | null>(null);
+    const [locations, setLocations] = useState<Location[] | null>(null);
+    const [conversionForm, setConversionForm] = useState<ConversionFormPayload>({
+        employee_number: '',
+        work_email: '',
+        start_date: '',
+        employment_type: '',
+        department_id: '',
+        position_id: '',
+        location_id: '',
+    });
+    const [conversionErrors, setConversionErrors] = useState<Record<string, string[]>>({});
+    const [conversionGeneralError, setConversionGeneralError] = useState<string | null>(null);
+    const [converting, setConverting] = useState(false);
 
     const load = useCallback(() => {
         setError(null);
         api.get<{ data: JobApplication }>(`/job-applications/${applicationId}`)
             .then((response) => {
-                setApplication(response.data.data);
-                setStageDraft(response.data.data.stage);
+                const data = response.data.data;
+                setApplication(data);
+                setStageDraft(data.stage);
+                setConversionForm((prev) => ({
+                    ...prev,
+                    work_email: prev.work_email || data.applicant?.email || '',
+                    employment_type: prev.employment_type || data.job?.employment_type || '',
+                    department_id: prev.department_id || data.job?.department_id || '',
+                    position_id: prev.position_id || data.job?.position_id || '',
+                    location_id: prev.location_id || data.job?.location_id || '',
+                }));
             })
             .catch((err) => {
                 const apiError = toApiError(err);
@@ -72,6 +99,61 @@ export default function RecruitmentApplicationShow() {
     useEffect(() => {
         load();
     }, [load]);
+
+    useEffect(() => {
+        Promise.all([
+            api.get<PaginatedResponse<Department>>('/departments'),
+            api.get<PaginatedResponse<Position>>('/positions'),
+            api.get<PaginatedResponse<Location>>('/locations'),
+        ])
+            .then(([departmentsRes, positionsRes, locationsRes]) => {
+                setDepartments(departmentsRes.data.data);
+                setPositions(positionsRes.data.data);
+                setLocations(locationsRes.data.data);
+            })
+            .catch(() => {
+                // Non-fatal — the conversion form still works with manual
+                // entry if these reference lists fail to load; the picker
+                // dropdowns just render empty besides "— None —".
+            });
+    }, []);
+
+    const setConversionField = <K extends keyof ConversionFormPayload>(key: K, value: ConversionFormPayload[K]) => {
+        setConversionForm((prev) => ({ ...prev, [key]: value }));
+    };
+
+    const conversionFieldError = (name: string) => conversionErrors[name]?.[0];
+
+    const submitConversion: FormEventHandler = (e) => {
+        e.preventDefault();
+        setConverting(true);
+        setConversionErrors({});
+        setConversionGeneralError(null);
+
+        const payload = {
+            employee_number: conversionForm.employee_number,
+            work_email: conversionForm.work_email || null,
+            start_date: conversionForm.start_date || null,
+            employment_type: conversionForm.employment_type,
+            department_id: conversionForm.department_id || null,
+            position_id: conversionForm.position_id || null,
+            location_id: conversionForm.location_id || null,
+        };
+
+        api.post<{ data: JobApplication }>(`/job-applications/${applicationId}/convert-to-employee`, payload)
+            .then((response) => setApplication(response.data.data))
+            .catch((err) => {
+                const apiError: ApiError = toApiError(err);
+                if (redirectIfUnauthenticated(apiError)) {
+                    return;
+                }
+                if (apiError.errors) {
+                    setConversionErrors(apiError.errors);
+                }
+                setConversionGeneralError(apiError.message);
+            })
+            .finally(() => setConverting(false));
+    };
 
     const submitStage: FormEventHandler = (e) => {
         e.preventDefault();
@@ -255,16 +337,152 @@ export default function RecruitmentApplicationShow() {
                                           ? 'Mark not ready'
                                           : 'Mark ready for conversion'}
                                 </Button>
-                                <span
-                                    title="Candidate-to-employee conversion is not built yet — see docs/architecture.md for the planned flow."
-                                >
-                                    <Button type="button" variant="secondary" disabled>
-                                        Convert to Employee (coming soon)
-                                    </Button>
-                                </span>
                             </div>
                         </PermissionGate>
                     </div>
+                </Card>
+            </div>
+
+            <div className="mt-4">
+                <Card title="Candidate-to-Employee Conversion">
+                    {application.converted_employee ? (
+                        <div className="space-y-3">
+                            <p className="text-sm text-slate-700">
+                                Converted to employee{' '}
+                                <Link
+                                    href={`/employees/${application.converted_employee.id}`}
+                                    className="font-medium text-indigo-600 hover:text-indigo-500"
+                                >
+                                    {application.converted_employee.full_name} (#{application.converted_employee.employee_number})
+                                </Link>{' '}
+                                on {application.converted_at?.slice(0, 10)}.
+                            </p>
+                            <p className="text-sm text-slate-500">
+                                No onboarding process was started automatically.{' '}
+                                <Link
+                                    href={`/lifecycle/create?employeeId=${application.converted_employee.id}&type=onboarding`}
+                                    className="font-medium text-indigo-600 hover:text-indigo-500"
+                                >
+                                    Start onboarding
+                                </Link>{' '}
+                                for this employee if ready.
+                            </p>
+                        </div>
+                    ) : (
+                        <PermissionGate
+                            permission="job_applications.convert_to_employee"
+                            fallback={<p className="text-sm text-slate-500">You don't have permission to convert this application to an employee.</p>}
+                        >
+                            {application.stage !== 'hired' || !application.ready_for_conversion ? (
+                                <p className="text-sm text-slate-600">
+                                    This application must be at the <strong>hired</strong> stage and marked{' '}
+                                    <strong>ready for conversion</strong> before it can be converted.
+                                </p>
+                            ) : (
+                                <form onSubmit={submitConversion}>
+                                    <p className="mb-4 text-sm text-slate-500">
+                                        Creates a new employee record. No user account, role assignment, or onboarding process is
+                                        started automatically.
+                                    </p>
+                                    {conversionGeneralError && (
+                                        <div className="mb-4 rounded-md bg-red-50 px-4 py-3 text-sm text-red-700">
+                                            {conversionGeneralError}
+                                        </div>
+                                    )}
+                                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                                        <InputField
+                                            label="Employee number"
+                                            name="employee_number"
+                                            required
+                                            value={conversionForm.employee_number}
+                                            onChange={(e) => setConversionField('employee_number', e.target.value)}
+                                            error={conversionFieldError('employee_number')}
+                                        />
+                                        <InputField
+                                            label="Work email"
+                                            name="work_email"
+                                            type="email"
+                                            value={conversionForm.work_email}
+                                            onChange={(e) => setConversionField('work_email', e.target.value)}
+                                            error={conversionFieldError('work_email')}
+                                        />
+                                        <InputField
+                                            label="Start date"
+                                            name="start_date"
+                                            type="date"
+                                            value={conversionForm.start_date}
+                                            onChange={(e) => setConversionField('start_date', e.target.value)}
+                                            error={conversionFieldError('start_date')}
+                                        />
+                                        <SelectField
+                                            label="Employment type"
+                                            name="employment_type"
+                                            required
+                                            value={conversionForm.employment_type}
+                                            onChange={(e) =>
+                                                setConversionField('employment_type', e.target.value as ConversionFormPayload['employment_type'])
+                                            }
+                                            error={conversionFieldError('employment_type')}
+                                        >
+                                            <option value="">— Select —</option>
+                                            <option value="full_time">Full time</option>
+                                            <option value="part_time">Part time</option>
+                                            <option value="contractor">Contractor</option>
+                                            <option value="intern">Intern</option>
+                                            <option value="consultant">Consultant</option>
+                                        </SelectField>
+                                        <SelectField
+                                            label="Department"
+                                            name="department_id"
+                                            value={conversionForm.department_id}
+                                            onChange={(e) => setConversionField('department_id', e.target.value)}
+                                            error={conversionFieldError('department_id')}
+                                        >
+                                            <option value="">— None —</option>
+                                            {(departments ?? []).map((department) => (
+                                                <option key={department.id} value={department.id}>
+                                                    {department.name}
+                                                </option>
+                                            ))}
+                                        </SelectField>
+                                        <SelectField
+                                            label="Position"
+                                            name="position_id"
+                                            value={conversionForm.position_id}
+                                            onChange={(e) => setConversionField('position_id', e.target.value)}
+                                            error={conversionFieldError('position_id')}
+                                        >
+                                            <option value="">— None —</option>
+                                            {(positions ?? []).map((position) => (
+                                                <option key={position.id} value={position.id}>
+                                                    {position.name}
+                                                </option>
+                                            ))}
+                                        </SelectField>
+                                        <SelectField
+                                            label="Location"
+                                            name="location_id"
+                                            value={conversionForm.location_id}
+                                            onChange={(e) => setConversionField('location_id', e.target.value)}
+                                            error={conversionFieldError('location_id')}
+                                        >
+                                            <option value="">— None —</option>
+                                            {(locations ?? []).map((location) => (
+                                                <option key={location.id} value={location.id}>
+                                                    {location.name}
+                                                </option>
+                                            ))}
+                                        </SelectField>
+                                    </div>
+                                    <div className="mt-6 flex justify-end">
+                                        <Button type="submit" disabled={converting}>
+                                            {converting ? 'Converting…' : 'Convert to Employee'}
+                                        </Button>
+                                    </div>
+                                </form>
+                            )}
+                        </PermissionGate>
+                    )}
                 </Card>
             </div>
 

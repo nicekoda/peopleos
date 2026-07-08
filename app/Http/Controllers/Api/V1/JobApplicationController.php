@@ -4,7 +4,9 @@ namespace App\Http\Controllers\Api\V1;
 
 use App\Enums\ApplicationStage;
 use App\Enums\ApplicationStatus;
+use App\Enums\EmployeeStatus;
 use App\Http\Controllers\Controller;
+use App\Http\Requests\Recruitment\ConvertApplicationToEmployeeRequest;
 use App\Http\Requests\Recruitment\MarkApplicationReadyForConversionRequest;
 use App\Http\Requests\Recruitment\StoreApplicationNoteRequest;
 use App\Http\Requests\Recruitment\StoreJobApplicationRequest;
@@ -12,6 +14,7 @@ use App\Http\Requests\Recruitment\UpdateApplicationStageRequest;
 use App\Http\Requests\Recruitment\UpdateJobApplicationRequest;
 use App\Http\Resources\JobApplicationResource;
 use App\Http\Resources\RecruitmentApplicationNoteResource;
+use App\Models\Employee;
 use App\Models\RecruitmentApplicant;
 use App\Models\RecruitmentApplication;
 use App\Models\RecruitmentApplicationNote;
@@ -20,13 +23,14 @@ use App\Services\Audit\AuditLogger;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
+use Illuminate\Support\Facades\DB;
 
 class JobApplicationController extends Controller
 {
     public function index(Request $request): AnonymousResourceCollection
     {
         $applications = RecruitmentApplication::query()
-            ->with(['job', 'applicant'])
+            ->with(['job', 'applicant', 'convertedEmployee'])
             ->orderByDesc('created_at')
             ->paginate();
 
@@ -92,7 +96,7 @@ class JobApplicationController extends Controller
     {
         $this->ensureBelongsToCurrentTenant($jobApplication);
 
-        $jobApplication->load(['job', 'applicant', 'notes.createdBy']);
+        $jobApplication->load(['job', 'applicant', 'notes.createdBy', 'convertedEmployee']);
 
         return new JobApplicationResource($jobApplication);
     }
@@ -268,6 +272,93 @@ class JobApplicationController extends Controller
         );
 
         return (new RecruitmentApplicationNoteResource($note))->response()->setStatusCode(201);
+    }
+
+    /**
+     * Checkpoint 40 — creates a real Employee row from an eligible
+     * application (stage: hired, ready_for_conversion: true, not already
+     * converted — all re-checked here, not just in the FormRequest, as
+     * defense in depth). Runs in a transaction: employee creation and
+     * the application's converted_* fields succeed or fail together — a
+     * uniqueness failure never leaves a half-converted application.
+     * manager_employee_id is deliberately never set here — assigning a
+     * manager stays the exclusive job of PATCH /employees/{id}/manager,
+     * same as every other employee-creation path in this app. No user
+     * account, role assignment, or onboarding process is started
+     * automatically (see docs/architecture.md for the documented future
+     * flow).
+     */
+    public function convertToEmployee(ConvertApplicationToEmployeeRequest $request, RecruitmentApplication $jobApplication): JsonResponse
+    {
+        $this->ensureBelongsToCurrentTenant($jobApplication);
+
+        abort_unless($jobApplication->converted_employee_id === null, 422, 'This application has already been converted to an employee.');
+        abort_unless(
+            $jobApplication->stage === ApplicationStage::Hired && $jobApplication->ready_for_conversion,
+            422,
+            'This application must be at the hired stage and marked ready for conversion before it can be converted.',
+        );
+
+        $validated = $request->validated();
+        $tenantId = $jobApplication->tenant_id;
+        $applicant = $jobApplication->applicant;
+
+        $employee = DB::transaction(function () use ($validated, $tenantId, $applicant, $jobApplication, $request) {
+            $employee = Employee::query()->create([
+                'tenant_id' => $tenantId,
+                'employee_number' => $validated['employee_number'],
+                'first_name' => $applicant->first_name,
+                'last_name' => $applicant->last_name,
+                'work_email' => $validated['work_email'] ?? null,
+                'status' => $validated['status'] ?? EmployeeStatus::Draft->value,
+                'employment_type' => $validated['employment_type'],
+                'department_id' => $validated['department_id'] ?? null,
+                'location_id' => $validated['location_id'] ?? null,
+                'position_id' => $validated['position_id'] ?? null,
+                'start_date' => $validated['start_date'] ?? null,
+                'created_by' => $request->user()->id,
+                'updated_by' => $request->user()->id,
+            ]);
+
+            $jobApplication->converted_employee_id = $employee->id;
+            $jobApplication->converted_at = now();
+            $jobApplication->converted_by = $request->user()->id;
+            $jobApplication->updated_by = $request->user()->id;
+            $jobApplication->save();
+
+            return $employee;
+        });
+
+        // Never the applicant's cover letter/notes — only IDs and the
+        // safe, already-audited employee fields.
+        AuditLogger::logFor(
+            actor: $request->user(),
+            action: 'job_application.converted_to_employee',
+            module: 'recruitment',
+            tenantId: $tenantId,
+            auditableType: RecruitmentApplication::class,
+            auditableId: $jobApplication->id,
+            description: "Application from '{$applicant->first_name} {$applicant->last_name}' converted to employee #{$employee->employee_number}.",
+            newValues: ['converted_employee_id' => $employee->id],
+            ipAddress: $request->ip(),
+            userAgent: $request->userAgent(),
+        );
+
+        AuditLogger::logFor(
+            actor: $request->user(),
+            action: 'employee.created_from_recruitment',
+            module: 'employees',
+            tenantId: $tenantId,
+            auditableType: Employee::class,
+            auditableId: $employee->id,
+            description: "Employee '{$employee->fullName()}' (#{$employee->employee_number}) created from recruitment application.",
+            newValues: $employee->only(['employee_number', 'first_name', 'last_name', 'work_email', 'status', 'employment_type', 'department_id', 'location_id', 'position_id', 'start_date']),
+            metadata: ['source_application_id' => $jobApplication->id],
+            ipAddress: $request->ip(),
+            userAgent: $request->userAgent(),
+        );
+
+        return (new JobApplicationResource($jobApplication->fresh(['job', 'applicant', 'convertedEmployee'])))->response()->setStatusCode(200);
     }
 
     /**

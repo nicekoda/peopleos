@@ -532,6 +532,31 @@ email automation, offer automation, e-signature, or bulk import this
 checkpoint. See `docs/architecture.md` and `docs/security.md` for the
 full design.
 
+## Candidate-to-Employee Conversion Foundation (Checkpoint 40)
+
+`POST /api/v1/job-applications/{id}/convert-to-employee` turns an
+eligible application into a real `Employee` row — eligible meaning
+`stage: hired` **and** `ready_for_conversion: true` **and** not already
+converted (all three re-checked server-side, not just implied by the
+frontend). Gated by one new, deliberately narrow permission,
+`job_applications.convert_to_employee` (Tenant Admin/HR Director/HR
+Manager only — not HR Officer by default), and safe field mapping:
+`first_name`/`last_name` come from the applicant, `department_id`/
+`position_id`/`location_id`/`employment_type` pre-fill from the job
+opening when present, and `employee_number`/`start_date`/`work_email`
+are validated with the exact same uniqueness rules as a normal employee
+create. The whole thing runs inside a database transaction — a
+uniqueness collision rolls back cleanly, leaving no half-converted
+application and no orphaned employee row. `converted_employee_id`/
+`converted_at`/`converted_by` on `recruitment_applications` are always
+server-set, never accepted from request input, and the application
+itself is never deleted or overwritten — the conversion is additive
+history, not a replacement. **No user account, role assignment, or
+onboarding process is started automatically** — the Application detail
+page shows a "Start onboarding" link to the existing Lifecycle Create
+form after conversion, but nothing kicks off on its own. See
+`docs/architecture.md` and `docs/security.md` for the full design.
+
 ## Documentation
 
 - [`docs/architecture.md`](docs/architecture.md) — multi-tenancy, tenant resolution, RBAC overview, internal-vs-public IDs, frontend architecture.

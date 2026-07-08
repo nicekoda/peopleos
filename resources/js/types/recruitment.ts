@@ -36,7 +36,15 @@ export interface ApplicationNote {
 export interface JobApplication {
     id: string;
     recruitment_job_id: string;
-    job?: { id: string; title: string; status: RecruitmentJobStatus } | null;
+    job?: {
+        id: string;
+        title: string;
+        status: RecruitmentJobStatus;
+        department_id: string | null;
+        position_id: string | null;
+        location_id: string | null;
+        employment_type: EmploymentType | null;
+    } | null;
     applicant?: {
         id: string;
         first_name: string;
@@ -50,6 +58,9 @@ export interface JobApplication {
     resume_document_id: string | null;
     cover_letter: string | null;
     ready_for_conversion: boolean;
+    converted_employee_id: string | null;
+    converted_employee?: { id: string; full_name: string; employee_number: string } | null;
+    converted_at: string | null;
     notes?: ApplicationNote[];
     created_at: string | null;
     updated_at: string | null;
@@ -104,4 +115,20 @@ export interface JobApplicationFormPayload {
     phone: string;
     source: string;
     cover_letter: string;
+}
+
+/**
+ * Allowlisted for the candidate-to-employee conversion form (Checkpoint
+ * 40) — manager_employee_id is deliberately absent; assigning a manager
+ * stays a separate action via the existing Employee edit page, same as
+ * every other employee-creation path in this app.
+ */
+export interface ConversionFormPayload {
+    employee_number: string;
+    work_email: string;
+    start_date: string;
+    employment_type: EmploymentType | '';
+    department_id: string;
+    position_id: string;
+    location_id: string;
 }

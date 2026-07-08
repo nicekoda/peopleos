@@ -1551,6 +1551,34 @@ in the same tenant via `JobApplicationController::store()`'s
 single-step flow, so this mismatch cannot occur outside a test that
 constructs the two rows independently.
 
+## Testing a transactional, multi-resource action without a real mid-transaction failure to inject (Checkpoint 40)
+
+`JobApplicationController::convertToEmployee()` wraps `Employee::create()`
+and the application's `converted_*` field update in one
+`DB::transaction()`, but every failure mode this checkpoint's own
+validation catches (duplicate `employee_number`/`work_email`, an
+already-converted application, an ineligible stage) is rejected at the
+`ConvertApplicationToEmployeeRequest` layer — *before* the transaction
+ever opens. That means there's no natural way to force a failure
+*inside* the transaction to directly observe a rollback.
+`test_failed_conversion_leaves_no_partial_state` in
+`JobApplicationConversionApiTest` tests the practically-relevant
+guarantee instead: after a rejected conversion attempt (employee-number
+collision), assert the employee count is unchanged and the
+application's `converted_employee_id`/`converted_at`/`converted_by`/
+`stage`/`ready_for_conversion` are all exactly as they were before the
+attempt — i.e., a failed request genuinely leaves zero trace, whether
+that's because validation caught it first or because a transaction
+rolled back a partial write. `JobApplicationConversionApiTest` (19
+tests) also reuses the `RecruitmentApplicant`-explicitly-created-first
+pattern from the note directly above — `eligibleApplication()` creates
+the applicant with the correct `tenant_id` up front, since
+`convertToEmployee()` reads `$applicant->first_name`/`last_name`
+(property access on the relation) to build the new `Employee` row, and
+a mismatched-tenant applicant would silently insert `null` into
+`Employee`'s `NOT NULL` `first_name`/`last_name` columns — surfacing as
+a raw SQL constraint violation instead of a clean assertion failure.
+
 ## Known limitations
 
 - No test coverage reporting configured yet.

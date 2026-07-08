@@ -68,7 +68,14 @@ class PermissionSeeder extends Seeder
             // same "narrow write actions" reasoning as
             // hr_generated_documents.submit/.approve/.reject.
             'job_openings' => ['view', 'create', 'update', 'delete'],
-            'job_applications' => ['view', 'create', 'update', 'delete', 'update_stage', 'add_note', 'mark_ready_for_conversion'],
+            // Checkpoint 40 — .convert_to_employee added. Its own
+            // permission, deliberately not folded into .update or gated
+            // by employees.create — converting to an employee is a
+            // materially bigger, harder-to-reverse action than any
+            // existing recruitment write permission, and requiring it
+            // alone (not also employees.create) is your explicit
+            // approved choice.
+            'job_applications' => ['view', 'create', 'update', 'delete', 'update_stage', 'add_note', 'mark_ready_for_conversion', 'convert_to_employee'],
         ];
 
         foreach ($tenantPermissions as $category => $actions) {

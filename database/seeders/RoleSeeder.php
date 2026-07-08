@@ -152,6 +152,8 @@ class RoleSeeder extends Seeder
             'job_openings.view', 'job_openings.create', 'job_openings.update', 'job_openings.delete',
             'job_applications.view', 'job_applications.create', 'job_applications.update', 'job_applications.delete',
             'job_applications.update_stage', 'job_applications.add_note', 'job_applications.mark_ready_for_conversion',
+            // Checkpoint 40 — per your explicit approved mapping.
+            'job_applications.convert_to_employee',
         ]);
 
         // Checkpoint 34 — HR Director previously had no permissions
@@ -170,6 +172,8 @@ class RoleSeeder extends Seeder
             'job_openings.view', 'job_openings.create', 'job_openings.update', 'job_openings.delete',
             'job_applications.view', 'job_applications.create', 'job_applications.update', 'job_applications.delete',
             'job_applications.update_stage', 'job_applications.add_note', 'job_applications.mark_ready_for_conversion',
+            // Checkpoint 40 — per your explicit approved mapping.
+            'job_applications.convert_to_employee',
         ]);
 
         $this->grantByKeys($roles['Employee'], [

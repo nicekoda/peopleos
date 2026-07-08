@@ -1489,17 +1489,47 @@ the full model.
 | `POST` | `/api/v1/job-applications/{jobApplication}/notes` | `job_applications.add_note` | Internal-only — `visibility` is always `internal`, never accepted from request input. Body: `{"note": "..."}` |
 | `PATCH` | `/api/v1/job-applications/{jobApplication}/stage` | `job_applications.update_stage` | Must be a legal transition from the application's *current* stage — see `ApplicationStage::canTransitionTo()`. Body: `{"stage": "..."}` |
 | `PATCH` | `/api/v1/job-applications/{jobApplication}/ready-for-conversion` | `job_applications.mark_ready_for_conversion` | A milestone flag only — never creates an `Employee` row. Rejected (`422`) if the application's stage is `rejected`/`withdrawn`. Body: `{"ready_for_conversion": true|false}` |
+| `POST` | `/api/v1/job-applications/{jobApplication}/convert-to-employee` | `job_applications.convert_to_employee` | **New in Checkpoint 40** — creates a real `Employee` row. Requires `stage: hired` AND `ready_for_conversion: true` AND not already converted (`422` otherwise). Runs in a database transaction. Body: `{"employee_number": "...", "employment_type": "...", "work_email": "..." (optional), "start_date": "..." (optional), "department_id"/"position_id"/"location_id": "..." (optional)}` — see "Candidate-to-employee conversion" below |
 
-### Candidate-to-employee conversion does not exist yet
+## Candidate-to-employee conversion
 
-`ready_for_conversion` is exactly what it sounds like — a boolean flag
-recruiters can toggle once a candidate looks ready to hire — and
-nothing more. No endpoint in this app creates an `Employee` row from a
-`RecruitmentApplication`; that conversion (resolving `employee_number`,
-optional `User` linking, whether applicant contact fields carry over,
-and whether an onboarding lifecycle process should kick off
-automatically) is deliberately deferred to a future checkpoint. See
-`docs/architecture.md` for the documented future flow.
+Checkpoint 40 — Candidate-to-Employee Conversion Foundation.
+`POST /api/v1/job-applications/{id}/convert-to-employee` is gated by
+one deliberately narrow permission (`job_applications.convert_to_employee`,
+not also `employees.create`) and reuses `StoreEmployeeRequest`'s exact
+uniqueness/active-lookup validation rules — never a looser parallel
+rule set. See `docs/security.md` for the full model.
+
+**Field mapping**: `first_name`/`last_name` come from the applicant
+(not form-editable — they're the candidate's own submitted name).
+`department_id`/`position_id`/`location_id`/`employment_type` pre-fill
+from the job opening client-side when present, but every submitted
+value is independently re-validated — the backend never trusts a
+pre-filled value more than a manually-entered one.
+`employee_number`/`start_date`/`work_email`/`status` are always manual
+(no numbering scheme, no default start date, and `work_email` — though
+pre-filled from the applicant's own email — must pass the same
+per-tenant uniqueness check a normal employee create already requires).
+`employment_type` is `required` on `Employee` but nullable on
+`RecruitmentJob` — a job with none set simply forces manual selection,
+same `required` rule `StoreEmployeeRequest` already has. `manager_employee_id`
+is never part of this request — assigning a manager stays the exclusive
+job of `PATCH /employees/{id}/manager`, unchanged from every other
+employee-creation path.
+
+**Server-controlled, never accepted from request input**:
+`converted_employee_id`, `converted_at`, `converted_by`, `tenant_id`,
+`created_by`, `updated_by`. The application row itself is never deleted
+or overwritten by conversion — these three `converted_*` columns are
+the only trace it leaves.
+
+**Idempotent**: `converted_employee_id !== null` on the application
+blocks any further conversion attempt with a `422`.
+
+**No automatic side effects**: no `User` account, no role assignment,
+no onboarding process is started. The frontend links to the existing
+`/lifecycle/create?employeeId=...&type=onboarding` page as a manual
+next step.
 
 ## Current limitations
 
@@ -1520,7 +1550,7 @@ automatically) is deliberately deferred to a future checkpoint. See
 - No task templates, task dependencies/ordering, approval routing, notifications, or reminders for lifecycle processes/tasks (Checkpoint 33) — see `docs/security.md#onboarding--offboarding-foundation-checkpoint-33`.
 - No standalone `GET` for a single lifecycle task — see "Lifecycle Processes & Tasks" above.
 - No DOCX file generation, e-signature, automated sending, bulk generation, or employee self-service download for HR Documents (Checkpoint 34/35/36/37) — see `docs/security.md#hr-documents--letter-generation-foundation-checkpoint-34`. PDF export exists (Checkpoint 35) but is generate-on-demand only — every download re-renders from `rendered_content`, nothing is ever persisted. Template version history exists (Checkpoint 36) but has no diff/compare UI and no publish-approval workflow. A single-approver approval workflow exists (Checkpoint 37) but has no multi-level/routing approval and no notifications when a document changes state. A starter template library and safe duplication exist (Checkpoint 38 — seeded per-tenant, not a global/shared catalogue) but there's no AI-assisted generation, legal clause library, cross-tenant/global marketplace, template rating, or template import/export.
-- Recruitment & Applicant Tracking (Checkpoint 39) is a foundation only — `resume_document_id` on `recruitment_applications` is reserved/unused (no upload endpoint), no candidate-to-employee conversion (a `ready_for_conversion` milestone flag exists, but no `Employee` row is ever created), no applicant dedupe/merge-by-email, no public candidate portal, no CV parsing/AI screening, no interview scheduling, no offer approval/automation, no email notifications, and no bulk import — see `docs/security.md#recruitment--applicant-tracking-foundation-checkpoint-39`.
+- Recruitment & Applicant Tracking (Checkpoint 39/40) — `resume_document_id` on `recruitment_applications` is reserved/unused (no upload endpoint), no applicant dedupe/merge-by-email (so two independent applications from the same real person could each be converted into separate employee rows), no public candidate portal, no CV parsing/AI screening, no interview scheduling, no offer approval/automation, no email notifications, and no bulk import/conversion. Candidate-to-employee conversion exists (Checkpoint 40) but creates no `User` account, no role assignment, and starts no onboarding process automatically — see `docs/security.md#candidate-to-employee-conversion-foundation-checkpoint-40`.
 
 ## Future
 
@@ -1558,6 +1588,6 @@ automatically) is deliberately deferred to a future checkpoint. See
 - Template versioning, e-signature, and approval-routing workflows for HR Documents, once a real need is scoped — deliberately not built in Checkpoint 34.
 - Bulk HR document generation (e.g., the same letter for a whole department) and employee self-service download.
 - AI-assisted template/document generation, a legal clause library, a global/shared template marketplace across tenants, template rating, and template import/export — all explicitly out of scope for Checkpoint 38's starter template library and duplication feature.
-- Candidate-to-employee conversion — resolving a real `employee_number`, optional `User` linking, applicant-field carryover, and automatic onboarding-lifecycle kickoff; deliberately not built in Checkpoint 39.
-- A public candidate portal, job-board posting, CV parsing/AI screening, interview scheduling, offer approval/automation, and email notifications for Recruitment — all explicitly out of scope for Checkpoint 39's foundation.
-- Applicant dedupe/merge-by-email, and resume/CV upload for applications (`resume_document_id` already reserved in the schema) — future work for Recruitment.
+- Automatic `User` account creation and role assignment at conversion time, and an "start onboarding automatically" checkbox (Option B) — both deliberately deferred from Checkpoint 40's conversion foundation (manual "Start onboarding" link only).
+- A public candidate portal, job-board posting, CV parsing/AI screening, interview scheduling, offer approval/automation, and email notifications for Recruitment — all explicitly out of scope for Checkpoint 39/40's foundation.
+- Applicant dedupe/merge-by-email carried through to conversion, resume/CV upload for applications (`resume_document_id` already reserved in the schema), offer-letter automation reusing HR Documents, and bulk conversion — future work for Recruitment.

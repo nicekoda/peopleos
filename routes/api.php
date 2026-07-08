@@ -311,4 +311,8 @@ Route::middleware(['auth', 'tenant.matches'])->prefix('api/v1')->group(function 
     Route::post('job-applications/{jobApplication}/notes', [JobApplicationController::class, 'storeNote'])->middleware('permission:job_applications.add_note');
     Route::patch('job-applications/{jobApplication}/stage', [JobApplicationController::class, 'updateStage'])->middleware('permission:job_applications.update_stage');
     Route::patch('job-applications/{jobApplication}/ready-for-conversion', [JobApplicationController::class, 'markReadyForConversion'])->middleware('permission:job_applications.mark_ready_for_conversion');
+    // Checkpoint 40 — Candidate-to-Employee Conversion Foundation. Gated
+    // solely by job_applications.convert_to_employee, not also
+    // employees.create — your explicit approved choice.
+    Route::post('job-applications/{jobApplication}/convert-to-employee', [JobApplicationController::class, 'convertToEmployee'])->middleware('permission:job_applications.convert_to_employee');
 });

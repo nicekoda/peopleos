@@ -2066,3 +2066,112 @@ rule already established for HR document `rendered_content` and leave
 rejection reasons (Checkpoint 34/14): `job_application_note.created`
 and `job_application.updated` audit entries record that a note/cover
 letter changed, never its text.
+
+## Candidate-to-Employee Conversion Foundation (Checkpoint 40)
+
+Turns the `ready_for_conversion` milestone flag (Checkpoint 39) into a
+real, safe action, per your approved gap analysis. See
+[`security.md`](security.md#candidate-to-employee-conversion-foundation-checkpoint-40)
+for the full security model and
+[`api.md`](api.md#candidate-to-employee-conversion) for the route
+reference.
+
+**Schema addition: three nullable columns on `recruitment_applications`
+— `converted_employee_id` (FK → `employees`), `converted_at`,
+`converted_by` (FK → `users`).** One additive migration, no changes to
+any existing table. The application row itself is never deleted or
+overwritten by conversion — these three columns are the *only* trace
+conversion leaves on it; everything else (stage, cover letter, notes)
+stays exactly as it was.
+
+**Eligibility requires stage `hired` AND `ready_for_conversion: true`,
+your explicit approved choice over the looser "either/or" reading of
+the checkpoint brief.** A candidate merely flagged ready at the `offer`
+stage cannot be converted until the stage itself is actually advanced
+to `hired` — two independent signals, both required, checked twice
+(once in `ConvertApplicationToEmployeeRequest::withValidator()`, once
+again in the controller as defense-in-depth, mirroring how every
+tenant-ownership check in this app is verified at both the FormRequest
+and controller layer).
+
+**One deliberately narrow permission: `job_applications.convert_to_employee`,
+gated alone — not also `employees.create`, your explicit approved
+choice.** The checkpoint brief asked for "one deliberate permission";
+requiring a second, unrelated permission on top would contradict that
+instruction, and every role that gets `.convert_to_employee` (Tenant
+Admin, HR Director, HR Manager) already holds `employees.create`
+in practice anyway. HR Officer — despite holding every other
+recruitment write permission (`.update_stage`/`.add_note`/
+`.mark_ready_for_conversion`) — does **not** get `.convert_to_employee`
+by default: converting to an employee is a materially bigger,
+harder-to-reverse action than any of those, per your explicit
+approved mapping.
+
+**Field mapping reuses `StoreEmployeeRequest`'s exact validation rules
+— never a looser parallel rule set.** `ConvertApplicationToEmployeeRequest`
+duplicates the same `employee_number`/`work_email` per-tenant uniqueness
+checks and the same active-department/position/location existence
+checks `StoreEmployeeRequest` already enforces for a normal employee
+create. `first_name`/`last_name` come from the applicant directly (not
+user-editable in this form — they're the candidate's own submitted
+name). `department_id`/`position_id`/`location_id`/`employment_type`
+pre-fill from the job opening when present, but the submitted value is
+what's actually validated and persisted — the backend remains the
+authority, the pre-fill is only a frontend convenience.
+
+**`employment_type` is required on Employee but nullable on
+RecruitmentJob — a known, documented gap, not a bug.** A job opening
+with no `employment_type` set simply forces the HR user to pick one
+manually in the conversion form; the same `required` rule
+`StoreEmployeeRequest` already has is reused verbatim, no special-casing.
+
+**`manager_employee_id` is never part of conversion — the same
+"immutable-at-creation" rule every other employee-creation path in this
+app already follows.** Assigning a manager stays the exclusive job of
+`PATCH /employees/{id}/manager` (`AssignManagerRequest` +
+`ManagerHierarchyService`'s cycle-detection); reimplementing that
+validation inside the conversion action would duplicate a whole
+subsystem for a field that can just as easily be set as an immediate
+follow-up action in the existing Employee UI.
+
+**Transactional, all-or-nothing.** `JobApplicationController::convertToEmployee()`
+wraps the `Employee::create()` call and the application's
+`converted_employee_id`/`converted_at`/`converted_by` update in a single
+`DB::transaction()` — both succeed or both roll back together. A
+uniqueness failure is actually caught earlier, at the FormRequest
+validation layer (before the transaction ever opens), so in practice no
+partial employee row or partially-converted application can ever exist;
+the transaction is the belt-and-braces guarantee for anything that
+might fail *inside* it in the future (e.g. a DB-level constraint this
+app's own validation didn't anticipate).
+
+**No automatic user account, role assignment, or onboarding start —
+all three explicitly out of scope, per your instruction.** The
+Application Show page's post-conversion state links to the new
+employee's profile and to `/lifecycle/create?employeeId=...&type=onboarding`
+(Option A, your approved choice) — reusing the existing Lifecycle
+Create page's query-string pre-fill unchanged, zero new backend code,
+rather than adding an "auto-start onboarding" checkbox that would need
+its own review of *which* lifecycle type/tasks make sense by default.
+
+**Audit logging: two entries, one per resource, neither ever containing
+cover letter/note text.** `job_application.converted_to_employee`
+(module `recruitment`, metadata: the new `converted_employee_id`) and
+`employee.created_from_recruitment` (module `employees`, metadata:
+`source_application_id`) — mirrors the "two audit entries, one per
+resource touched" pattern Checkpoint 38's duplication already
+established (`hr_document_template.duplicated` alongside the new
+template's own creation trail).
+
+### Future
+
+Documented, not built: automatic `User` account creation and role
+assignment at conversion time; an "start onboarding automatically"
+checkbox (Option B, deliberately not chosen this checkpoint); real
+offer-letter automation tying HR Documents (Checkpoint 34) to the offer
+stage; a public candidate portal; bulk conversion; and applicant
+dedupe/merge-by-email carrying through to conversion (currently, since
+Checkpoint 39 never deduplicates applicants, two independent
+applications from "the same" candidate could each be converted into two
+separate employee rows — a real, documented limitation, not addressed
+this checkpoint).

@@ -24,7 +24,12 @@ class RecruitmentApplication extends Model
      * "controller assigns explicitly, from validated request input"
      * reason as every other field here — see StoreJobApplicationRequest.
      * resume_document_id is reserved/unused this checkpoint (no upload
-     * endpoint exists yet).
+     * endpoint exists yet). converted_employee_id/converted_at/
+     * converted_by (Checkpoint 40) are set only by
+     * JobApplicationController::convertToEmployee() — never accepted
+     * from request input (not in ConvertApplicationToEmployeeRequest's
+     * rules at all) — but must stay mass-assignable for that explicit,
+     * server-side assignment to persist.
      */
     protected $fillable = [
         'recruitment_job_id',
@@ -34,6 +39,9 @@ class RecruitmentApplication extends Model
         'resume_document_id',
         'cover_letter',
         'ready_for_conversion',
+        'converted_employee_id',
+        'converted_at',
+        'converted_by',
         'created_by',
         'updated_by',
     ];
@@ -44,6 +52,7 @@ class RecruitmentApplication extends Model
             'stage' => ApplicationStage::class,
             'status' => ApplicationStatus::class,
             'ready_for_conversion' => 'boolean',
+            'converted_at' => 'datetime',
         ];
     }
 
@@ -70,5 +79,15 @@ class RecruitmentApplication extends Model
     public function updatedBy(): BelongsTo
     {
         return $this->belongsTo(User::class, 'updated_by');
+    }
+
+    public function convertedEmployee(): BelongsTo
+    {
+        return $this->belongsTo(Employee::class, 'converted_employee_id');
+    }
+
+    public function convertedBy(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'converted_by');
     }
 }

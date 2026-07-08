@@ -4792,20 +4792,15 @@ candidate-facing view exists) — there is no candidate portal.
 - No assigned-interviewer scoping — Line Manager holds no recruitment
   permissions at all this checkpoint, rather than a partial,
   unenforceable scope.
-- Candidate-to-employee conversion does not exist —
-  `ready_for_conversion` is a milestone flag only; no `Employee` row,
-  `User` link, document carryover, or lifecycle-process kickoff happens
-  automatically.
+- Candidate-to-employee conversion exists as of Checkpoint 40 (see
+  below) but creates no `User` account, no role assignment, and starts
+  no onboarding process automatically.
 - No public candidate portal, job-board posting, CV parsing, AI
   screening, interview scheduling, offer approval/automation, email
   notifications, or bulk import.
 
 ### Future
 
-- Candidate-to-employee conversion — resolving `employee_number`
-  generation, optional `User` linking, and whether any lifecycle
-  process (onboarding) should kick off automatically; deliberately not
-  built this checkpoint (see `architecture.md`).
 - A public candidate portal and application status visibility for the
   candidate themselves.
 - Interview scheduling, offer approval routing, and offer-letter
@@ -4815,6 +4810,132 @@ candidate-facing view exists) — there is no candidate portal.
   integrations.
 - Applicant dedupe/merge-by-email, and a second sensitivity tier for
   candidate PII, if a real need is shown.
+
+## Candidate-to-Employee Conversion Foundation (Checkpoint 40)
+
+Adds `POST /api/v1/job-applications/{id}/convert-to-employee`. See
+[`architecture.md`](architecture.md#candidate-to-employee-conversion-foundation-checkpoint-40)
+for the schema/technical writeup; this section covers the security
+design.
+
+### Standard three-layer tenant isolation, applied to three related resources at once
+
+The conversion route sits inside the same `auth` → `tenant.matches` →
+`permission:{key}` stack every route here uses.
+`JobApplicationController::convertToEmployee()` additionally calls
+`ensureBelongsToCurrentTenant()` on the application (defense-in-depth
+beyond `BelongsToTenant`'s global scope) before touching anything —
+and since the application's `job`/`applicant` relations are only ever
+created within the same tenant (Checkpoint 39's single-step create), a
+same-tenant application guarantees a same-tenant job and applicant too.
+A cross-tenant application ID 404s before any employee row is even
+considered.
+
+### Eligibility is a hard gate, checked twice, never trusted from the frontend
+
+`stage === hired` **and** `ready_for_conversion === true` **and**
+`converted_employee_id === null` — all three checked in
+`ConvertApplicationToEmployeeRequest::withValidator()` (rejecting the
+whole request with a `422` before the controller runs) and again in the
+controller itself via `abort_unless()` (defense-in-depth, same
+belt-and-braces pattern the rest of this app uses for every
+precondition). None of the three is inferable or overridable from
+request input — `stage`/`ready_for_conversion` are read from the
+application's own persisted state, not the request body.
+
+### One deliberately narrow permission, not a permission composition
+
+`job_applications.convert_to_employee` is required, and only that —
+not `employees.create` as well, per your explicit approved choice
+(the checkpoint brief asked for "one deliberate permission," and every
+role that gets it already holds `employees.create` in practice
+anyway). Granted to Tenant Admin/HR Director/HR Manager; **not** HR
+Officer by default, despite HR Officer already holding every other
+recruitment write permission — converting to an employee is a
+materially bigger, harder-to-reverse action than moving a pipeline
+stage or adding a note. Not granted to Auditor, Line Manager, or
+Employee.
+
+### Field validation reuses StoreEmployeeRequest's exact rules — never a looser path
+
+`ConvertApplicationToEmployeeRequest` duplicates
+`StoreEmployeeRequest`'s `employee_number`/`work_email` per-tenant
+uniqueness checks and the active-department/position/location
+existence checks verbatim. Creating an `Employee` via conversion can
+never be easier to abuse (e.g. a duplicate `employee_number`, or
+assignment to an archived department) than creating one the normal
+way.
+
+### Server-controlled conversion fields — nothing accepted from the frontend
+
+`converted_employee_id`, `converted_at`, `converted_by`, `tenant_id`,
+`created_by`, and `updated_by` are never in
+`ConvertApplicationToEmployeeRequest`'s validated fields at all — not
+merely stripped, genuinely absent from the rule set, so submitting them
+has zero effect regardless of value. `manager_employee_id` is likewise
+never accepted here — assigning a manager remains the exclusive job of
+`PATCH /employees/{id}/manager`, matching the same rule every other
+employee-creation path in this app already follows.
+
+### Idempotent — a second conversion attempt is rejected outright
+
+`converted_employee_id !== null` on the application short-circuits any
+further attempt with a `422`, both in the FormRequest and the
+controller. There is no "re-convert" or "overwrite the previous
+conversion" path.
+
+### Transactional — no partial state on failure
+
+`Employee::create()` and the application's `converted_employee_id`/
+`converted_at`/`converted_by` update happen inside one
+`DB::transaction()`. In practice, uniqueness failures are caught even
+earlier by FormRequest validation (before the transaction opens), so no
+genuinely partial write has been observed in testing — the transaction
+exists as the guarantee for any failure mode validation doesn't already
+catch.
+
+### No automatic user account, role assignment, or onboarding
+
+Conversion creates exactly one row: the `Employee`. No `User` account
+is created or linked, no role is assigned, and no lifecycle process
+starts. The UI links to the existing `/lifecycle/create` page
+(pre-filled via query string) as a manual next step — Option A, your
+approved choice, avoiding the need to decide *which* onboarding
+type/tasks would be appropriate by default.
+
+### Audit logging — two entries, never the candidate's free text
+
+`job_application.converted_to_employee` (module `recruitment`) and
+`employee.created_from_recruitment` (module `employees`) are both
+written on success. Neither ever includes `cover_letter` or note text
+— only IDs and the already-safe employee fields (`employee_number`,
+names, `work_email`, `employment_type`, `department_id`/`position_id`/
+`location_id`, `start_date`), consistent with every other audit action
+in this app's "no full free-text content in metadata" rule.
+
+### Current limitations
+
+- No automatic `User` account creation, role assignment, or onboarding
+  process start — all deliberately out of scope this checkpoint.
+- No applicant dedupe/merge-by-email carried through to conversion —
+  two independent applications from the same real person (Checkpoint
+  39's existing limitation) could each be converted into two separate
+  employee rows.
+- No offer-letter automation tying the HR Documents module to the offer
+  stage.
+- `manager_employee_id` is never set at conversion time — must be
+  assigned as a separate follow-up action via the existing Employee
+  edit page.
+
+### Future
+
+- Optional automatic `User` account creation and role assignment at
+  conversion time, once a real need and a safe default role mapping are
+  scoped.
+- An "start onboarding automatically" checkbox (Option B), if manual
+  Option A proves insufficient in practice.
+- Offer-letter automation reusing the HR Documents module.
+- Bulk conversion, if a real need is shown.
 
 ## Local Demo Credentials
 
@@ -4886,4 +5007,4 @@ data these six `uesl` logins see (Checkpoint 26's `DemoDataSeeder`).
 - **Employment Type remains a fixed enum, not a tenant-configurable lookup table** (Checkpoint 32, deliberate scope decision) — see [Employee Lifecycle Foundation](#employee-lifecycle-foundation-checkpoint-32) above.
 - **Onboarding & Offboarding (Checkpoint 33) has no task templates, task dependencies/ordering, approval routing, notifications, IT/asset provisioning integration, document generation, e-signature, recruitment-to-employee conversion, or performance/probation review integration; Line Manager visibility is direct-reports only, not the full reporting tree** — see [Onboarding & Offboarding Foundation](#onboarding--offboarding-foundation-checkpoint-33) above.
 - **HR Documents & Letter Generation (Checkpoint 34) has no DOCX file, e-signature, automated sending, or bulk/employee-self-service generation — PDF export was added in Checkpoint 35 (generate-on-demand, never stored), template version history in Checkpoint 36 (no diff/compare UI, no publish-approval workflow), a single-approver approval workflow in Checkpoint 37 (no multi-level/routing approval, no notifications), and 8 seeded starter templates plus template duplication in Checkpoint 38 (tenant-specific only, no global/shared library, no AI generation)** — see [HR Documents & Letter Generation Foundation](#hr-documents--letter-generation-foundation-checkpoint-34), [PDF Export Dependency Review & Prototype](#pdf-export-dependency-review--prototype-checkpoint-35), [HR Document Template Versioning Foundation](#hr-document-template-versioning-foundation-checkpoint-36), [HR Document Approval Workflow Foundation](#hr-document-approval-workflow-foundation-checkpoint-37), and [HR Document Template Library & Starter Templates](#hr-document-template-library--starter-templates-checkpoint-38) above.
-- **Recruitment & Applicant Tracking (Checkpoint 39) has no candidate-to-employee conversion (a milestone flag only), no public candidate portal, no CV parsing/AI screening, no interview scheduling, no offer approval/automation, no email notifications, no bulk import, and no applicant dedupe/merge-by-email — Line Manager and Employee hold no recruitment permissions at all this checkpoint** — see [Recruitment & Applicant Tracking Foundation](#recruitment--applicant-tracking-foundation-checkpoint-39) above.
+- **Recruitment & Applicant Tracking (Checkpoint 39) has no public candidate portal, no CV parsing/AI screening, no interview scheduling, no offer approval/automation, no email notifications, no bulk import, and no applicant dedupe/merge-by-email — Line Manager and Employee hold no recruitment permissions at all this checkpoint. Candidate-to-employee conversion was added in Checkpoint 40, gated by its own job_applications.convert_to_employee permission (not granted to HR Officer by default), but creates no User account, role assignment, or onboarding process automatically** — see [Recruitment & Applicant Tracking Foundation](#recruitment--applicant-tracking-foundation-checkpoint-39) and [Candidate-to-Employee Conversion Foundation](#candidate-to-employee-conversion-foundation-checkpoint-40) above.

@@ -510,6 +510,28 @@ slug — the same single-step create-with-version-1 flow every template
 creation already follows. See `docs/architecture.md` and
 `docs/security.md` for the full design.
 
+## Recruitment & Applicant Tracking Foundation (Checkpoint 39)
+
+A simple internal ATS foundation: `recruitment_jobs` (job openings,
+with a `draft/open/on_hold/closed/cancelled` status lifecycle mirroring
+`LifecycleProcessStatus`'s transition-guard shape), `recruitment_applicants`
+(person identity), `recruitment_applications` (a person's application to
+one job, with an `applied → screening → interview → offer → hired`/
+`rejected`/`withdrawn` pipeline stage), and `recruitment_application_notes`
+(internal-only recruiter notes). Applicant and application are created
+together in one request — same single-step pattern as HR document
+template creation. New split permissions: `job_openings.*` and
+`job_applications.*` (`.view`/`.create`/`.update`/`.delete` plus the
+narrower `.update_stage`/`.add_note`/`.mark_ready_for_conversion`), so a
+role can move the pipeline forward or add notes without holding general
+edit rights. A `ready_for_conversion` flag exists as a milestone marker
+only — **no employee record is ever created automatically**; the
+candidate-to-employee conversion flow itself is deliberately deferred
+(see `docs/architecture.md`). No AI screening, job-board publishing,
+email automation, offer automation, e-signature, or bulk import this
+checkpoint. See `docs/architecture.md` and `docs/security.md` for the
+full design.
+
 ## Documentation
 
 - [`docs/architecture.md`](docs/architecture.md) — multi-tenancy, tenant resolution, RBAC overview, internal-vs-public IDs, frontend architecture.

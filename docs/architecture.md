@@ -1977,3 +1977,92 @@ per your explicit instruction.** Duplicating is creating a new
 template pre-filled from an existing one; the trust level is identical
 to a blank create, so a distinct `.duplicate` permission would only add
 a permission-matrix row with no behavioral difference from `.create`.
+
+## Recruitment & Applicant Tracking Foundation (Checkpoint 39)
+
+A simple internal ATS foundation, per your approved gap analysis. See
+[`security.md`](security.md#recruitment--applicant-tracking-foundation-checkpoint-39)
+for the full security model and
+[`api.md`](api.md#recruitment--applicant-tracking) for the route
+reference.
+
+**4-table split, your explicit approved choice over a 2/3-table
+combined design.** `recruitment_jobs` (the opening — title,
+department/position/location FKs, `employment_type` reusing the
+existing `EmploymentType` enum unchanged, `description`, and a
+`draft/open/on_hold/closed/cancelled` `RecruitmentJobStatus` with a
+`canTransitionTo()`/`allowedNextStates()` guard mirroring
+`LifecycleProcessStatus` exactly), `recruitment_applicants` (the
+person's identity — name/email/phone/source), `recruitment_applications`
+(a specific person's application to a specific opening — the FK pair
+`recruitment_job_id`/`recruitment_applicant_id`, an `ApplicationStage`
+pipeline enum, a separate `ApplicationStatus` active/archived flag,
+`cover_letter`, and the `ready_for_conversion` milestone flag), and
+`recruitment_application_notes` (internal-only, `visibility` stored as
+a plain string rather than an enum since only `'internal'` is ever
+written this checkpoint — reserved for a future second tier, not
+built). Splitting applicant from application costs nothing this
+checkpoint and avoids a schema migration later if "the same person
+applies to a second opening" or a candidate directory ever becomes a
+real need — but this checkpoint still only supports one applicant per
+application: there's no dedupe/merge-by-email logic, so submitting
+twice for the same person creates two independent `recruitment_applicants`
+rows (documented limitation below).
+
+**Applicant + application are created together in one request —
+`JobApplicationController::store()` mirrors
+`HrDocumentTemplateController::store()`'s single-step
+create-with-version-1 shape exactly.** There is no separate "create
+applicant, then create application" two-step flow; a new application
+always starts `stage: applied`, `status: active`,
+`ready_for_conversion: false`, set by the controller, never accepted
+from request input.
+
+**`ApplicationStage`'s transition guard is the same pattern as
+`LifecycleProcessStatus`/`RecruitmentJobStatus`/`HrGeneratedDocumentStatus`
+— a single `canTransitionTo()` source of truth, checked server-side on
+every `PATCH .../stage` call, never inferred from which endpoint was
+hit.** `applied → screening → interview → offer → hired`, with
+`rejected`/`withdrawn` reachable from any non-terminal stage;
+`hired`/`rejected`/`withdrawn` are terminal.
+
+**Split permissions (your recommended option): `job_openings.*` and
+`job_applications.*`, not one generic `recruitment.*` key.** Job
+openings get the plain `view/create/update/delete` set. Applications
+get that same set plus three narrow, separately-gated write actions —
+`update_stage`, `add_note`, `mark_ready_for_conversion` — so a role
+(HR Officer) can move the pipeline forward and add notes without ever
+holding `.delete`, the same "narrow write actions, not folded into
+`.update`" reasoning as `hr_generated_documents.submit`/`.approve`/
+`.reject`. Grants: Tenant Admin/HR Director/HR Manager get everything;
+HR Officer gets everything except `.delete`; Auditor gets `.view` only
+on both resources; Line Manager and Employee get nothing this
+checkpoint — no assigned-interviewer scoping model exists yet to base a
+partial grant on, and a fake partial scope would be worse than no
+access at all.
+
+**Candidate-to-employee conversion is explicitly NOT built this
+checkpoint — `ready_for_conversion` is a milestone flag only, gated by
+its own `job_applications.mark_ready_for_conversion` permission (your
+approved choice over folding it into `.update_stage`), and setting it
+never creates an `Employee` row.** The frontend's Application Show page
+renders a permanently-disabled "Convert to Employee (coming soon)"
+button next to the real toggle, so the gap is visible rather than
+silently absent. The future flow, when built, will need to resolve: a
+real `employee_number`, optional `User` account linking, whether any
+`recruitment_applicant` fields (email, phone) carry over as the
+starting `Employee` record, whether the source application's notes
+carry over as `EmployeeDocument`/audit context, and which lifecycle
+process (onboarding) it should automatically kick off, if any — each of
+those is its own trust boundary already established by an earlier
+checkpoint (Employee creation, User↔Employee linking, Lifecycle
+Foundation) and deserves its own explicit approval, not a
+one-request bundling.
+
+**Notes are internal-only, never logged verbatim.** `recruitment_application_notes.note`
+and `recruitment_applications.cover_letter` are real candidate-authored
+free text — same "audit metadata never contains full free-text content"
+rule already established for HR document `rendered_content` and leave
+rejection reasons (Checkpoint 34/14): `job_application_note.created`
+and `job_application.updated` audit entries record that a note/cover
+letter changed, never its text.

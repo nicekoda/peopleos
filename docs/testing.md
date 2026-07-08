@@ -1518,6 +1518,39 @@ document can actually be generated from a freshly duplicated template
 end-to-end — the real regression check that duplication produces a
 fully working template, not just a correctly-shaped database row.
 
+## A nested-factory tenant mismatch that only surfaces as a crash on a method call, not a property read (Checkpoint 39)
+
+`RecruitmentApplicationFactory`'s definition includes
+`'recruitment_applicant_id' => RecruitmentApplicant::factory()` — same
+shape as `LifecycleProcessFactory`'s `'employee_id' => Employee::factory()`.
+Both nested factories independently default `tenant_id` to their own
+`Tenant::factory()`, so `RecruitmentApplication::factory()->create(['tenant_id' => $tenant->id])`
+produces an applicant belonging to a *different*, randomly-generated
+tenant — the top-level `tenant_id` override never propagates down to a
+nested factory relationship automatically (confirmed directly: this is
+also true of the pre-existing `LifecycleProcessFactory`/`EmployeeFactory`
+pair, not something new introduced this checkpoint). In practice this
+is harmless almost everywhere: `BelongsToTenant`'s global scope makes
+the mismatched relation resolve to `null`, and a plain property read on
+a null relation (e.g. `$this->applicant->first_name` inside a Resource's
+`whenLoaded()` closure) is a silent PHP warning, not a fatal error —
+which is exactly why dozens of existing Lifecycle/HR-document tests
+built the same way never surfaced this. It only becomes a real test
+failure the moment code calls a *method* on that null relation —
+`JobApplicationController::update()`'s `$applicant->getOriginal()`
+threw a fatal `Error` in `test_user_with_update_permission_can_update_application`
+during initial implementation. The fix was in the test, not the
+controller: explicitly create the `RecruitmentApplicant` first with the
+correct `tenant_id`, then create the `RecruitmentApplication` referencing
+that specific applicant ID — the same "construct matching cross-model
+data explicitly when a test's assertions depend on it" pattern
+`LifecycleProcessApiTest`'s `linkedUser()` helper already established
+for Employee/User pairs. No production code changed; a real
+`RecruitmentApplication` is always created together with its applicant
+in the same tenant via `JobApplicationController::store()`'s
+single-step flow, so this mismatch cannot occur outside a test that
+constructs the two rows independently.
+
 ## Known limitations
 
 - No test coverage reporting configured yet.

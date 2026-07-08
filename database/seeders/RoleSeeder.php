@@ -146,6 +146,12 @@ class RoleSeeder extends Seeder
             'hr_generated_documents.view', 'hr_generated_documents.create',
             'hr_generated_documents.update', 'hr_generated_documents.delete', 'hr_generated_documents.generate',
             'hr_generated_documents.submit', 'hr_generated_documents.approve', 'hr_generated_documents.reject',
+            // Checkpoint 39 — Recruitment & Applicant Tracking Foundation.
+            // Full manage rights on both job openings and applications,
+            // per your explicit approved mapping.
+            'job_openings.view', 'job_openings.create', 'job_openings.update', 'job_openings.delete',
+            'job_applications.view', 'job_applications.create', 'job_applications.update', 'job_applications.delete',
+            'job_applications.update_stage', 'job_applications.add_note', 'job_applications.mark_ready_for_conversion',
         ]);
 
         // Checkpoint 34 — HR Director previously had no permissions
@@ -159,6 +165,11 @@ class RoleSeeder extends Seeder
             'hr_generated_documents.view', 'hr_generated_documents.create',
             'hr_generated_documents.update', 'hr_generated_documents.delete', 'hr_generated_documents.generate',
             'hr_generated_documents.submit', 'hr_generated_documents.approve', 'hr_generated_documents.reject',
+            // Checkpoint 39 — identical recruitment grant as HR Manager,
+            // per your explicit approved mapping.
+            'job_openings.view', 'job_openings.create', 'job_openings.update', 'job_openings.delete',
+            'job_applications.view', 'job_applications.create', 'job_applications.update', 'job_applications.delete',
+            'job_applications.update_stage', 'job_applications.add_note', 'job_applications.mark_ready_for_conversion',
         ]);
 
         $this->grantByKeys($roles['Employee'], [
@@ -249,6 +260,11 @@ class RoleSeeder extends Seeder
             // mapping ("HR Officer: create/update/generate/submit, but
             // not approve/reject") — HR Officer can never self-approve.
             'hr_generated_documents.submit',
+            // Checkpoint 39 — view/create/update/manage applications/add
+            // notes, no delete, per your explicit "safer" mapping.
+            'job_openings.view', 'job_openings.create', 'job_openings.update',
+            'job_applications.view', 'job_applications.create', 'job_applications.update',
+            'job_applications.update_stage', 'job_applications.add_note', 'job_applications.mark_ready_for_conversion',
         ]);
 
         $this->grantByKeys($roles['Auditor'], [
@@ -270,6 +286,8 @@ class RoleSeeder extends Seeder
             'lifecycle.view',
             // Checkpoint 34 — view only, per your explicit approved mapping.
             'hr_document_templates.view', 'hr_generated_documents.view',
+            // Checkpoint 39 — view only, per your explicit approved mapping.
+            'job_openings.view', 'job_applications.view',
         ]);
 
         // Line Manager (Checkpoint 13: employees.view_team only).

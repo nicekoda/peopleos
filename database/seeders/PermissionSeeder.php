@@ -57,6 +57,18 @@ class PermissionSeeder extends Seeder
             // .update) so HR Officer can generate/submit without ever
             // being able to self-approve.
             'hr_generated_documents' => ['view', 'create', 'update', 'delete', 'generate', 'submit', 'approve', 'reject'],
+            // Checkpoint 39 — Recruitment & Applicant Tracking Foundation.
+            // Split permissions (not one generic 'recruitment' key,
+            // unlike lifecycle above) since job openings and applications
+            // have different natural owners in practice and the split
+            // costs nothing. .update_stage/.add_note/
+            // .mark_ready_for_conversion are their own keys — not folded
+            // into .update — so a role can move the pipeline forward or
+            // add notes without ever holding general edit/delete rights,
+            // same "narrow write actions" reasoning as
+            // hr_generated_documents.submit/.approve/.reject.
+            'job_openings' => ['view', 'create', 'update', 'delete'],
+            'job_applications' => ['view', 'create', 'update', 'delete', 'update_stage', 'add_note', 'mark_ready_for_conversion'],
         ];
 
         foreach ($tenantPermissions as $category => $actions) {

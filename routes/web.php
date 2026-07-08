@@ -14,6 +14,7 @@ use App\Http\Controllers\LifecycleUiController;
 use App\Http\Controllers\LocationUiController;
 use App\Http\Controllers\PolicyUiController;
 use App\Http\Controllers\PositionUiController;
+use App\Http\Controllers\RecruitmentUiController;
 use App\Http\Controllers\SettingsController;
 use App\Http\Controllers\UsersAccessUiController;
 use Illuminate\Support\Facades\Route;
@@ -104,6 +105,29 @@ Route::middleware(['auth', 'tenant.matches'])->group(function () {
 
     Route::get('documents', fn () => Inertia::render('Documents/Index'))
         ->middleware('permission:documents.view')->name('documents.index');
+
+    // Recruitment & Applicant Tracking Foundation UI (Checkpoint 39) —
+    // same thin-page-route pattern as every other module: job/application
+    // data is fetched client-side from /api/v1/job-openings and
+    // /api/v1/job-applications, never passed through as an Inertia prop
+    // beyond IDs. No blanket permission on the /recruitment landing page
+    // itself (same "access, not data" two-layer design as Settings) —
+    // each card there is separately gated by its own permission; 'create'
+    // routes must be registered before '{id}'/'{id}/edit' so Laravel
+    // doesn't treat them as route parameters.
+    Route::get('recruitment', [RecruitmentUiController::class, 'index'])->name('recruitment.index');
+    Route::get('recruitment/jobs', [RecruitmentUiController::class, 'jobsIndex'])
+        ->middleware('permission:job_openings.view')->name('recruitment.jobs.index');
+    Route::get('recruitment/jobs/create', [RecruitmentUiController::class, 'jobsCreate'])
+        ->middleware('permission:job_openings.create')->name('recruitment.jobs.create');
+    Route::get('recruitment/jobs/{jobOpening}/edit', [RecruitmentUiController::class, 'jobsEdit'])
+        ->middleware('permission:job_openings.update')->name('recruitment.jobs.edit');
+    Route::get('recruitment/applications', [RecruitmentUiController::class, 'applicationsIndex'])
+        ->middleware('permission:job_applications.view')->name('recruitment.applications.index');
+    Route::get('recruitment/applications/create', [RecruitmentUiController::class, 'applicationsCreate'])
+        ->middleware('permission:job_applications.create')->name('recruitment.applications.create');
+    Route::get('recruitment/applications/{jobApplication}', [RecruitmentUiController::class, 'applicationsShow'])
+        ->middleware('permission:job_applications.view')->name('recruitment.applications.show');
 
     // HR Documents & Letter Generation Foundation UI (Checkpoint 34) —
     // same thin-page-route pattern as every other module: document data

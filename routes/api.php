@@ -12,6 +12,8 @@ use App\Http\Controllers\Api\V1\EmployeeUserLinkController;
 use App\Http\Controllers\Api\V1\HrDocumentTemplateController;
 use App\Http\Controllers\Api\V1\HrDocumentTemplateVersionController;
 use App\Http\Controllers\Api\V1\HrGeneratedDocumentController;
+use App\Http\Controllers\Api\V1\JobApplicationController;
+use App\Http\Controllers\Api\V1\JobOpeningController;
 use App\Http\Controllers\Api\V1\LeaveBalanceController;
 use App\Http\Controllers\Api\V1\LeaveRequestController;
 use App\Http\Controllers\Api\V1\LeaveTypeController;
@@ -290,4 +292,23 @@ Route::middleware(['auth', 'tenant.matches'])->prefix('api/v1')->group(function 
     Route::post('hr-generated-documents/{hrGeneratedDocument}/submit', [HrGeneratedDocumentController::class, 'submit'])->middleware('permission:hr_generated_documents.submit');
     Route::post('hr-generated-documents/{hrGeneratedDocument}/approve', [HrGeneratedDocumentController::class, 'approve'])->middleware('permission:hr_generated_documents.approve');
     Route::post('hr-generated-documents/{hrGeneratedDocument}/reject', [HrGeneratedDocumentController::class, 'reject'])->middleware('permission:hr_generated_documents.reject');
+
+    // Checkpoint 39 — Recruitment & Applicant Tracking Foundation.
+    // Internal HR/Admin only — no public candidate-facing routes exist
+    // (no separate guard needed beyond the standard auth/tenant.matches/
+    // permission stack every route here already uses).
+    Route::get('job-openings', [JobOpeningController::class, 'index'])->middleware('permission:job_openings.view');
+    Route::post('job-openings', [JobOpeningController::class, 'store'])->middleware('permission:job_openings.create');
+    Route::get('job-openings/{jobOpening}', [JobOpeningController::class, 'show'])->middleware('permission:job_openings.view');
+    Route::patch('job-openings/{jobOpening}', [JobOpeningController::class, 'update'])->middleware('permission:job_openings.update');
+    Route::delete('job-openings/{jobOpening}', [JobOpeningController::class, 'destroy'])->middleware('permission:job_openings.delete');
+
+    Route::get('job-applications', [JobApplicationController::class, 'index'])->middleware('permission:job_applications.view');
+    Route::post('job-applications', [JobApplicationController::class, 'store'])->middleware('permission:job_applications.create');
+    Route::get('job-applications/{jobApplication}', [JobApplicationController::class, 'show'])->middleware('permission:job_applications.view');
+    Route::patch('job-applications/{jobApplication}', [JobApplicationController::class, 'update'])->middleware('permission:job_applications.update');
+    Route::delete('job-applications/{jobApplication}', [JobApplicationController::class, 'destroy'])->middleware('permission:job_applications.delete');
+    Route::post('job-applications/{jobApplication}/notes', [JobApplicationController::class, 'storeNote'])->middleware('permission:job_applications.add_note');
+    Route::patch('job-applications/{jobApplication}/stage', [JobApplicationController::class, 'updateStage'])->middleware('permission:job_applications.update_stage');
+    Route::patch('job-applications/{jobApplication}/ready-for-conversion', [JobApplicationController::class, 'markReadyForConversion'])->middleware('permission:job_applications.mark_ready_for_conversion');
 });

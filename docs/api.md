@@ -543,6 +543,13 @@ served through the `web` middleware group, session-based auth same as
 | `GET` | `/hr-documents` | `auth`, `tenant.matches`, `permission:hr_generated_documents.view` | Real UI (Checkpoint 34) — list, fetched client-side from `/api/v1/hr-generated-documents`; optional `?employeeId=` query filter (from an Employee detail page link) |
 | `GET` | `/hr-documents/create` | `auth`, `tenant.matches`, `permission:hr_generated_documents.generate` | Generate form — employee/template picker; registered before `/hr-documents/{id}` to avoid route-param collision |
 | `GET` | `/hr-documents/{hrGeneratedDocument}` | `auth`, `tenant.matches`, `permission:hr_generated_documents.view` | Detail — passes only `hrGeneratedDocumentId` as a prop, never document data (see `docs/architecture.md`); `404` if cross-tenant |
+| `GET` | `/recruitment` | `auth`, `tenant.matches` | **New in Checkpoint 39** — landing page, no blanket permission (same "access, not data" two-layer design as `/settings`); each card is separately gated by `job_openings.view`/`job_applications.view` |
+| `GET` | `/recruitment/jobs` | `auth`, `tenant.matches`, `permission:job_openings.view` | List, fetched client-side from `/api/v1/job-openings` |
+| `GET` | `/recruitment/jobs/create` | `auth`, `tenant.matches`, `permission:job_openings.create` | Create form; registered before `/recruitment/jobs/{id}/edit` to avoid route-param collision |
+| `GET` | `/recruitment/jobs/{jobOpening}/edit` | `auth`, `tenant.matches`, `permission:job_openings.update` | Edit form — passes only `jobId` as a prop; `404` if cross-tenant |
+| `GET` | `/recruitment/applications` | `auth`, `tenant.matches`, `permission:job_applications.view` | List, fetched client-side from `/api/v1/job-applications` |
+| `GET` | `/recruitment/applications/create` | `auth`, `tenant.matches`, `permission:job_applications.create` | Create form; registered before `/recruitment/applications/{id}` to avoid route-param collision |
+| `GET` | `/recruitment/applications/{jobApplication}` | `auth`, `tenant.matches`, `permission:job_applications.view` | Detail — passes only `applicationId` as a prop; `404` if cross-tenant |
 | `GET` | `/settings` | `auth`, `tenant.matches` | Real UI (Checkpoint 22) — explicit `tenant.settings.view`-or-platform-admin check in the controller (no blanket `permission:` middleware, same reason as `/dashboard` — see `docs/security.md#settings-foundation`); each section card independently permission-gated |
 | `GET` | `/settings/company` | `auth`, `tenant.matches`, `permission:tenant.view` | Real UI — view/edit, fetched client-side from `/api/v1/tenant` |
 | `GET` | `/settings/access` | `auth`, `tenant.matches`, `permission:users.view` | Real hub UI (Checkpoint 23) — cards linking to Users and Roles pages |
@@ -1459,6 +1466,41 @@ raw pre-checkpoint-shaped data, and replaying them forward) rather than
 just assumed correct from a fresh install (which has no HR document
 templates in its seed data to backfill in the first place).
 
+## Recruitment & Applicant Tracking
+
+Checkpoint 39 — Recruitment & Applicant Tracking Foundation. A simple
+internal ATS foundation: job openings, applicants/applications, a
+pipeline stage, and internal notes. Split permissions
+(`job_openings.*`/`job_applications.*`) — see `docs/security.md` for
+the full model.
+
+| Method | Path | Permission | Notes |
+|---|---|---|---|
+| `GET` | `/api/v1/job-openings` | `job_openings.view` | Paginated |
+| `POST` | `/api/v1/job-openings` | `job_openings.create` | Always creates as `status: draft` regardless of body input |
+| `GET` | `/api/v1/job-openings/{jobOpening}` | `job_openings.view` | |
+| `PATCH` | `/api/v1/job-openings/{jobOpening}` | `job_openings.update` | `status` (if present) must be a legal transition from the record's *current* status — see `RecruitmentJobStatus::canTransitionTo()`. Moving to `open` sets `opened_at` server-side if unset; moving to `closed`/`cancelled` sets `closed_at` |
+| `DELETE` | `/api/v1/job-openings/{jobOpening}` | `job_openings.delete` | Soft delete ("archive"); a non-terminal opening is transitioned to `cancelled` first |
+| `GET` | `/api/v1/job-applications` | `job_applications.view` | Paginated |
+| `POST` | `/api/v1/job-applications` | `job_applications.create` | One-step create — creates the `RecruitmentApplicant` (identity) and the `RecruitmentApplication` (this person's application to the given job) together in a single request, same single-step pattern as HR document template creation. Always starts `stage: applied`, `status: active`, `ready_for_conversion: false`. Body: `{"recruitment_job_id": "...", "first_name": "...", "last_name": "...", "email": "...", "phone": "..." (optional), "source": "..." (optional), "cover_letter": "..." (optional)}` |
+| `GET` | `/api/v1/job-applications/{jobApplication}` | `job_applications.view` | |
+| `PATCH` | `/api/v1/job-applications/{jobApplication}` | `job_applications.update` | Applicant contact fields (`first_name`/`last_name`/`email`/`phone`/`source`) and `cover_letter` only — `stage`/`ready_for_conversion` are never accepted here, see the dedicated actions below |
+| `DELETE` | `/api/v1/job-applications/{jobApplication}` | `job_applications.delete` | Soft delete ("archive") |
+| `POST` | `/api/v1/job-applications/{jobApplication}/notes` | `job_applications.add_note` | Internal-only — `visibility` is always `internal`, never accepted from request input. Body: `{"note": "..."}` |
+| `PATCH` | `/api/v1/job-applications/{jobApplication}/stage` | `job_applications.update_stage` | Must be a legal transition from the application's *current* stage — see `ApplicationStage::canTransitionTo()`. Body: `{"stage": "..."}` |
+| `PATCH` | `/api/v1/job-applications/{jobApplication}/ready-for-conversion` | `job_applications.mark_ready_for_conversion` | A milestone flag only — never creates an `Employee` row. Rejected (`422`) if the application's stage is `rejected`/`withdrawn`. Body: `{"ready_for_conversion": true|false}` |
+
+### Candidate-to-employee conversion does not exist yet
+
+`ready_for_conversion` is exactly what it sounds like — a boolean flag
+recruiters can toggle once a candidate looks ready to hire — and
+nothing more. No endpoint in this app creates an `Employee` row from a
+`RecruitmentApplication`; that conversion (resolving `employee_number`,
+optional `User` linking, whether applicant contact fields carry over,
+and whether an onboarding lifecycle process should kick off
+automatically) is deliberately deferred to a future checkpoint. See
+`docs/architecture.md` for the documented future flow.
+
 ## Current limitations
 
 - No export endpoint (`employees.export` permission is seeded but unused — explicitly out of scope this checkpoint).
@@ -1478,6 +1520,7 @@ templates in its seed data to backfill in the first place).
 - No task templates, task dependencies/ordering, approval routing, notifications, or reminders for lifecycle processes/tasks (Checkpoint 33) — see `docs/security.md#onboarding--offboarding-foundation-checkpoint-33`.
 - No standalone `GET` for a single lifecycle task — see "Lifecycle Processes & Tasks" above.
 - No DOCX file generation, e-signature, automated sending, bulk generation, or employee self-service download for HR Documents (Checkpoint 34/35/36/37) — see `docs/security.md#hr-documents--letter-generation-foundation-checkpoint-34`. PDF export exists (Checkpoint 35) but is generate-on-demand only — every download re-renders from `rendered_content`, nothing is ever persisted. Template version history exists (Checkpoint 36) but has no diff/compare UI and no publish-approval workflow. A single-approver approval workflow exists (Checkpoint 37) but has no multi-level/routing approval and no notifications when a document changes state. A starter template library and safe duplication exist (Checkpoint 38 — seeded per-tenant, not a global/shared catalogue) but there's no AI-assisted generation, legal clause library, cross-tenant/global marketplace, template rating, or template import/export.
+- Recruitment & Applicant Tracking (Checkpoint 39) is a foundation only — `resume_document_id` on `recruitment_applications` is reserved/unused (no upload endpoint), no candidate-to-employee conversion (a `ready_for_conversion` milestone flag exists, but no `Employee` row is ever created), no applicant dedupe/merge-by-email, no public candidate portal, no CV parsing/AI screening, no interview scheduling, no offer approval/automation, no email notifications, and no bulk import — see `docs/security.md#recruitment--applicant-tracking-foundation-checkpoint-39`.
 
 ## Future
 
@@ -1489,7 +1532,7 @@ templates in its seed data to backfill in the first place).
 - Malware scanning on upload (currently type/size/content-detection validation only, no payload scanning).
 - Cloud storage (S3 or similar) — local private disk only for now; the storage layer is already abstracted behind `storage_disk`/`storage_path` on the model, so this is a lower-effort future change than it might otherwise be.
 - Onboarding documents / compliance document tracking (expiring work permits, certifications) — `document_categories.requires_expiry_date` and `employee_documents.expiry_date` already exist and are enforced at upload time; a dedicated "documents expiring soon" report/notification is future work, not built yet.
-- Candidate documents (`applies_to` includes `candidate`) — no candidate/recruitment module exists yet to attach documents to.
+- Candidate documents (`applies_to` includes `candidate`) — a Recruitment module now exists (Checkpoint 39), but there's still no candidate-facing document upload/attachment endpoint (`recruitment_applications.resume_document_id` is reserved, unused).
 - Self-linking / invitation-token flow for User ↔ Employee linking (currently HR/admin-only).
 - Employee profile self-update — `/me/employee` is read-only; no endpoint lets an employee edit their own record.
 - Indirect (skip-level) manager leave approval — `ManagerHierarchyService::isManagerOf()` already exists and could answer this; extending `resolveApprovalScope()` to use it is a deliberate future policy decision (see `docs/security.md`), not a technical blocker.
@@ -1515,3 +1558,6 @@ templates in its seed data to backfill in the first place).
 - Template versioning, e-signature, and approval-routing workflows for HR Documents, once a real need is scoped — deliberately not built in Checkpoint 34.
 - Bulk HR document generation (e.g., the same letter for a whole department) and employee self-service download.
 - AI-assisted template/document generation, a legal clause library, a global/shared template marketplace across tenants, template rating, and template import/export — all explicitly out of scope for Checkpoint 38's starter template library and duplication feature.
+- Candidate-to-employee conversion — resolving a real `employee_number`, optional `User` linking, applicant-field carryover, and automatic onboarding-lifecycle kickoff; deliberately not built in Checkpoint 39.
+- A public candidate portal, job-board posting, CV parsing/AI screening, interview scheduling, offer approval/automation, and email notifications for Recruitment — all explicitly out of scope for Checkpoint 39's foundation.
+- Applicant dedupe/merge-by-email, and resume/CV upload for applications (`resume_document_id` already reserved in the schema) — future work for Recruitment.

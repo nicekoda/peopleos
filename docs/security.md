@@ -4694,6 +4694,128 @@ rendering engine itself, applied here to the seed data.
 - AI-assisted drafting and a legal-review workflow, both explicitly out
   of scope for this checkpoint.
 
+## Recruitment & Applicant Tracking Foundation (Checkpoint 39)
+
+Adds job openings, applicants/applications, a pipeline stage, internal
+notes, and a "ready for conversion" milestone flag. See
+[`architecture.md`](architecture.md#recruitment--applicant-tracking-foundation-checkpoint-39)
+for the schema/technical writeup; this section covers the security
+design.
+
+### Standard three-layer tenant isolation, no exceptions
+
+Every `job-openings`/`job-applications` route sits inside the same
+`auth` → `tenant.matches` → `permission:{key}` middleware stack every
+other route in this app uses, `RecruitmentJob`/`RecruitmentApplicant`/
+`RecruitmentApplication`/`RecruitmentApplicationNote` all use
+`BelongsToTenant`, and every controller action additionally calls its
+own `ensureBelongsToCurrentTenant()` (404, not 403, on a cross-tenant
+ID) as defense-in-depth beyond the global scope — identical shape to
+`LifecycleProcessController`/`HrDocumentTemplateController`. A Platform
+Super Admin is blocked the same way they're blocked everywhere else:
+`job_openings.*`/`job_applications.*` are tenant-scoped permissions a
+platform-admin user can never hold (see `HasPermissions`'s
+assignment-scope guard), so the `permission:{key}` middleware alone
+already rejects them before any controller code runs.
+
+### Split permissions, narrow write actions
+
+`job_openings.view/create/update/delete` and
+`job_applications.view/create/update/delete/update_stage/add_note/mark_ready_for_conversion`
+— two separate permission categories (not one generic `recruitment.*`
+key), per your explicit recommendation, since job openings and
+applications have different natural owners in practice. `update_stage`,
+`add_note`, and `mark_ready_for_conversion` are deliberately their own
+permission keys rather than folded into `.update` — same "narrow write
+action" reasoning as `hr_generated_documents.submit`/`.approve`/
+`.reject` — so a role can be trusted to move the pipeline forward or
+leave notes without ever holding `.delete`. Grants: Tenant Admin/HR
+Director/HR Manager hold every key on both resources; HR Officer holds
+everything except `.delete` (per your explicit "safer" mapping);
+Auditor holds `.view` only on both; Line Manager and Employee hold
+nothing — there's no assigned-interviewer scoping model yet to base a
+partial Line Manager grant on (unlike `leave.approve`'s direct-reports
+scoping or Lifecycle's `LifecycleVisibilityService`), and shipping a
+fake partial scope would be worse than shipping no access at all.
+
+### Candidate data is personal data — handled at the same tier as everything else, not a new tier
+
+Applicant name/email/phone/cover letter are gated uniformly behind
+`job_applications.view`, the same single-tier model every other
+resource in this app uses (there's no `employees.view_sensitive`-style
+second gate here). This is a deliberate scope decision, documented as a
+limitation below, not an oversight: introducing a second sensitivity
+tier for recruitment data without a concrete requirement driving it
+would be speculative complexity this checkpoint doesn't need.
+
+### Stage transitions are guarded server-side, never inferred from the endpoint
+
+`ApplicationStage::canTransitionTo()`/`allowedNextStates()` is the
+single source of truth for every `PATCH .../stage` call — mirrors
+`LifecycleProcessStatus`/`RecruitmentJobStatus`/`HrGeneratedDocumentStatus`'s
+identical transition-guard shape. An illegal transition (e.g.
+`applied` → `hired` directly) is rejected with a `422` before anything
+is written; `hired`/`rejected`/`withdrawn` are terminal.
+
+### Ready-for-conversion is a flag, not a conversion — and its own permission
+
+`PATCH .../ready-for-conversion` never creates an `Employee` row; it
+only toggles `recruitment_applications.ready_for_conversion`, gated by
+its own `job_applications.mark_ready_for_conversion` permission (your
+approved choice over reusing `.update_stage`) so the eventual real
+conversion feature's permission boundary is independent from ordinary
+pipeline management from day one. A `rejected`/`withdrawn` application
+can never be marked ready — validated server-side
+(`MarkApplicationReadyForConversionRequest`), not just hidden in the UI.
+
+### Notes and cover letters are never logged verbatim
+
+`recruitment_application_notes.note` and `recruitment_applications.cover_letter`
+are real candidate-authored free text. `job_application_note.created`
+and `job_application.updated` audit entries record that a note was
+added or a cover letter changed, never the text itself — the same "no
+full free-text content in audit metadata" rule already established for
+HR document `rendered_content` (Checkpoint 34) and leave rejection
+reasons (Checkpoint 14). Notes are internal-only this checkpoint
+(`visibility: 'internal'`, never accepted from request input, no
+candidate-facing view exists) — there is no candidate portal.
+
+### Current limitations
+
+- No dedupe/merge-by-email — every `POST /job-applications` creates a
+  fresh `recruitment_applicants` row, even for a repeat applicant
+  (documented in `architecture.md`); a real "existing applicant"
+  lookup/merge flow is future work.
+- No second sensitivity tier for candidate PII — applicant data is
+  gated at the same `job_applications.view` level as everything else,
+  not a separate `view_sensitive`-style gate.
+- No assigned-interviewer scoping — Line Manager holds no recruitment
+  permissions at all this checkpoint, rather than a partial,
+  unenforceable scope.
+- Candidate-to-employee conversion does not exist —
+  `ready_for_conversion` is a milestone flag only; no `Employee` row,
+  `User` link, document carryover, or lifecycle-process kickoff happens
+  automatically.
+- No public candidate portal, job-board posting, CV parsing, AI
+  screening, interview scheduling, offer approval/automation, email
+  notifications, or bulk import.
+
+### Future
+
+- Candidate-to-employee conversion — resolving `employee_number`
+  generation, optional `User` linking, and whether any lifecycle
+  process (onboarding) should kick off automatically; deliberately not
+  built this checkpoint (see `architecture.md`).
+- A public candidate portal and application status visibility for the
+  candidate themselves.
+- Interview scheduling, offer approval routing, and offer-letter
+  automation (would reuse the existing HR Documents module once
+  scoped).
+- AI-assisted resume screening/parsing, and job-board publishing
+  integrations.
+- Applicant dedupe/merge-by-email, and a second sensitivity tier for
+  candidate PII, if a real need is shown.
+
 ## Local Demo Credentials
 
 **Local development only — these are not real secrets and only work against your own local database.** Password comes from `SEED_USER_PASSWORD` in `.env` (not committed; `.env.example` has an empty placeholder).
@@ -4764,3 +4886,4 @@ data these six `uesl` logins see (Checkpoint 26's `DemoDataSeeder`).
 - **Employment Type remains a fixed enum, not a tenant-configurable lookup table** (Checkpoint 32, deliberate scope decision) — see [Employee Lifecycle Foundation](#employee-lifecycle-foundation-checkpoint-32) above.
 - **Onboarding & Offboarding (Checkpoint 33) has no task templates, task dependencies/ordering, approval routing, notifications, IT/asset provisioning integration, document generation, e-signature, recruitment-to-employee conversion, or performance/probation review integration; Line Manager visibility is direct-reports only, not the full reporting tree** — see [Onboarding & Offboarding Foundation](#onboarding--offboarding-foundation-checkpoint-33) above.
 - **HR Documents & Letter Generation (Checkpoint 34) has no DOCX file, e-signature, automated sending, or bulk/employee-self-service generation — PDF export was added in Checkpoint 35 (generate-on-demand, never stored), template version history in Checkpoint 36 (no diff/compare UI, no publish-approval workflow), a single-approver approval workflow in Checkpoint 37 (no multi-level/routing approval, no notifications), and 8 seeded starter templates plus template duplication in Checkpoint 38 (tenant-specific only, no global/shared library, no AI generation)** — see [HR Documents & Letter Generation Foundation](#hr-documents--letter-generation-foundation-checkpoint-34), [PDF Export Dependency Review & Prototype](#pdf-export-dependency-review--prototype-checkpoint-35), [HR Document Template Versioning Foundation](#hr-document-template-versioning-foundation-checkpoint-36), [HR Document Approval Workflow Foundation](#hr-document-approval-workflow-foundation-checkpoint-37), and [HR Document Template Library & Starter Templates](#hr-document-template-library--starter-templates-checkpoint-38) above.
+- **Recruitment & Applicant Tracking (Checkpoint 39) has no candidate-to-employee conversion (a milestone flag only), no public candidate portal, no CV parsing/AI screening, no interview scheduling, no offer approval/automation, no email notifications, no bulk import, and no applicant dedupe/merge-by-email — Line Manager and Employee hold no recruitment permissions at all this checkpoint** — see [Recruitment & Applicant Tracking Foundation](#recruitment--applicant-tracking-foundation-checkpoint-39) above.

@@ -48,6 +48,11 @@ class JobApplicationResource extends JsonResource
                 'employee_number' => $this->convertedEmployee->employee_number,
             ]),
             'converted_at' => $this->converted_at?->toIso8601String(),
+            'onboarding_process_id' => $this->onboarding_process_id,
+            'onboarding_process' => $this->whenLoaded('onboardingProcess', fn () => $this->onboardingProcess === null ? null : [
+                'id' => $this->onboardingProcess->id,
+                'status' => $this->onboardingProcess->status->value,
+            ]),
             'notes' => RecruitmentApplicationNoteResource::collection($this->whenLoaded('notes')),
             'created_at' => $this->created_at?->toIso8601String(),
             'updated_at' => $this->updated_at?->toIso8601String(),

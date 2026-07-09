@@ -174,6 +174,14 @@ class RoleSeeder extends Seeder
             'job_applications.update_stage', 'job_applications.add_note', 'job_applications.mark_ready_for_conversion',
             // Checkpoint 40 — per your explicit approved mapping.
             'job_applications.convert_to_employee',
+            // Checkpoint 41 — HR Director previously held zero lifecycle.*
+            // permissions despite holding job_applications.convert_to_employee,
+            // meaning it could convert a candidate to an employee but
+            // never start their onboarding. Per your explicit approved
+            // fix, gets the identical full lifecycle grant HR Manager
+            // already has, closing that gap.
+            'lifecycle.view', 'lifecycle.create', 'lifecycle.update', 'lifecycle.delete',
+            'lifecycle.assign_task', 'lifecycle.complete_task',
         ]);
 
         $this->grantByKeys($roles['Employee'], [

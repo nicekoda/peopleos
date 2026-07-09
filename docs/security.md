@@ -4937,6 +4937,109 @@ in this app's "no full free-text content in metadata" rule.
 - Offer-letter automation reusing the HR Documents module.
 - Bulk conversion, if a real need is shown.
 
+## Recruitment-to-Onboarding Handoff Foundation (Checkpoint 41)
+
+Adds `POST /api/v1/job-applications/{id}/start-onboarding`. See
+[`architecture.md`](architecture.md#recruitment-to-onboarding-handoff-foundation-checkpoint-41)
+for the schema/technical writeup; this section covers the security
+design.
+
+### No request body — nothing for a caller to forge
+
+Unlike conversion (Checkpoint 40), which at least validates real
+submitted fields via `ConvertApplicationToEmployeeRequest`, this
+endpoint reads nothing from the request at all.
+`employee_id`/`type`/`status` on the created `LifecycleProcess` are
+derived entirely from the application's own persisted
+`converted_employee_id` and hardcoded `onboarding`/`draft` values — any
+body content sent is silently ignored, verified directly by
+`test_forged_body_fields_are_ignored_on_start_onboarding`.
+
+### Three preconditions, all server-side, none trusted from the frontend
+
+`converted_employee_id !== null`, `onboarding_process_id === null`, and
+no existing non-terminal (`draft`/`in_progress`) `LifecycleProcess` for
+the converted employee — each checked via `abort_unless`/`abort_if`
+before anything is written. The third check deliberately looks at the
+*employee*, not just this application, since the same employee could in
+principle be reachable through more than one converted application in
+the future; a prior `completed`/`cancelled` process is correctly not
+treated as "still active," reusing `LifecycleProcessStatus::isTerminal()`
+unchanged from Checkpoint 33 rather than a new parallel rule.
+
+### Permission: `lifecycle.create`, reused — and a real gap closed, not just documented
+
+Starting onboarding is gated by the same `lifecycle.create` permission
+Checkpoint 33 already uses for creating a lifecycle process directly —
+a deliberate choice over inventing a recruitment-specific permission,
+since this is the same action reached from a different entry point.
+Auditing role grants for this checkpoint surfaced that **HR Director
+held `job_applications.convert_to_employee` but no `lifecycle.*`
+permission at all** — meaning it could convert a candidate to an
+employee but had no way to start their onboarding, a real dead end in
+the seeded role model, not a hypothetical one. `RoleSeeder` now grants
+HR Director the same full `lifecycle.view/create/update/delete/
+assign_task/complete_task` set HR Manager already holds. HR Officer,
+Auditor, Line Manager, and Employee are unaffected — none held
+`job_applications.convert_to_employee` either, so none had this gap.
+
+### Standard tenant isolation, applied across two related resources
+
+The route sits inside the usual `auth` → `tenant.matches` →
+`permission:lifecycle.create` stack.
+`JobApplicationController::startOnboarding()` additionally calls
+`ensureBelongsToCurrentTenant()` on the application before touching
+anything, then independently re-checks the resolved `convertedEmployee`
+actually belongs to the same tenant (`404` otherwise) — defense in
+depth beyond `BelongsToTenant`'s global scope, the same "verify the
+parent-child relationship explicitly, don't just trust the FK resolved"
+pattern established for nested resources since Checkpoint 19's document
+tests.
+
+### Transactional — no partial state on failure
+
+Creating the `LifecycleProcess` row and setting the application's
+`onboarding_process_id` happen inside one `DB::transaction()` — both
+succeed together or neither does, identical to Checkpoint 40's
+conversion transaction.
+
+### Idempotent — a second attempt is rejected outright
+
+`onboarding_process_id !== null` on the application short-circuits any
+further attempt with a `422`. There is no "restart" or "replace the
+existing onboarding process" path through this endpoint.
+
+### Audit logging — two entries, one per resource touched
+
+`job_application.onboarding_started` (module `recruitment`) and
+`employee_lifecycle_process.created_from_recruitment` (module
+`lifecycle`) are both written on success — the same "one entry per
+resource touched" shape Checkpoint 40 established for conversion.
+Neither includes any free-text content; only IDs and the employee's
+already-safe `full_name`/`employee_number`.
+
+### Current limitations
+
+- Creates only the bare `LifecycleProcess` record — no tasks, no task
+  templates, no `User` account, no role assignment, and no
+  notifications to the new employee or their manager. All deliberately
+  out of scope, unchanged from Checkpoint 40's original deferred list.
+- The "no other active onboarding process" guard checks the converted
+  employee's `LifecycleProcess` rows generally, not specifically ones
+  created through this same recruitment path — correct behavior, but
+  worth noting if a future checkpoint ever needs to distinguish
+  "started from recruitment" from "started manually" beyond the
+  metadata already recorded in the audit log.
+
+### Future
+
+- Automatic task creation/templates on the newly started process.
+- Notifications to the new employee or their manager that onboarding
+  has started.
+- Automatic `User` account creation and role assignment at this same
+  handoff point — Checkpoint 40's original deferred scope, still
+  unaddressed.
+
 ## Local Demo Credentials
 
 **Local development only — these are not real secrets and only work against your own local database.** Password comes from `SEED_USER_PASSWORD` in `.env` (not committed; `.env.example` has an empty placeholder).
@@ -5007,4 +5110,4 @@ data these six `uesl` logins see (Checkpoint 26's `DemoDataSeeder`).
 - **Employment Type remains a fixed enum, not a tenant-configurable lookup table** (Checkpoint 32, deliberate scope decision) — see [Employee Lifecycle Foundation](#employee-lifecycle-foundation-checkpoint-32) above.
 - **Onboarding & Offboarding (Checkpoint 33) has no task templates, task dependencies/ordering, approval routing, notifications, IT/asset provisioning integration, document generation, e-signature, recruitment-to-employee conversion, or performance/probation review integration; Line Manager visibility is direct-reports only, not the full reporting tree** — see [Onboarding & Offboarding Foundation](#onboarding--offboarding-foundation-checkpoint-33) above.
 - **HR Documents & Letter Generation (Checkpoint 34) has no DOCX file, e-signature, automated sending, or bulk/employee-self-service generation — PDF export was added in Checkpoint 35 (generate-on-demand, never stored), template version history in Checkpoint 36 (no diff/compare UI, no publish-approval workflow), a single-approver approval workflow in Checkpoint 37 (no multi-level/routing approval, no notifications), and 8 seeded starter templates plus template duplication in Checkpoint 38 (tenant-specific only, no global/shared library, no AI generation)** — see [HR Documents & Letter Generation Foundation](#hr-documents--letter-generation-foundation-checkpoint-34), [PDF Export Dependency Review & Prototype](#pdf-export-dependency-review--prototype-checkpoint-35), [HR Document Template Versioning Foundation](#hr-document-template-versioning-foundation-checkpoint-36), [HR Document Approval Workflow Foundation](#hr-document-approval-workflow-foundation-checkpoint-37), and [HR Document Template Library & Starter Templates](#hr-document-template-library--starter-templates-checkpoint-38) above.
-- **Recruitment & Applicant Tracking (Checkpoint 39) has no public candidate portal, no CV parsing/AI screening, no interview scheduling, no offer approval/automation, no email notifications, no bulk import, and no applicant dedupe/merge-by-email — Line Manager and Employee hold no recruitment permissions at all this checkpoint. Candidate-to-employee conversion was added in Checkpoint 40, gated by its own job_applications.convert_to_employee permission (not granted to HR Officer by default), but creates no User account, role assignment, or onboarding process automatically** — see [Recruitment & Applicant Tracking Foundation](#recruitment--applicant-tracking-foundation-checkpoint-39) and [Candidate-to-Employee Conversion Foundation](#candidate-to-employee-conversion-foundation-checkpoint-40) above.
+- **Recruitment & Applicant Tracking (Checkpoint 39) has no public candidate portal, no CV parsing/AI screening, no interview scheduling, no offer approval/automation, no email notifications, no bulk import, and no applicant dedupe/merge-by-email — Line Manager and Employee hold no recruitment permissions at all this checkpoint. Candidate-to-employee conversion was added in Checkpoint 40, gated by its own job_applications.convert_to_employee permission (not granted to HR Officer by default), but creates no User account or role assignment automatically. A real, trackable onboarding handoff was added in Checkpoint 41 (`start-onboarding`, gated by `lifecycle.create`) — but it creates only the bare LifecycleProcess record, with no tasks, no User account, no role assignment, and no notifications** — see [Recruitment & Applicant Tracking Foundation](#recruitment--applicant-tracking-foundation-checkpoint-39), [Candidate-to-Employee Conversion Foundation](#candidate-to-employee-conversion-foundation-checkpoint-40), and [Recruitment-to-Onboarding Handoff Foundation](#recruitment-to-onboarding-handoff-foundation-checkpoint-41) above.

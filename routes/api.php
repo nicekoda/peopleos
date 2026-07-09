@@ -315,4 +315,9 @@ Route::middleware(['auth', 'tenant.matches'])->prefix('api/v1')->group(function 
     // solely by job_applications.convert_to_employee, not also
     // employees.create — your explicit approved choice.
     Route::post('job-applications/{jobApplication}/convert-to-employee', [JobApplicationController::class, 'convertToEmployee'])->middleware('permission:job_applications.convert_to_employee');
+    // Checkpoint 41 — Recruitment-to-Onboarding Handoff Foundation.
+    // Gated by lifecycle.create (reused, not a new recruitment-specific
+    // permission) — your explicit approved choice: starting onboarding
+    // is a lifecycle action, not just a recruitment one.
+    Route::post('job-applications/{jobApplication}/start-onboarding', [JobApplicationController::class, 'startOnboarding'])->middleware('permission:lifecycle.create');
 });

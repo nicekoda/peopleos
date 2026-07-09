@@ -29,7 +29,10 @@ class RecruitmentApplication extends Model
      * JobApplicationController::convertToEmployee() — never accepted
      * from request input (not in ConvertApplicationToEmployeeRequest's
      * rules at all) — but must stay mass-assignable for that explicit,
-     * server-side assignment to persist.
+     * server-side assignment to persist. onboarding_process_id
+     * (Checkpoint 41) follows the identical rule — set only by
+     * JobApplicationController::startOnboarding(), never accepted from
+     * request input.
      */
     protected $fillable = [
         'recruitment_job_id',
@@ -42,6 +45,7 @@ class RecruitmentApplication extends Model
         'converted_employee_id',
         'converted_at',
         'converted_by',
+        'onboarding_process_id',
         'created_by',
         'updated_by',
     ];
@@ -89,5 +93,10 @@ class RecruitmentApplication extends Model
     public function convertedBy(): BelongsTo
     {
         return $this->belongsTo(User::class, 'converted_by');
+    }
+
+    public function onboardingProcess(): BelongsTo
+    {
+        return $this->belongsTo(LifecycleProcess::class, 'onboarding_process_id');
     }
 }

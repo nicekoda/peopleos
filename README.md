@@ -557,6 +557,33 @@ page shows a "Start onboarding" link to the existing Lifecycle Create
 form after conversion, but nothing kicks off on its own. See
 `docs/architecture.md` and `docs/security.md` for the full design.
 
+## Recruitment-to-Onboarding Handoff Foundation (Checkpoint 41)
+
+`POST /api/v1/job-applications/{id}/start-onboarding` closes the gap
+Checkpoint 40 deliberately left open: turning a converted application's
+"Start onboarding" link into a real, tracked handoff instead of just a
+pre-filled route to the existing Lifecycle Create form. The endpoint
+takes no request body at all — `employee_id`, `type: onboarding`, and
+`status: draft` are entirely server-derived from the application's own
+`converted_employee_id`, never accepted from input. Eligible only when
+the application has already been converted, hasn't started onboarding
+before, and the converted employee has no other active (draft/
+in-progress) onboarding process — a prior *completed* or *cancelled*
+one doesn't block a new one. Gated by `lifecycle.create` — reused, not
+a new recruitment-specific permission, since starting onboarding is a
+lifecycle action, not just a recruitment one. Fixed an existing gap
+surfaced by this checkpoint: HR Director held
+`job_applications.convert_to_employee` but zero `lifecycle.*`
+permissions, meaning it could convert a candidate but never start
+their onboarding — now gets the same full lifecycle grant HR Manager
+already has. Runs in a transaction (the `LifecycleProcess` row and the
+application's new `onboarding_process_id` link succeed or fail
+together) and writes two audit log entries, mirroring Checkpoint 40's
+"one entry per resource touched" pattern. **Still deliberately creates
+only the process record itself — no tasks, no user account, no role
+assignment, no notifications.** See `docs/architecture.md` and
+`docs/security.md` for the full design.
+
 ## Documentation
 
 - [`docs/architecture.md`](docs/architecture.md) — multi-tenancy, tenant resolution, RBAC overview, internal-vs-public IDs, frontend architecture.

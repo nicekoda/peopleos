@@ -484,6 +484,7 @@ class JobApplicationApiTest extends TestCase
             'api/v1/job-applications/{jobApplication}/stage',
             'api/v1/job-applications/{jobApplication}/ready-for-conversion',
             'api/v1/job-applications/{jobApplication}/convert-to-employee',
+            'api/v1/job-applications/{jobApplication}/start-onboarding',
         ];
 
         $routes = collect(Route::getRoutes())->filter(fn ($route) => in_array($route->uri(), $uris));

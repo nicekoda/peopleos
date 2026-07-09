@@ -61,6 +61,8 @@ export interface JobApplication {
     converted_employee_id: string | null;
     converted_employee?: { id: string; full_name: string; employee_number: string } | null;
     converted_at: string | null;
+    onboarding_process_id: string | null;
+    onboarding_process?: { id: string; status: string } | null;
     notes?: ApplicationNote[];
     created_at: string | null;
     updated_at: string | null;

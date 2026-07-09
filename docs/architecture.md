@@ -2175,3 +2175,84 @@ Checkpoint 39 never deduplicates applicants, two independent
 applications from "the same" candidate could each be converted into two
 separate employee rows — a real, documented limitation, not addressed
 this checkpoint).
+
+## Recruitment-to-Onboarding Handoff Foundation (Checkpoint 41)
+
+Closes the gap Checkpoint 40 deliberately left open: converting a
+candidate created an `Employee` but no path connected that employee
+back to a real, tracked onboarding process — only a manual, pre-filled
+link to the Lifecycle Create form. See
+[`security.md`](security.md#recruitment-to-onboarding-handoff-foundation-checkpoint-41)
+for the full security model and [`api.md`](api.md#recruitment-to-onboarding-handoff)
+for the route reference.
+
+**No schema change to `employee_lifecycle_processes` itself — one
+additive nullable column on `recruitment_applications`,
+`onboarding_process_id` (FK → `employee_lifecycle_processes`,
+`nullOnDelete`).** The application row keeps accumulating trace columns
+the same way `converted_employee_id`/`converted_at`/`converted_by` did
+in Checkpoint 40 — never deleted or overwritten, additive history only.
+
+**`JobApplicationController::startOnboarding()` takes no request body
+at all.** `employee_id`, `type: onboarding`, and `status: draft` are
+entirely derived from the application's own persisted
+`converted_employee_id` — there is nothing in the request for a caller
+to forge, unlike conversion's `ConvertApplicationToEmployeeRequest`,
+which at least validates real form fields.
+
+**Three preconditions, all checked server-side via `abort_unless`/
+`abort_if`, none inferable from the frontend:**
+
+1. `converted_employee_id !== null` — the application must already be
+   converted.
+2. `onboarding_process_id === null` — onboarding hasn't been started
+   for *this application* before.
+3. No existing `LifecycleProcess` for the converted employee with
+   `type: onboarding` and a non-terminal status (`draft`/`in_progress`)
+   — the converted employee doesn't already have an active onboarding
+   process running, whether or not it originated from this same
+   application. A prior `completed` or `cancelled` process does **not**
+   block a new one, mirroring `LifecycleProcessStatus::isTerminal()`'s
+   existing terminal/non-terminal split from Checkpoint 33 — reused
+   verbatim rather than inventing a parallel notion of "still open."
+
+**Permission: `lifecycle.create`, reused — not a new
+`job_applications.start_onboarding`-style permission.** Starting an
+onboarding process is fundamentally a lifecycle action (Checkpoint 33
+already gates lifecycle-process creation behind exactly this
+permission); recruitment is just one of the places that action can now
+be triggered from. This surfaced a real, pre-existing gap: HR Director
+held `job_applications.convert_to_employee` (Checkpoint 40) but zero
+`lifecycle.*` permissions, so it could convert a candidate but never
+start their onboarding. `RoleSeeder` now grants HR Director the
+identical full lifecycle permission set (`lifecycle.view/create/
+update/delete/assign_task/complete_task`) HR Manager already has —
+found and fixed as part of this checkpoint's own review, not a
+separate, deferred follow-up.
+
+**Transactional.** Creating the `LifecycleProcess` row and setting the
+application's `onboarding_process_id` happen inside one
+`DB::transaction()` — both succeed or neither does, the same pattern
+Checkpoint 40's conversion already established.
+
+**Audit logging: two entries, one per resource touched** —
+`job_application.onboarding_started` (module `recruitment`) and
+`employee_lifecycle_process.created_from_recruitment` (module
+`lifecycle`) — the identical shape Checkpoint 40 used for
+`job_application.converted_to_employee`/`employee.created_from_recruitment`.
+
+**Frontend**: `ApplicationShow.tsx`'s post-conversion panel replaces
+Checkpoint 40's static "Start onboarding" link with a real button
+(`PermissionGate`-wrapped on `lifecycle.create`) that calls the new
+endpoint directly and then renders a link to the created process, or
+its current status if one already exists — no more silent hand-off to
+a separate page the user then has to fill in themselves.
+
+### Future
+
+Documented, not built: automatic task creation/templates on the newly
+started process (the process is created bare, exactly as a manual
+Lifecycle Create would leave it); notifications to the new employee or
+their manager that onboarding has started; and automatic `User`
+account/role-assignment at this same handoff point — all three remain
+Checkpoint 40's original deferred scope, unchanged by this checkpoint.

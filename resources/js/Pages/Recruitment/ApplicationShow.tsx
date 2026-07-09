@@ -71,6 +71,8 @@ export default function RecruitmentApplicationShow() {
     const [conversionErrors, setConversionErrors] = useState<Record<string, string[]>>({});
     const [conversionGeneralError, setConversionGeneralError] = useState<string | null>(null);
     const [converting, setConverting] = useState(false);
+    const [startingOnboarding, setStartingOnboarding] = useState(false);
+    const [onboardingError, setOnboardingError] = useState<string | null>(null);
 
     const load = useCallback(() => {
         setError(null);
@@ -153,6 +155,21 @@ export default function RecruitmentApplicationShow() {
                 setConversionGeneralError(apiError.message);
             })
             .finally(() => setConverting(false));
+    };
+
+    const startOnboarding = () => {
+        setStartingOnboarding(true);
+        setOnboardingError(null);
+
+        api.post<{ data: JobApplication }>(`/job-applications/${applicationId}/start-onboarding`)
+            .then((response) => setApplication(response.data.data))
+            .catch((err) => {
+                const apiError = toApiError(err);
+                if (!redirectIfUnauthenticated(apiError)) {
+                    setOnboardingError(apiError.message);
+                }
+            })
+            .finally(() => setStartingOnboarding(false));
     };
 
     const submitStage: FormEventHandler = (e) => {
@@ -357,16 +374,36 @@ export default function RecruitmentApplicationShow() {
                                 </Link>{' '}
                                 on {application.converted_at?.slice(0, 10)}.
                             </p>
-                            <p className="text-sm text-slate-500">
-                                No onboarding process was started automatically.{' '}
-                                <Link
-                                    href={`/lifecycle/create?employeeId=${application.converted_employee.id}&type=onboarding`}
-                                    className="font-medium text-indigo-600 hover:text-indigo-500"
-                                >
-                                    Start onboarding
-                                </Link>{' '}
-                                for this employee if ready.
-                            </p>
+                            {onboardingError && (
+                                <div className="rounded-md bg-red-50 px-4 py-3 text-sm text-red-700">{onboardingError}</div>
+                            )}
+                            {application.onboarding_process ? (
+                                <p className="text-sm text-slate-500">
+                                    Onboarding has started —{' '}
+                                    <Link
+                                        href={`/lifecycle/${application.onboarding_process.id}`}
+                                        className="font-medium text-indigo-600 hover:text-indigo-500"
+                                    >
+                                        view onboarding process
+                                    </Link>{' '}
+                                    (status: {application.onboarding_process.status.replace('_', ' ')}).
+                                </p>
+                            ) : (
+                                <div>
+                                    <p className="mb-2 text-sm text-slate-500">
+                                        No onboarding process has been started. Starting onboarding only creates a draft process — no
+                                        tasks, user account, or role assignment happens automatically.
+                                    </p>
+                                    <PermissionGate
+                                        permission="lifecycle.create"
+                                        fallback={<p className="text-sm text-slate-500">You don't have permission to start onboarding.</p>}
+                                    >
+                                        <Button type="button" variant="secondary" onClick={startOnboarding} disabled={startingOnboarding}>
+                                            {startingOnboarding ? 'Starting…' : 'Start Onboarding'}
+                                        </Button>
+                                    </PermissionGate>
+                                </div>
+                            )}
                         </div>
                     ) : (
                         <PermissionGate

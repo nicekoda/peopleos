@@ -5,6 +5,8 @@ namespace App\Http\Controllers\Api\V1;
 use App\Enums\ApplicationStage;
 use App\Enums\ApplicationStatus;
 use App\Enums\EmployeeStatus;
+use App\Enums\LifecycleProcessStatus;
+use App\Enums\LifecycleProcessType;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Recruitment\ConvertApplicationToEmployeeRequest;
 use App\Http\Requests\Recruitment\MarkApplicationReadyForConversionRequest;
@@ -15,6 +17,7 @@ use App\Http\Requests\Recruitment\UpdateJobApplicationRequest;
 use App\Http\Resources\JobApplicationResource;
 use App\Http\Resources\RecruitmentApplicationNoteResource;
 use App\Models\Employee;
+use App\Models\LifecycleProcess;
 use App\Models\RecruitmentApplicant;
 use App\Models\RecruitmentApplication;
 use App\Models\RecruitmentApplicationNote;
@@ -30,7 +33,7 @@ class JobApplicationController extends Controller
     public function index(Request $request): AnonymousResourceCollection
     {
         $applications = RecruitmentApplication::query()
-            ->with(['job', 'applicant', 'convertedEmployee'])
+            ->with(['job', 'applicant', 'convertedEmployee', 'onboardingProcess'])
             ->orderByDesc('created_at')
             ->paginate();
 
@@ -96,7 +99,7 @@ class JobApplicationController extends Controller
     {
         $this->ensureBelongsToCurrentTenant($jobApplication);
 
-        $jobApplication->load(['job', 'applicant', 'notes.createdBy', 'convertedEmployee']);
+        $jobApplication->load(['job', 'applicant', 'notes.createdBy', 'convertedEmployee', 'onboardingProcess']);
 
         return new JobApplicationResource($jobApplication);
     }
@@ -358,7 +361,82 @@ class JobApplicationController extends Controller
             userAgent: $request->userAgent(),
         );
 
-        return (new JobApplicationResource($jobApplication->fresh(['job', 'applicant', 'convertedEmployee'])))->response()->setStatusCode(200);
+        return (new JobApplicationResource($jobApplication->fresh(['job', 'applicant', 'convertedEmployee', 'onboardingProcess'])))->response()->setStatusCode(200);
+    }
+
+    /**
+     * Checkpoint 41 — Recruitment-to-Onboarding Handoff Foundation.
+     * Takes no request body at all: employee_id/type/status are always
+     * server-derived, never accepted from input. Gated by lifecycle.create
+     * (not a new recruitment-specific permission, per your explicit
+     * approved choice — starting onboarding is a lifecycle action, not
+     * just a recruitment one). Creates only the LifecycleProcess itself
+     * (status: draft) — no tasks, no user account, no role assignment,
+     * no notifications (all explicitly out of scope this checkpoint).
+     * Runs in a transaction: the process and the application's
+     * onboarding_process_id link succeed or fail together.
+     */
+    public function startOnboarding(Request $request, RecruitmentApplication $jobApplication): JsonResponse
+    {
+        $this->ensureBelongsToCurrentTenant($jobApplication);
+
+        abort_unless($jobApplication->converted_employee_id !== null, 422, 'This application has not been converted to an employee yet.');
+        abort_unless($jobApplication->onboarding_process_id === null, 422, 'Onboarding has already been started for this application.');
+
+        $employee = $jobApplication->convertedEmployee;
+        abort_unless($employee !== null && $employee->tenant_id === $jobApplication->tenant_id, 404);
+
+        $hasActiveOnboarding = LifecycleProcess::query()
+            ->where('employee_id', $employee->id)
+            ->where('type', LifecycleProcessType::Onboarding->value)
+            ->whereNotIn('status', [LifecycleProcessStatus::Completed->value, LifecycleProcessStatus::Cancelled->value])
+            ->exists();
+        abort_if($hasActiveOnboarding, 422, 'This employee already has an active onboarding process.');
+
+        $process = DB::transaction(function () use ($jobApplication, $employee, $request) {
+            $process = LifecycleProcess::query()->create([
+                'tenant_id' => $jobApplication->tenant_id,
+                'employee_id' => $employee->id,
+                'type' => LifecycleProcessType::Onboarding->value,
+                'status' => LifecycleProcessStatus::Draft->value,
+                'created_by' => $request->user()->id,
+                'updated_by' => $request->user()->id,
+            ]);
+
+            $jobApplication->onboarding_process_id = $process->id;
+            $jobApplication->updated_by = $request->user()->id;
+            $jobApplication->save();
+
+            return $process;
+        });
+
+        AuditLogger::logFor(
+            actor: $request->user(),
+            action: 'job_application.onboarding_started',
+            module: 'recruitment',
+            tenantId: $jobApplication->tenant_id,
+            auditableType: RecruitmentApplication::class,
+            auditableId: $jobApplication->id,
+            description: "Onboarding started for employee '{$employee->fullName()}' (#{$employee->employee_number}) from recruitment application.",
+            newValues: ['onboarding_process_id' => $process->id],
+            ipAddress: $request->ip(),
+            userAgent: $request->userAgent(),
+        );
+
+        AuditLogger::logFor(
+            actor: $request->user(),
+            action: 'employee_lifecycle_process.created_from_recruitment',
+            module: 'lifecycle',
+            tenantId: $jobApplication->tenant_id,
+            auditableType: LifecycleProcess::class,
+            auditableId: $process->id,
+            description: "Onboarding process created for employee '{$employee->fullName()}' from recruitment application.",
+            metadata: ['source_application_id' => $jobApplication->id, 'employee_id' => $employee->id],
+            ipAddress: $request->ip(),
+            userAgent: $request->userAgent(),
+        );
+
+        return (new JobApplicationResource($jobApplication->fresh(['job', 'applicant', 'convertedEmployee', 'onboardingProcess'])))->response()->setStatusCode(200);
     }
 
     /**

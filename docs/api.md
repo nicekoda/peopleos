@@ -1490,6 +1490,7 @@ the full model.
 | `PATCH` | `/api/v1/job-applications/{jobApplication}/stage` | `job_applications.update_stage` | Must be a legal transition from the application's *current* stage — see `ApplicationStage::canTransitionTo()`. Body: `{"stage": "..."}` |
 | `PATCH` | `/api/v1/job-applications/{jobApplication}/ready-for-conversion` | `job_applications.mark_ready_for_conversion` | A milestone flag only — never creates an `Employee` row. Rejected (`422`) if the application's stage is `rejected`/`withdrawn`. Body: `{"ready_for_conversion": true|false}` |
 | `POST` | `/api/v1/job-applications/{jobApplication}/convert-to-employee` | `job_applications.convert_to_employee` | **New in Checkpoint 40** — creates a real `Employee` row. Requires `stage: hired` AND `ready_for_conversion: true` AND not already converted (`422` otherwise). Runs in a database transaction. Body: `{"employee_number": "...", "employment_type": "...", "work_email": "..." (optional), "start_date": "..." (optional), "department_id"/"position_id"/"location_id": "..." (optional)}` — see "Candidate-to-employee conversion" below |
+| `POST` | `/api/v1/job-applications/{jobApplication}/start-onboarding` | `lifecycle.create` | **New in Checkpoint 41** — creates a draft `LifecycleProcess` (type `onboarding`) for the application's already-converted employee and links it back via `onboarding_process_id`. No request body. Requires the application to already be converted, not already have started onboarding, and the employee to have no other active (`draft`/`in_progress`) onboarding process (`422` otherwise). Runs in a database transaction — see "Recruitment-to-onboarding handoff" below |
 
 ## Candidate-to-employee conversion
 
@@ -1531,6 +1532,37 @@ no onboarding process is started. The frontend links to the existing
 `/lifecycle/create?employeeId=...&type=onboarding` page as a manual
 next step.
 
+## Recruitment-to-onboarding handoff
+
+Checkpoint 41 — Recruitment-to-Onboarding Handoff Foundation.
+`POST /api/v1/job-applications/{id}/start-onboarding` replaces
+Checkpoint 40's static "Start onboarding" link with a real, tracked
+action. See `docs/security.md` for the full model.
+
+**No request body.** `employee_id`, `type: onboarding`, and
+`status: draft` are entirely derived from the application's own
+`converted_employee_id` — nothing is read from request input.
+
+**Eligibility (`422` if any fails)**: the application must already be
+converted (`converted_employee_id !== null`), must not have started
+onboarding already (`onboarding_process_id === null`), and the
+converted employee must have no other active (`draft`/`in_progress`)
+onboarding process — a prior `completed`/`cancelled` one does not
+block a new one.
+
+**Gated by `lifecycle.create`**, reused from the existing Lifecycle
+Processes endpoint (Checkpoint 33) rather than a new
+recruitment-specific permission.
+
+**Transactional and idempotent**: the new `LifecycleProcess` row and
+the application's `onboarding_process_id` link are set together in one
+transaction; a second start attempt on the same application is
+rejected with `422`.
+
+**Response**: the same `JobApplicationResource` shape, now including
+`onboarding_process_id` and a nested `onboarding_process: {id, status}`
+once set.
+
 ## Current limitations
 
 - No export endpoint (`employees.export` permission is seeded but unused — explicitly out of scope this checkpoint).
@@ -1550,7 +1582,7 @@ next step.
 - No task templates, task dependencies/ordering, approval routing, notifications, or reminders for lifecycle processes/tasks (Checkpoint 33) — see `docs/security.md#onboarding--offboarding-foundation-checkpoint-33`.
 - No standalone `GET` for a single lifecycle task — see "Lifecycle Processes & Tasks" above.
 - No DOCX file generation, e-signature, automated sending, bulk generation, or employee self-service download for HR Documents (Checkpoint 34/35/36/37) — see `docs/security.md#hr-documents--letter-generation-foundation-checkpoint-34`. PDF export exists (Checkpoint 35) but is generate-on-demand only — every download re-renders from `rendered_content`, nothing is ever persisted. Template version history exists (Checkpoint 36) but has no diff/compare UI and no publish-approval workflow. A single-approver approval workflow exists (Checkpoint 37) but has no multi-level/routing approval and no notifications when a document changes state. A starter template library and safe duplication exist (Checkpoint 38 — seeded per-tenant, not a global/shared catalogue) but there's no AI-assisted generation, legal clause library, cross-tenant/global marketplace, template rating, or template import/export.
-- Recruitment & Applicant Tracking (Checkpoint 39/40) — `resume_document_id` on `recruitment_applications` is reserved/unused (no upload endpoint), no applicant dedupe/merge-by-email (so two independent applications from the same real person could each be converted into separate employee rows), no public candidate portal, no CV parsing/AI screening, no interview scheduling, no offer approval/automation, no email notifications, and no bulk import/conversion. Candidate-to-employee conversion exists (Checkpoint 40) but creates no `User` account, no role assignment, and starts no onboarding process automatically — see `docs/security.md#candidate-to-employee-conversion-foundation-checkpoint-40`.
+- Recruitment & Applicant Tracking (Checkpoint 39/40/41) — `resume_document_id` on `recruitment_applications` is reserved/unused (no upload endpoint), no applicant dedupe/merge-by-email (so two independent applications from the same real person could each be converted into separate employee rows), no public candidate portal, no CV parsing/AI screening, no interview scheduling, no offer approval/automation, no email notifications, and no bulk import/conversion. Candidate-to-employee conversion exists (Checkpoint 40) but creates no `User` account or role assignment automatically. A real onboarding handoff exists (Checkpoint 41, `start-onboarding`) but creates only the bare `LifecycleProcess` record — no tasks, no `User` account, no role assignment, and no notifications — see `docs/security.md#candidate-to-employee-conversion-foundation-checkpoint-40` and `docs/security.md#recruitment-to-onboarding-handoff-foundation-checkpoint-41`.
 
 ## Future
 

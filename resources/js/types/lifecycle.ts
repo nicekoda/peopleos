@@ -27,6 +27,7 @@ export interface LifecycleTask {
     assigned_to?: { id: number; name: string } | null;
     status: LifecycleTaskStatus;
     due_date: string | null;
+    sort_order: number;
     completed_at: string | null;
     created_at: string | null;
     updated_at: string | null;

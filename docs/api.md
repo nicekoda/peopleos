@@ -1219,7 +1219,8 @@ single `lifecycle.*` permission set.
 | `GET` | `/api/v1/lifecycle-processes/{lifecycleProcess}` | `lifecycle.view` | 404 if cross-tenant or outside the caller's visible scope |
 | `PATCH` | `/api/v1/lifecycle-processes/{lifecycleProcess}` | `lifecycle.update` | Rejected (422) if the process is `completed`/`cancelled`, or if the requested status isn't a legal transition |
 | `DELETE` | `/api/v1/lifecycle-processes/{lifecycleProcess}` | `lifecycle.delete` | Soft-cancel: transitions to `cancelled` (unless already terminal) then soft-deletes |
-| `POST` | `/api/v1/lifecycle-processes/{lifecycleProcess}/tasks` | `lifecycle.create` | Also requires `lifecycle.assign_task` if `assigned_to_user_id` is provided |
+| `POST` | `/api/v1/lifecycle-processes/{lifecycleProcess}/tasks` | `lifecycle.create` | Also requires `lifecycle.assign_task` if `assigned_to_user_id` is provided; **Checkpoint 45** — new task is appended (`sort_order` = current max + 1), never defaulted to the front |
+| `POST` | `/api/v1/lifecycle-processes/{lifecycleProcess}/tasks/reorder` | `lifecycle.update` | **Checkpoint 45** — bulk reorder; see "Lifecycle Task Ordering & Reminders" below |
 | `PATCH` | `/api/v1/lifecycle-tasks/{lifecycleTask}` | `lifecycle.update` | `status` here only accepts `pending`/`in_progress` — reaching `completed`/`skipped` requires the dedicated actions below |
 | `DELETE` | `/api/v1/lifecycle-tasks/{lifecycleTask}` | `lifecycle.delete` | Soft delete only |
 | `POST` | `/api/v1/lifecycle-tasks/{lifecycleTask}/complete` | `lifecycle.complete_task` | Also requires `LifecycleVisibilityService::canAccessTask()` — own assignment, a direct report's process, or HR/Admin-tier |
@@ -1274,6 +1275,7 @@ guarantees.
         "assigned_to": { "id": 4, "name": "IT Support" },
         "status": "pending",
         "due_date": "2026-07-08",
+        "sort_order": 0,
         "completed_at": null,
         "created_at": "2026-07-05T00:00:00+00:00",
         "updated_at": "2026-07-05T00:00:00+00:00"
@@ -1289,6 +1291,10 @@ guarantees.
 otherwise — same pattern Checkpoint 32 established for Employee's
 resolved department/position/location. The raw `employee_id`/
 `assigned_to_user_id` fields are kept alongside for compatibility.
+`tasks` is always returned ordered by `sort_order` then `created_at`
+(Checkpoint 45) — the ordering is applied once, in
+`LifecycleProcess::tasks()` itself, so every response that includes
+`tasks` (this one, the reorder endpoint's response) is consistent.
 
 ### Validation rules
 
@@ -1301,6 +1307,56 @@ resolved department/position/location. The raw `employee_id`/
 | `title` (task) | required (create) / sometimes+required (update), max 255 |
 | `description` (task) | nullable, max 2000 |
 | `assigned_to_user_id` (task) | nullable, must exist, belong to the current tenant, not a platform admin, and `status: active`; requires `lifecycle.assign_task` |
+| `task_ids` (reorder only) | required array, must be exactly the process's current task ID set — no more, no fewer, no foreign IDs, no duplicates |
+
+## Lifecycle Task Ordering & Reminders
+
+Checkpoint 45. Two additions to the Lifecycle module above: bulk task
+reordering, and the app's first scheduled task (a daily overdue/due-soon
+digest email — not an HTTP endpoint at all; see below). See
+`docs/architecture.md` and `docs/security.md` for the full design.
+
+### `POST /api/v1/lifecycle-processes/{lifecycleProcess}/tasks/reorder`
+
+Requires `lifecycle.update`. Body is the complete desired order:
+
+```json
+// POST /api/v1/lifecycle-processes/{id}/tasks/reorder
+{
+  "task_ids": ["01hTaskC...", "01hTaskA...", "01hTaskB..."]
+}
+```
+
+Response (200) is the process's tasks, re-fetched in the new order —
+same shape as the `tasks` array in `GET /api/v1/lifecycle-processes/{id}`:
+
+```json
+{
+  "data": [
+    { "id": "01hTaskC...", "sort_order": 0, "...": "..." },
+    { "id": "01hTaskA...", "sort_order": 1, "...": "..." },
+    { "id": "01hTaskB...", "sort_order": 2, "...": "..." }
+  ]
+}
+```
+
+Rejected (422) if `task_ids` isn't exactly the process's current task
+ID set, or if the process is `completed`/`cancelled`. 404 if the
+process belongs to a different tenant (same `ensureBelongsToCurrentTenant()`
+pattern as every other action on this controller).
+
+### `lifecycle:send-task-digest` — not an HTTP endpoint
+
+Registered via `bootstrap/app.php`'s `->withSchedule()`, running daily
+at 07:00 server time — not reachable via any route, permission, or
+button anywhere in this app; only via `php artisan lifecycle:send-task-digest`
+directly or the scheduler. For every active tenant, finds every
+pending/in-progress task overdue or due within 3 days with a still-
+active assignee, groups by assignee, and sends one digest email per
+assignee (`App\Notifications\LifecycleTaskDigestNotification`) — never
+one per task. Sent synchronously (not queued — see `docs/deployment.md`
+§6). Writes one `lifecycle_task_digest.sent` audit log entry per tenant
+per run (only when at least one email was actually sent).
 
 ## HR Document Templates & Generated Documents
 

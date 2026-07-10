@@ -237,6 +237,9 @@ Route::middleware(['auth', 'tenant.matches'])->prefix('api/v1')->group(function 
     Route::delete('lifecycle-processes/{lifecycleProcess}', [LifecycleProcessController::class, 'destroy'])->middleware('permission:lifecycle.delete');
 
     Route::post('lifecycle-processes/{lifecycleProcess}/tasks', [LifecycleTaskController::class, 'store'])->middleware('permission:lifecycle.create');
+    // Checkpoint 45 — bulk reorder, gated the same as editing the
+    // process itself (lifecycle.update), not a narrower key.
+    Route::post('lifecycle-processes/{lifecycleProcess}/tasks/reorder', [LifecycleTaskController::class, 'reorder'])->middleware('permission:lifecycle.update');
     Route::patch('lifecycle-tasks/{lifecycleTask}', [LifecycleTaskController::class, 'update'])->middleware('permission:lifecycle.update');
     Route::delete('lifecycle-tasks/{lifecycleTask}', [LifecycleTaskController::class, 'destroy'])->middleware('permission:lifecycle.delete');
     // complete/skip are further scoped by LifecycleVisibilityService::

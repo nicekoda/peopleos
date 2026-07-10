@@ -7,6 +7,7 @@ import Badge from '@/Components/Badge';
 import LoadingState from '@/Components/LoadingState';
 import EmptyState from '@/Components/EmptyState';
 import PermissionGate from '@/Components/PermissionGate';
+import { useCan } from '@/hooks/useCan';
 import { api, toApiError, redirectIfUnauthenticated, ApiError } from '@/lib/api';
 import { LifecycleProcess, LifecycleProcessStatus, LifecycleTask, LifecycleTaskStatus } from '@/types/lifecycle';
 import { PageProps } from '@/types';
@@ -50,6 +51,9 @@ export default function LifecycleShow() {
     const [error, setError] = useState<ApiError | null>(null);
     const [actioningTaskId, setActioningTaskId] = useState<string | null>(null);
     const [archiving, setArchiving] = useState(false);
+    const [draggedTaskId, setDraggedTaskId] = useState<string | null>(null);
+    const [reordering, setReordering] = useState(false);
+    const canReorderTasks = useCan('lifecycle.update');
 
     const load = useCallback(() => {
         setError(null);
@@ -100,6 +104,52 @@ export default function LifecycleShow() {
                 }
             })
             .finally(() => setArchiving(false));
+    };
+
+    /**
+     * Checkpoint 45 — native HTML5 drag-and-drop (no new dependency).
+     * Reorders the in-memory task list optimistically the instant a row
+     * is dropped, then persists the full new order via the reorder
+     * endpoint. A failed save falls back to load(), which re-fetches the
+     * server's actual order — the same "optimistic update, reload on
+     * failure" posture used nowhere else yet in this app, since every
+     * other mutation here waits for the response before updating state;
+     * reordering is the first one where the visual feedback needs to be
+     * instant rather than round-trip-gated.
+     */
+    const handleDrop = (targetTaskId: string) => {
+        if (!process || draggedTaskId === null || draggedTaskId === targetTaskId) {
+            setDraggedTaskId(null);
+            return;
+        }
+
+        const currentTasks = process.tasks ?? [];
+        const fromIndex = currentTasks.findIndex((task) => task.id === draggedTaskId);
+        const toIndex = currentTasks.findIndex((task) => task.id === targetTaskId);
+
+        setDraggedTaskId(null);
+
+        if (fromIndex === -1 || toIndex === -1) {
+            return;
+        }
+
+        const reordered = [...currentTasks];
+        const [moved] = reordered.splice(fromIndex, 1);
+        reordered.splice(toIndex, 0, moved);
+
+        setProcess({ ...process, tasks: reordered });
+        setReordering(true);
+        setError(null);
+
+        api.post(`/lifecycle-processes/${process.id}/tasks/reorder`, { task_ids: reordered.map((task) => task.id) })
+            .catch((err) => {
+                const apiError = toApiError(err);
+                if (!redirectIfUnauthenticated(apiError)) {
+                    setError(apiError);
+                }
+                load();
+            })
+            .finally(() => setReordering(false));
     };
 
     if (error) {
@@ -210,6 +260,7 @@ export default function LifecycleShow() {
                             <table className="min-w-full divide-y divide-slate-200 text-sm">
                                 <thead>
                                     <tr>
+                                        {canReorderTasks && !isTerminal && <th className="w-6 px-3 py-2" aria-label="Reorder" />}
                                         <th className="px-3 py-2 text-left font-semibold text-slate-600">Task</th>
                                         <th className="px-3 py-2 text-left font-semibold text-slate-600">Assignee</th>
                                         <th className="px-3 py-2 text-left font-semibold text-slate-600">Status</th>
@@ -220,9 +271,22 @@ export default function LifecycleShow() {
                                 <tbody className="divide-y divide-slate-100">
                                     {tasks.map((task) => {
                                         const taskIsTerminal = task.status === 'completed' || task.status === 'skipped';
+                                        const draggableRow = canReorderTasks && !isTerminal;
 
                                         return (
-                                            <tr key={task.id}>
+                                            <tr
+                                                key={task.id}
+                                                draggable={draggableRow && !reordering}
+                                                onDragStart={() => setDraggedTaskId(task.id)}
+                                                onDragOver={(event) => draggableRow && event.preventDefault()}
+                                                onDrop={() => draggableRow && handleDrop(task.id)}
+                                                className={draggableRow ? 'cursor-move' : undefined}
+                                            >
+                                                {draggableRow && (
+                                                    <td className="px-3 py-2 text-slate-400" title="Drag to reorder">
+                                                        ⠿
+                                                    </td>
+                                                )}
                                                 <td className="px-3 py-2 font-medium text-slate-900">{task.title}</td>
                                                 <td className="px-3 py-2 text-slate-500">{task.assigned_to?.name ?? '—'}</td>
                                                 <td className="whitespace-nowrap px-3 py-2">

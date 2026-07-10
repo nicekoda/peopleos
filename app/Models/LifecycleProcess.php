@@ -62,9 +62,18 @@ class LifecycleProcess extends Model
         return $this->belongsTo(Employee::class);
     }
 
+    /**
+     * Checkpoint 45 — ordered by sort_order (then created_at as a stable
+     * tiebreaker for tasks that share the default 0, e.g. several
+     * template-derived tasks whose templates never set an explicit
+     * order). This is the single place the ordering is applied, so
+     * every caller (show(), store()'s ->load('tasks'), the reorder
+     * endpoint's response) sees the same order without repeating an
+     * ->orderBy() at each call site.
+     */
     public function tasks(): HasMany
     {
-        return $this->hasMany(LifecycleTask::class, 'process_id');
+        return $this->hasMany(LifecycleTask::class, 'process_id')->orderBy('sort_order')->orderBy('created_at');
     }
 
     public function createdBy(): BelongsTo

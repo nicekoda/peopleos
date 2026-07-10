@@ -235,22 +235,34 @@ Uploaded employee documents are stored on the `local` filesystem disk
 
 ## 6. Queue / Cache / Session Readiness
 
-- **Queues are configured but not required** — `QUEUE_CONNECTION=database`
-  is set, but nothing in this app currently implements `ShouldQueue` or
-  calls `::dispatch()` anywhere (confirmed by grep across `app/`).
-  Every operation (audit logging, leave approval, document
-  upload/download, policy publish/assign/acknowledge) runs
-  synchronously in the request. This is fine at current scale; revisit
-  only once a genuinely slow or fire-and-forget operation is added
-  (e.g. email notifications, if that module is ever built) — don't
-  introduce Redis or a queue worker process before there's an actual
-  queued job needing one.
-- **No scheduler tasks exist** — `routes/console.php` is the default
-  Laravel skeleton (one `inspire` Artisan command), nothing is
-  registered via `Schedule::`. There is currently no reason to run
-  `php artisan schedule:run` / `schedule:work` in production, and doing
-  so would have nothing to execute. Revisit once a scheduled task
-  (e.g. policy-acknowledgement reminders) is actually built.
+- **Queues are configured but still not used** — `QUEUE_CONNECTION=database`
+  is set, but nothing in this app implements `ShouldQueue` or calls
+  `::dispatch()` anywhere (confirmed by grep across `app/`), including
+  Checkpoint 45's new digest email (see below) — it's sent synchronously
+  from within the scheduled command that generates it, deliberately, not
+  queued. Every operation (audit logging, leave approval, document
+  upload/download, policy publish/assign/acknowledge, the digest email)
+  runs synchronously. This is fine at current scale; revisit only once a
+  genuinely slow or fire-and-forget operation needs one — don't
+  introduce Redis or a `queue:work`/supervisor process before there's an
+  actual queued job needing one.
+- **Scheduler: exactly one task exists as of Checkpoint 45** —
+  `lifecycle:send-task-digest` (`App\Console\Commands\SendLifecycleTaskDigest`),
+  registered via `bootstrap/app.php`'s `->withSchedule()`, running daily
+  at 07:00 server time. Every checkpoint before this one left that
+  closure absent entirely (`routes/console.php` was the default Laravel
+  skeleton, one `inspire` command, nothing registered via `Schedule::`)
+  — **this means production deployments must now add a real cron entry**,
+  which was never required before:
+  ```
+  * * * * * cd /path-to-app && php artisan schedule:run >> /dev/null 2>&1
+  ```
+  Without this cron entry, `lifecycle:send-task-digest` silently never
+  runs and no lifecycle-task reminder email is ever sent — nothing else
+  in the app depends on the scheduler yet, so this is easy to miss in a
+  deployment that predates Checkpoint 45. `php artisan schedule:list`
+  verifies what's registered; `php artisan schedule:run` can be invoked
+  by hand to confirm the cron entry itself is correct.
 - **Cache**: `CACHE_STORE=database` locally. Fine for current traffic
   (see `docs/security.md`'s note that `hasPermission()` isn't cached
   yet either). Production recommendation: `database` remains
@@ -302,6 +314,11 @@ environment), confirm live, over real HTTPS:
 10. A leave request → approval round-trip works, scoped correctly.
 11. A policy publish → assign → acknowledge round-trip works.
 12. The Audit Log view shows the actions performed in the steps above.
+13. (Checkpoint 45+) The scheduler's cron entry is actually running —
+    `php artisan schedule:list` shows `lifecycle:send-task-digest`, and
+    a manual `php artisan schedule:run` (or waiting for the next
+    07:00) delivers a real digest email for a tenant with an overdue
+    task assigned.
 
 This is the same checklist this project's checkpoints have run
 piecemeal since Checkpoint 11 — see `docs/production-readiness.md` for

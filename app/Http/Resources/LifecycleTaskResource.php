@@ -24,6 +24,7 @@ class LifecycleTaskResource extends JsonResource
             ]),
             'status' => $this->status->value,
             'due_date' => $this->due_date?->toDateString(),
+            'sort_order' => $this->sort_order,
             'completed_at' => $this->completed_at?->toIso8601String(),
             'created_at' => $this->created_at?->toIso8601String(),
             'updated_at' => $this->updated_at?->toIso8601String(),

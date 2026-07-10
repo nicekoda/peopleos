@@ -532,9 +532,13 @@ class LifecycleProcessApiTest extends TestCase
         $welcomeTask = LifecycleTask::query()->where('process_id', $processId)->where('title', 'Send welcome email')->firstOrFail();
         $this->assertTrue($welcomeTask->due_date->isSameDay(now()));
         $this->assertSame('pending', $welcomeTask->status->value);
+        // Checkpoint 45 — sort_order is copied from the template at
+        // generation time, same "generate once" posture as due_date.
+        $this->assertSame(10, $welcomeTask->sort_order);
 
         $orientationTask = LifecycleTask::query()->where('process_id', $processId)->where('title', 'Schedule orientation')->firstOrFail();
         $this->assertTrue($orientationTask->due_date->isSameDay(now()->addDays(5)));
+        $this->assertSame(20, $orientationTask->sort_order);
 
         $this->assertDatabaseMissing('employee_lifecycle_tasks', ['process_id' => $processId, 'title' => 'Revoke access']);
         $this->assertSame(2, LifecycleTask::query()->where('process_id', $processId)->count());

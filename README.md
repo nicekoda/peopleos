@@ -667,6 +667,48 @@ requires the admin to set a real initial password directly; this
 checkpoint only adds a way to change it afterward. See
 `docs/architecture.md` and `docs/security.md` for the full design.
 
+## Lifecycle Task Ordering & Reminders (Checkpoint 45)
+
+Two independent gaps closed together, both flagged as future work back
+in Checkpoint 33/42: tasks had no ordering at all beyond insertion
+order, and nothing ever reminded anyone a task was due or overdue.
+
+**Ordering** — a new `sort_order` column on `employee_lifecycle_tasks`.
+A task generated from a `LifecycleTaskTemplate` copies the template's
+own `sort_order` at generation time (the same "generate once, then
+independent" posture as its title/description/due-date — editing a
+template's order later never reaches back into tasks already created
+from it). A manually-added task is appended to the end of its
+process's existing list, never defaulted to the front. The full list
+can be bulk-reordered via `POST /api/v1/lifecycle-processes/{id}/tasks/reorder`,
+gated by `lifecycle.update` (reused, not a new permission — reordering
+is a sub-action of editing the process, the same reasoning already
+applied to every other narrow write action in this app), which requires
+the *complete* current set of task IDs in the desired order — a partial
+list is rejected, so there's never ambiguity about where an omitted
+task lands. The Lifecycle process page now supports native
+drag-and-drop reordering (no new frontend dependency) for anyone
+holding that permission, on a non-terminal process.
+
+**Reminders** — the app's first scheduled task
+(`lifecycle:send-task-digest`, registered via `bootstrap/app.php`'s new
+`->withSchedule()`, running daily at 07:00). For every active tenant,
+it finds every pending/in-progress task that's overdue or due within
+3 days, groups them by assignee, and sends each assignee a single
+digest email (`App\Notifications\LifecycleTaskDigestNotification`) —
+never one email per task. Deliberately sent synchronously, not queued:
+queuing it would mean standing up a second new piece of always-on
+infrastructure (a persistent `queue:work` process) in the same
+checkpoint as the first (the scheduler's cron entry) — see
+`docs/deployment.md` §6 for why that's a deliberately deferred
+follow-up. Tasks with no assignee, or an assignee who's since been
+deactivated, are silently skipped. **Still no per-tenant timezone for
+the digest's send time, no in-app notification center, and no digest
+suppression/snooze** — every eligible assignee gets the same email at
+the same wall-clock moment, every day their tasks remain overdue or
+due-soon. See `docs/architecture.md`, `docs/security.md`, and
+`docs/deployment.md` for the full design.
+
 ## Documentation
 
 - [`docs/architecture.md`](docs/architecture.md) — multi-tenancy, tenant resolution, RBAC overview, internal-vs-public IDs, frontend architecture.

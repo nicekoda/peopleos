@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api\V1;
 
 use App\Enums\LifecycleTaskStatus;
 use App\Http\Controllers\Controller;
+use App\Http\Requests\Lifecycle\ReorderLifecycleTasksRequest;
 use App\Http\Requests\Lifecycle\StoreLifecycleTaskRequest;
 use App\Http\Requests\Lifecycle\UpdateLifecycleTaskRequest;
 use App\Http\Resources\LifecycleTaskResource;
@@ -14,6 +15,8 @@ use App\Services\Audit\AuditLogger;
 use App\Services\LifecycleVisibilityService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
+use Illuminate\Support\Facades\DB;
 
 class LifecycleTaskController extends Controller
 {
@@ -40,6 +43,10 @@ class LifecycleTaskController extends Controller
         $validated['process_id'] = $lifecycleProcess->id;
         $validated['tenant_id'] = $lifecycleProcess->tenant_id;
         $validated['status'] = LifecycleTaskStatus::Pending->value;
+        // Checkpoint 45 — a manually-added task is appended to the end
+        // of the process's existing list, not defaulted to 0 (which
+        // would otherwise jump it ahead of every already-ordered task).
+        $validated['sort_order'] = ($lifecycleProcess->tasks()->max('sort_order') ?? -1) + 1;
         $validated['created_by'] = $request->user()->id;
         $validated['updated_by'] = $request->user()->id;
 
@@ -205,6 +212,45 @@ class LifecycleTaskController extends Controller
         );
 
         return new LifecycleTaskResource($lifecycleTask->fresh());
+    }
+
+    /**
+     * lifecycle.update (route middleware) — same permission the process
+     * edit itself requires; there is no separate "reorder" permission,
+     * the same "reuse, don't invent a narrower key for a sub-action of
+     * an already-covered write" reasoning as LifecycleProcessController.
+     * ReorderLifecycleTasksRequest has already verified task_ids is
+     * exactly this process's current task set before this runs.
+     */
+    public function reorder(ReorderLifecycleTasksRequest $request, LifecycleProcess $lifecycleProcess): AnonymousResourceCollection
+    {
+        $this->ensureProcessBelongsToCurrentTenant($lifecycleProcess);
+
+        $taskIds = $request->validated()['task_ids'];
+
+        DB::transaction(function () use ($taskIds, $request): void {
+            foreach ($taskIds as $index => $taskId) {
+                LifecycleTask::query()->where('id', $taskId)->update([
+                    'sort_order' => $index,
+                    'updated_by' => $request->user()->id,
+                ]);
+            }
+        });
+
+        AuditLogger::logFor(
+            actor: $request->user(),
+            action: 'lifecycle_task.reordered',
+            module: 'lifecycle',
+            tenantId: $lifecycleProcess->tenant_id,
+            auditableType: LifecycleProcess::class,
+            auditableId: $lifecycleProcess->id,
+            description: 'Lifecycle process tasks reordered.',
+            metadata: ['process_id' => $lifecycleProcess->id, 'task_ids' => $taskIds],
+            ipAddress: $request->ip(),
+            userAgent: $request->userAgent(),
+        );
+
+        return LifecycleTaskResource::collection($lifecycleProcess->tasks()->with('assignedToUser')->get());
     }
 
     private function ensureProcessBelongsToCurrentTenant(LifecycleProcess $process): void

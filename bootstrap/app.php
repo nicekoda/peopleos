@@ -1,9 +1,11 @@
 <?php
 
+use App\Console\Commands\SendLifecycleTaskDigest;
 use App\Http\Middleware\EnsurePermission;
 use App\Http\Middleware\EnsureTenantMatchesAuthenticatedUser;
 use App\Http\Middleware\HandleInertiaRequests;
 use App\Http\Middleware\ResolveTenant;
+use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
@@ -40,6 +42,19 @@ return Application::configure(basePath: dirname(__DIR__))
         // fn () => null, back when no login route existed at all
         // (Checkpoint 7) — see docs/security.md.
         $middleware->redirectGuestsTo(fn () => route('login'));
+    })
+    // Checkpoint 45 — the app's first scheduled task. Every prior
+    // checkpoint left this closure absent entirely (see
+    // docs/deployment.md §6: "no scheduler infrastructure exists;
+    // revisit once a genuinely scheduled task is actually built" — this
+    // is that moment). Requires a real cron entry running
+    // `php artisan schedule:run` every minute in production; see
+    // docs/deployment.md for the exact crontab line. dailyAt() is in the
+    // application's configured timezone (config('app.timezone')) — there
+    // is no per-tenant timezone concept yet, so every tenant's digest
+    // fires at the same wall-clock moment.
+    ->withSchedule(function (Schedule $schedule): void {
+        $schedule->command(SendLifecycleTaskDigest::class)->dailyAt('07:00');
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         // api/* always gets JSON, full stop — it's an API surface

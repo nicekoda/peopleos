@@ -2338,9 +2338,11 @@ established.
 Documented, not built: assigning a default assignee (e.g. "always
 assign IT-setup tasks to the IT Support role") per template; a
 `source_template_id` trace from a generated task back to the template
-it came from; notifications when a template-derived task's due date
-arrives or passes; and reordering/duplicating templates in bulk. None
-of these were part of this checkpoint's scope.
+it came from; and duplicating templates in bulk. **Reordering tasks and
+due-date reminders were closed by Checkpoint 45** — see below — though
+that checkpoint added ordering/reminders to *tasks*, not to the
+template catalog itself; bulk-reordering the templates in
+`/settings/lifecycle-task-templates` is still not built.
 
 ## User Account Provisioning (Checkpoint 43)
 
@@ -2501,4 +2503,124 @@ A real invite-email flow reusing this checkpoint's tenant-aware URL
 approach, queuing the reset email once a real queue worker exists, a
 post-reset confirmation email, and IP-based rate limiting on top of the
 existing per-email throttle. None of these were part of this
+checkpoint's scope.
+
+## Lifecycle Task Ordering & Reminders (Checkpoint 45)
+
+Closes two gaps Checkpoint 33/42 both flagged as future work: tasks had
+no ordering beyond insertion order, and nothing ever reminded anyone a
+task was due or overdue. See
+[`security.md`](security.md#lifecycle-task-ordering--reminders-checkpoint-45)
+for the full security model and
+[`api.md`](api.md#lifecycle-task-ordering--reminders) for the route
+reference.
+
+**`sort_order` on `employee_lifecycle_tasks` — a plain integer column,
+not a dependency graph.** The two words this feature was scoped under
+("ordering," "reminders") were ambiguous between "manual display order"
+and "task B is blocked until task A completes" — this checkpoint
+implements the former only; there is no blocking/prerequisite concept
+anywhere in `LifecycleTaskStatus` or the controller, and completing/
+skipping a task never checks any other task's state. `LifecycleProcess::tasks()`
+now returns `->orderBy('sort_order')->orderBy('created_at')` — the
+ordering lives in the relation itself, one place, rather than being
+repeated at every call site (`show()`, `store()`'s `->load('tasks')`,
+the reorder endpoint's own response).
+
+**A generated task copies its template's `sort_order` at generation
+time; a manually-added task is appended to the end.**
+`LifecycleTaskTemplateApplier` copies `sort_order` alongside title/
+description/due-date — the same "generate once, then independent"
+posture as those fields (editing a template's order later never
+reaches back into tasks already generated from it).
+`LifecycleTaskController::store()` computes
+`($process->tasks()->max('sort_order') ?? -1) + 1` for a manually added
+task rather than defaulting to `0`, which would otherwise jump a new
+task ahead of every already-ordered one.
+
+**`POST /lifecycle-processes/{id}/tasks/reorder` replaces the whole
+order in one call — it does not move a single task.**
+`ReorderLifecycleTasksRequest` requires `task_ids` to be exactly the
+process's current task ID set (same count, no foreign IDs, no
+duplicates, no omissions) — a partial reorder request is rejected
+outright, so there's never a question of where an unlisted task should
+land. Gated by `lifecycle.update`, the same permission editing the
+process itself already requires — not a new, narrower key, the same
+"reuse an existing write permission for a sub-action" reasoning this
+app has applied repeatedly (e.g. `hr_generated_documents.submit`/
+`.approve`/`.reject` are the exception that proves the rule: those got
+their own keys specifically *because* HR Officer needed to submit
+without ever approving; no comparable split exists here — every role
+holding `lifecycle.update` is already fully trusted with this
+resource).
+
+**The Lifecycle process page supports native HTML5 drag-and-drop —
+deliberately no new npm dependency.** `draggable`/`onDragStart`/
+`onDragOver`/`onDrop` on each task row reorders the in-memory list the
+instant a row is dropped (optimistic update), then persists the full
+new order via the reorder endpoint; a failed save falls back to
+re-fetching the process from the server. This is the first place in
+this frontend that updates local state before its server round-trip
+completes — every other mutation here waits for the response first —
+because a reorder needs to feel instant, and reordering (unlike every
+other action on this page) has no failure mode a user would find
+surprising enough to need to see mid-drag.
+
+**`lifecycle:send-task-digest` is the app's first scheduled task.**
+Registered via `bootstrap/app.php`'s new `->withSchedule()` closure —
+every checkpoint before this one left it absent entirely (see
+`docs/deployment.md` §6, previously "no scheduler infrastructure
+exists; revisit once a genuinely scheduled task is actually built" —
+this is that moment). Runs daily at 07:00 server time (no per-tenant
+timezone concept exists yet, so every tenant's digest fires at the same
+wall-clock moment). For each active tenant, it binds that tenant into
+the container (`app()->instance(Tenant::class, $tenant)`) exactly the
+way `ResolveTenant` middleware does per-request — outside an HTTP
+request there is no subdomain to resolve one from, so the command must
+do the equivalent itself before `LifecycleTask::query()`'s
+`BelongsToTenant` global scope will filter correctly.
+
+**One email per assignee per run, never one per task.** Every pending/
+in-progress task that's overdue or due within `DUE_SOON_WITHIN_DAYS`
+(3) days, with a still-active assignee, is grouped by
+`assigned_to_user_id` before sending — `App\Notifications\LifecycleTaskDigestNotification`
+lists every one of that assignee's qualifying tasks in a single email,
+split into "overdue" and "due soon" sections. Tasks with no assignee
+are silently skipped (there is no one to remind), and an assignee who
+was active when a task was assigned to them but has since been
+deactivated is re-checked and skipped at send time — assignment-time
+validation only guarantees "was active then," not "is active now."
+
+**Deliberately not queued (`ShouldQueue`).** `QUEUE_CONNECTION=database`
+has been configured since the very first checkpoint but nothing has
+ever actually been queued (see `docs/deployment.md` §6). Queuing this
+notification would mean standing up a *second* new always-on
+infrastructure piece (a persistent `queue:work`/supervisor process) in
+the same checkpoint that introduces the *first* (the scheduler's cron
+entry) — sending synchronously from within the already-scheduled
+command is still a real email, without that second dependency. This is
+a deliberately deferred follow-up, not an oversight — see "Future"
+below.
+
+**One audit log entry per tenant per run, not per recipient.**
+`lifecycle_task_digest.sent` records the recipient count and total task
+count for that tenant, `actor_type: 'system'` (no acting user — this is
+a scheduled, not user-triggered, action), and is only written when at
+least one email was actually sent (a tenant with nothing due writes
+nothing, the same "only log meaningful outcomes" pattern
+`LifecycleTaskController::update()` already applies via its
+`$changes !== []` guard).
+
+### Future
+
+Per-tenant timezone-aware send times (every tenant currently gets the
+same wall-clock 07:00 regardless of where they operate); an in-app
+notification center as an alternative/addition to email; digest
+suppression or snooze (an assignee currently gets the identical email
+every single day a task remains overdue, with no way to acknowledge
+"seen" short of completing/skipping the task itself); queuing the
+digest notification once a real queue worker process exists in
+production; and bulk-reordering the `lifecycle_task_templates` catalog
+itself (this checkpoint only reordered generated tasks, not the
+templates that generate them). None of these were part of this
 checkpoint's scope.

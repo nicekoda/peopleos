@@ -4043,9 +4043,15 @@ exceeded the approved "keep it minimal" scope.
 - No task templates/reusable checklists (`lifecycle_task_templates`
   was offered as optional in the proposed schema and deliberately not
   built this checkpoint — HR adds tasks directly per process).
-- No task dependencies, ordering, or approval routing.
-- No notifications, email reminders, or calendar integration for
-  due dates.
+- ~~No task dependencies, ordering, or approval routing.~~ Manual
+  ordering (`sort_order`, plus drag-and-drop reordering) was added in
+  Checkpoint 45. Task **dependencies**/blocking and approval routing
+  are still not built — Checkpoint 45 deliberately scoped "ordering" as
+  display order only, not a prerequisite graph.
+- ~~No notifications, email reminders, or calendar integration for due
+  dates.~~ A daily email digest of overdue/due-soon tasks was added in
+  Checkpoint 45 (`lifecycle:send-task-digest`). Calendar integration is
+  still not built.
 - No IT/asset provisioning integration, no document generation, no
   e-signature.
 - No recruitment-to-employee conversion — a lifecycle process must be
@@ -4062,7 +4068,8 @@ exceeded the approved "keep it minimal" scope.
 - A workflow designer, if a real need for configurable multi-step
   approval routing emerges — explicitly out of scope for this
   foundation.
-- Notifications/reminders for upcoming or overdue tasks.
+- ~~Notifications/reminders for upcoming or overdue tasks.~~ Done in
+  Checkpoint 45.
 - Integration points for IT provisioning, asset assignment, and
   document generation once those modules exist.
 
@@ -5135,10 +5142,13 @@ existing closure.
 
 ### Current limitations
 
-- No default assignee per template, no notifications when a
-  template-derived task's due date arrives, no bulk reorder/duplicate
-  of templates, and no traceability from a generated task back to the
-  template that created it — all deliberate scope cuts, not oversights.
+- No default assignee per template, no bulk reorder/duplicate of
+  templates (Checkpoint 45 reordered generated *tasks*, not the
+  template catalog that generates them), and no traceability from a
+  generated task back to the template that created it — all deliberate
+  scope cuts, not oversights. ~~No notifications when a
+  template-derived task's due date arrives~~ — closed in Checkpoint 45,
+  for every task (template-derived or manual), not templates alone.
 - The "no other active onboarding process" guard (Checkpoint 41) and
   this checkpoint's template application are independent checks; a
   future checkpoint that wants to skip re-applying certain templates on
@@ -5149,7 +5159,8 @@ existing closure.
 
 - A default-assignee-by-role option per template (e.g. "IT setup tasks
   always assign to whoever holds the IT Support role").
-- Due-date notifications/reminders for template-derived tasks.
+- ~~Due-date notifications/reminders for template-derived tasks.~~ Done
+  in Checkpoint 45, for all tasks.
 - A `source_template_id` trace column, if a future need arises to
   distinguish template-derived tasks from manually created ones beyond
   what the audit log already records.
@@ -5370,6 +5381,125 @@ deployment story.
 - IP-based rate limiting on `/forgot-password`, on top of the existing
   per-email throttle.
 
+## Lifecycle Task Ordering & Reminders (Checkpoint 45)
+
+Adds manual task ordering (a `sort_order` column plus a bulk-reorder
+endpoint and drag-and-drop UI) and this app's first scheduled task — a
+daily email digest of overdue/due-soon lifecycle tasks. See
+[`architecture.md`](architecture.md#lifecycle-task-ordering--reminders-checkpoint-45)
+for the technical writeup; this section covers the security design.
+
+### Reordering is gated by `lifecycle.update`, not a new permission
+
+`POST /lifecycle-processes/{id}/tasks/reorder` requires the identical
+permission editing the process itself already requires. No narrower
+key was invented — every role holding `lifecycle.update` (Tenant Admin,
+HR Manager, HR Director, HR Officer where granted) is already fully
+trusted to edit any task on the process, and reordering changes nothing
+about a task's content, assignment, or status. This differs from
+`hr_generated_documents.submit`/`.approve`/`.reject`, which deliberately
+*do* have their own keys — those exist specifically so HR Officer can
+submit without ever self-approving; no comparable "should be able to
+reorder but not otherwise edit" role exists in this app's approved
+permission mapping, so no split was introduced here.
+
+### `ReorderLifecycleTasksRequest` requires the complete task set — never a partial move
+
+The request validates that `task_ids` is exactly the process's current
+set of task IDs (same count, no foreign IDs from another process, no
+duplicates, no omissions) before any write happens. A caller cannot
+smuggle in a task ID belonging to a different process (which would
+otherwise let a `lifecycle.update` holder silently pull a task out of
+one process's ordering into another's, since the reorder loop only
+updates `sort_order` by ID, not by relationship) — the "exact set"
+validation closes that off entirely, not just a naive "does this ID
+exist somewhere" check.
+
+### Same tenant-isolation and terminal-process rules as every other task mutation
+
+`LifecycleTaskController::reorder()` calls the same
+`ensureProcessBelongsToCurrentTenant()` 404-not-403 check every other
+action on this controller uses, and `ReorderLifecycleTasksRequest`
+rejects reordering on a completed/cancelled process, the same rule
+`StoreLifecycleTaskRequest` already applies to adding a task in the
+first place.
+
+### The digest email is the first scheduled, system-triggered action in this app — and the first place tenant scoping is applied manually, outside a request
+
+Every prior tenant-scoped query in this app runs inside an HTTP request,
+where `ResolveTenant` middleware has already bound a `Tenant` into the
+container before any controller code runs. `SendLifecycleTaskDigest`
+has no request — it runs from `php artisan` on a schedule — so it binds
+each active tenant into the container itself
+(`app()->instance(Tenant::class, $tenant)`), one at a time, immediately
+before querying that tenant's tasks. This is the exact same mechanism
+`ResolveTenant` uses, applied manually because there is no middleware
+pipeline here to do it automatically. Getting this wrong (e.g.
+forgetting to bind, or binding once outside the per-tenant loop) would
+mean `LifecycleTask::query()`'s `BelongsToTenant` global scope either
+doesn't filter at all (leaking every tenant's tasks into every digest)
+or filters every tenant's query against whichever tenant was bound
+first — both failure modes are structurally impossible here since the
+binding happens fresh inside `digestForTenant()` for every tenant in
+the loop, never once before it.
+
+### No new permission is checked at all — this is not an HTTP-reachable action
+
+`lifecycle:send-task-digest` has no route, no controller, no
+`permission:` middleware — it's only reachable via the CLI or the
+scheduler, the same posture `AuditTenantRouteScoping` already has. There
+is no user-triggered "send digest now" button anywhere in this app;
+adding one would need its own permission decision, deliberately not
+made this checkpoint.
+
+### An assignee's active status is re-checked at send time, not just at assignment time
+
+`StoreLifecycleTaskRequest`/`UpdateLifecycleTaskRequest` already require
+`assigned_to_user_id` to reference an active, non-platform-admin user in
+the same tenant — but only at the moment of assignment. An assignee can
+be deactivated afterward without their existing task assignments being
+touched. `SendLifecycleTaskDigest` re-checks `$assignee->isActive()`
+before sending, skipping a deactivated assignee's tasks entirely rather
+than emailing an account that should no longer be receiving anything.
+
+### Deliberately not queued — a scoped decision, not an oversight
+
+See `docs/architecture.md`'s "Deliberately not queued" note and
+`docs/deployment.md` §6: queuing this notification would introduce a
+*second* new always-on infrastructure dependency (a persistent
+`queue:work`/supervisor process) in the same checkpoint that introduces
+the *first* (the scheduler's cron entry). Sending synchronously from
+within the already-scheduled command keeps this checkpoint to one new
+infrastructure dependency, not two.
+
+### Current limitations
+
+- No per-tenant timezone for the digest's send time — every tenant's
+  digest fires at the same 07:00 server-time moment regardless of where
+  they operate.
+- No digest suppression/snooze — an assignee with an overdue task gets
+  the identical email every single day until they complete or skip it.
+- No "send digest now" on-demand action — the digest is only reachable
+  via the scheduler/CLI, never an HTTP endpoint, so there is no
+  permission decision to make here yet either.
+- Task **ordering** is display order only, not dependencies/blocking —
+  completing or skipping a task never checks any other task's state,
+  regardless of `sort_order`.
+- The reorder endpoint has no rate limiting beyond whatever applies to
+  the API generally — a caller with `lifecycle.update` can call it
+  arbitrarily often.
+
+### Future
+
+- Per-tenant timezone support for the digest send time.
+- Digest suppression/snooze, or an in-app notification center as an
+  alternative to email.
+- Queue the digest notification once a real queue worker exists in this
+  app's deployment story (see `docs/deployment.md` §6).
+- True task dependencies (task B blocked until task A completes), if a
+  real need for that emerges — explicitly out of scope for this
+  checkpoint, which only added display ordering.
+
 ## Local Demo Credentials
 
 **Local development only — these are not real secrets and only work against your own local database.** Password comes from `SEED_USER_PASSWORD` in `.env` (not committed; `.env.example` has an empty placeholder).
@@ -5398,6 +5528,7 @@ data these six `uesl` logins see (Checkpoint 26's `DemoDataSeeder`).
 
 - No email verification enforcement on login (column exists, not yet checked).
 - Password reset exists as of Checkpoint 44 (the `password_reset_tokens` table, previously unused, now backs a real forgot-password flow) — see [Password Reset](#password-reset-checkpoint-44) below. Still no invite-email, MFA, or SSO.
+- This app's first scheduled task exists as of Checkpoint 45 (`lifecycle:send-task-digest`, registered via `bootstrap/app.php`'s `->withSchedule()`) — see [Lifecycle Task Ordering & Reminders](#lifecycle-task-ordering--reminders-checkpoint-45) below. Production deployments must now add a `php artisan schedule:run` cron entry, which was never required before this checkpoint (see `docs/deployment.md` §6). Still no queued jobs anywhere in the app.
 - `DatabaseSeeder` uses `WithoutModelEvents`, which disables the `saving`/`creating` guards (on `User` and `Role`) during seeding. `UserSeeder`/`RoleSeeder` set `tenant_id`/`is_platform_admin`/`is_platform_role` explicitly on every row regardless, so this doesn't cause incorrect data — but it does mean a same-row consistency mistake in seed data would surface as a raw Postgres constraint error rather than the cleaner app-level exception. (The RBAC *assignment* guards — `assignRole()`, `givePermissionTo()`, `grantPermission()` — and audit logging calls are unaffected by this, since they're plain method logic, not Eloquent events.)
 - See "Current limitations" under Audit Logging above for the audit-specific gaps (no read endpoint, `givePermissionTo()`/tenant CRUD not logged yet).
 - No permission caching — `hasPermission()` hits the database on every call (two queries: role-permission lookup, direct-grant lookup). Fine for foundation-stage traffic; revisit if it becomes a hot path.

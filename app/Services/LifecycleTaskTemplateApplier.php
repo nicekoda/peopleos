@@ -40,6 +40,11 @@ class LifecycleTaskTemplateApplier
                 'due_date' => $template->due_in_days !== null
                     ? now()->addDays($template->due_in_days)->toDateString()
                     : null,
+                // Checkpoint 45 — copied once, then independent, same
+                // "generate once" posture as title/description/due_date
+                // above: editing a template's sort_order afterward never
+                // reaches back into tasks already generated from it.
+                'sort_order' => $template->sort_order,
                 'created_by' => $actorUserId,
                 'updated_by' => $actorUserId,
             ]);

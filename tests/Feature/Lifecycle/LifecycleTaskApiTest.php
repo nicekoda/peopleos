@@ -510,6 +510,7 @@ class LifecycleTaskApiTest extends TestCase
     {
         $uris = [
             'api/v1/lifecycle-processes/{lifecycleProcess}/tasks',
+            'api/v1/lifecycle-processes/{lifecycleProcess}/tasks/reorder',
             'api/v1/lifecycle-tasks/{lifecycleTask}',
             'api/v1/lifecycle-tasks/{lifecycleTask}/complete',
             'api/v1/lifecycle-tasks/{lifecycleTask}/skip',
@@ -534,5 +535,136 @@ class LifecycleTaskApiTest extends TestCase
         $this->assertTrue(LifecycleTaskStatus::Pending->canTransitionTo(LifecycleTaskStatus::Skipped));
         $this->assertFalse(LifecycleTaskStatus::Completed->canTransitionTo(LifecycleTaskStatus::Pending));
         $this->assertFalse(LifecycleTaskStatus::Skipped->canTransitionTo(LifecycleTaskStatus::Completed));
+    }
+
+    // Checkpoint 45 — task ordering
+
+    public function test_new_manual_task_is_appended_to_end_of_sort_order(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $user = $this->userWithPermissions($tenant, 'lifecycle.create');
+        $process = LifecycleProcess::factory()->create(['tenant_id' => $tenant->id]);
+        LifecycleTask::factory()->create(['tenant_id' => $tenant->id, 'process_id' => $process->id, 'sort_order' => 5]);
+
+        $response = $this->actingAs($user)->postJson($this->url($tenant, "lifecycle-processes/{$process->id}/tasks"), [
+            'title' => 'Appended task',
+        ]);
+
+        $response->assertCreated();
+        $task = LifecycleTask::query()->findOrFail($response->json('data.id'));
+        $this->assertSame(6, $task->sort_order);
+    }
+
+    public function test_user_without_update_permission_cannot_reorder_tasks(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $user = $this->userWithPermissions($tenant, 'lifecycle.view');
+        $process = LifecycleProcess::factory()->create(['tenant_id' => $tenant->id]);
+        $taskA = LifecycleTask::factory()->create(['tenant_id' => $tenant->id, 'process_id' => $process->id, 'sort_order' => 0]);
+        $taskB = LifecycleTask::factory()->create(['tenant_id' => $tenant->id, 'process_id' => $process->id, 'sort_order' => 1]);
+
+        $response = $this->actingAs($user)->postJson($this->url($tenant, "lifecycle-processes/{$process->id}/tasks/reorder"), [
+            'task_ids' => [$taskB->id, $taskA->id],
+        ]);
+
+        $response->assertForbidden();
+    }
+
+    public function test_user_with_update_permission_can_reorder_tasks(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $user = $this->userWithPermissions($tenant, 'lifecycle.update');
+        $process = LifecycleProcess::factory()->create(['tenant_id' => $tenant->id]);
+        $taskA = LifecycleTask::factory()->create(['tenant_id' => $tenant->id, 'process_id' => $process->id, 'sort_order' => 0]);
+        $taskB = LifecycleTask::factory()->create(['tenant_id' => $tenant->id, 'process_id' => $process->id, 'sort_order' => 1]);
+        $taskC = LifecycleTask::factory()->create(['tenant_id' => $tenant->id, 'process_id' => $process->id, 'sort_order' => 2]);
+
+        $response = $this->actingAs($user)->postJson($this->url($tenant, "lifecycle-processes/{$process->id}/tasks/reorder"), [
+            'task_ids' => [$taskC->id, $taskA->id, $taskB->id],
+        ]);
+
+        $response->assertOk();
+        $this->assertSame(1, $taskA->fresh()->sort_order);
+        $this->assertSame(2, $taskB->fresh()->sort_order);
+        $this->assertSame(0, $taskC->fresh()->sort_order);
+
+        $orderedIds = LifecycleProcess::query()->find($process->id)->tasks()->pluck('id')->all();
+        $this->assertSame([$taskC->id, $taskA->id, $taskB->id], $orderedIds);
+    }
+
+    public function test_reorder_rejects_task_ids_not_belonging_to_process(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $user = $this->userWithPermissions($tenant, 'lifecycle.update');
+        $process = LifecycleProcess::factory()->create(['tenant_id' => $tenant->id]);
+        $otherProcess = LifecycleProcess::factory()->create(['tenant_id' => $tenant->id]);
+        $task = LifecycleTask::factory()->create(['tenant_id' => $tenant->id, 'process_id' => $process->id]);
+        $foreignTask = LifecycleTask::factory()->create(['tenant_id' => $tenant->id, 'process_id' => $otherProcess->id]);
+
+        $response = $this->actingAs($user)->postJson($this->url($tenant, "lifecycle-processes/{$process->id}/tasks/reorder"), [
+            'task_ids' => [$foreignTask->id, $task->id],
+        ]);
+
+        $response->assertStatus(422)->assertJsonValidationErrors('task_ids');
+        $this->assertSame(0, $task->fresh()->sort_order);
+    }
+
+    public function test_reorder_rejects_an_incomplete_task_id_list(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $user = $this->userWithPermissions($tenant, 'lifecycle.update');
+        $process = LifecycleProcess::factory()->create(['tenant_id' => $tenant->id]);
+        $taskA = LifecycleTask::factory()->create(['tenant_id' => $tenant->id, 'process_id' => $process->id, 'sort_order' => 0]);
+        LifecycleTask::factory()->create(['tenant_id' => $tenant->id, 'process_id' => $process->id, 'sort_order' => 1]);
+
+        $response = $this->actingAs($user)->postJson($this->url($tenant, "lifecycle-processes/{$process->id}/tasks/reorder"), [
+            'task_ids' => [$taskA->id],
+        ]);
+
+        $response->assertStatus(422)->assertJsonValidationErrors('task_ids');
+    }
+
+    public function test_cannot_reorder_tasks_on_a_completed_process(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $user = $this->userWithPermissions($tenant, 'lifecycle.update');
+        $process = LifecycleProcess::factory()->completed()->create(['tenant_id' => $tenant->id]);
+        $taskA = LifecycleTask::factory()->create(['tenant_id' => $tenant->id, 'process_id' => $process->id, 'sort_order' => 0]);
+        $taskB = LifecycleTask::factory()->create(['tenant_id' => $tenant->id, 'process_id' => $process->id, 'sort_order' => 1]);
+
+        $response = $this->actingAs($user)->postJson($this->url($tenant, "lifecycle-processes/{$process->id}/tasks/reorder"), [
+            'task_ids' => [$taskB->id, $taskA->id],
+        ]);
+
+        $response->assertStatus(422);
+    }
+
+    public function test_reorder_writes_audit_log(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $user = $this->userWithPermissions($tenant, 'lifecycle.update');
+        $process = LifecycleProcess::factory()->create(['tenant_id' => $tenant->id]);
+        $taskA = LifecycleTask::factory()->create(['tenant_id' => $tenant->id, 'process_id' => $process->id, 'sort_order' => 0]);
+        $taskB = LifecycleTask::factory()->create(['tenant_id' => $tenant->id, 'process_id' => $process->id, 'sort_order' => 1]);
+
+        $this->actingAs($user)->postJson($this->url($tenant, "lifecycle-processes/{$process->id}/tasks/reorder"), [
+            'task_ids' => [$taskB->id, $taskA->id],
+        ])->assertOk();
+
+        $this->assertDatabaseHas('audit_logs', ['action' => 'lifecycle_task.reordered', 'module' => 'lifecycle', 'actor_user_id' => $user->id]);
+    }
+
+    public function test_tenant_a_cannot_reorder_tenant_bs_process_tasks(): void
+    {
+        $tenantA = Tenant::factory()->create();
+        $tenantB = Tenant::factory()->create();
+        $userA = $this->userWithPermissions($tenantA, 'lifecycle.update');
+        $processB = LifecycleProcess::factory()->create(['tenant_id' => $tenantB->id]);
+        $taskB1 = LifecycleTask::factory()->create(['tenant_id' => $tenantB->id, 'process_id' => $processB->id, 'sort_order' => 0]);
+        $taskB2 = LifecycleTask::factory()->create(['tenant_id' => $tenantB->id, 'process_id' => $processB->id, 'sort_order' => 1]);
+
+        $this->actingAs($userA)->postJson($this->url($tenantA, "lifecycle-processes/{$processB->id}/tasks/reorder"), [
+            'task_ids' => [$taskB2->id, $taskB1->id],
+        ])->assertNotFound();
     }
 }

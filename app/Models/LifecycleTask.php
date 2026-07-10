@@ -39,6 +39,7 @@ class LifecycleTask extends Model
         'assigned_to_user_id',
         'status',
         'due_date',
+        'sort_order',
         'completed_at',
         'completed_by',
         'created_by',
@@ -50,6 +51,7 @@ class LifecycleTask extends Model
         return [
             'status' => LifecycleTaskStatus::class,
             'due_date' => 'date',
+            'sort_order' => 'integer',
             'completed_at' => 'datetime',
         ];
     }

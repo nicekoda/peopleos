@@ -25,5 +25,10 @@ export interface PageProps {
     };
     tenant: SharedTenant | null;
     errors: Record<string, string>;
+    // Checkpoint 44 — a one-time, session-flashed success message (e.g.
+    // "password reset link sent", "password reset — please sign in").
+    // null on every request that didn't just redirect from one of those
+    // actions.
+    status?: string | null;
     [key: string]: unknown;
 }

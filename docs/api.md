@@ -241,8 +241,45 @@ automatically), account creation is never triggered by
 `.../start-onboarding` — this stays a separate, explicit action the
 caller reaches on purpose. See
 `docs/security.md#user-account-provisioning-checkpoint-43` for the full
-design and current limitations (no invite-email/password-reset flow —
-the caller sets the account's real initial password directly).
+design and current limitations (no invite-email flow — the caller sets
+the account's real initial password directly; a real password reset
+flow now exists for that account afterward — see "Password Reset"
+below).
+
+### Password Reset
+
+`GET`/`POST /forgot-password` and `GET`/`POST /reset-password`
+(documented in the Frontend Routes table above — these are guest-only
+`routes/auth.php` routes, not `/api/v1`) are this app's first real
+forgot-password flow, and the first feature that sends a real email
+(`Illuminate\Auth\Notifications\ResetPassword`, synchronous — no
+queued job exists in this app yet). Both endpoints always return the
+identical response regardless of what actually happened server-side:
+
+- `POST /forgot-password` always redirects back with the same flashed
+  `status` message, whether the email matches a real user, matches a
+  user in a *different* tenant, matches a platform admin requested from
+  a tenant subdomain, or doesn't exist at all. A real reset link is
+  only ever generated and emailed in the one case where the email
+  resolves to a user actually eligible to authenticate on the current
+  domain — the identical tenant/platform-admin check `POST /login`
+  already performs.
+- `POST /reset-password` always throws the same single generic
+  validation error (on the `email` field) for every rejection — invalid
+  token, expired token, no such user, or a technically-valid token+email
+  submitted from the wrong tenant's subdomain. On success, it redirects
+  to `/login` with a flashed `status` message; the new password is
+  hashed via the same `'password' => 'hashed'` cast every other write
+  path in this app already relies on (Checkpoint 43's `POST /api/v1/users`,
+  `UserSeeder`).
+
+The emailed link itself is tenant-aware — `AppServiceProvider::boot()`
+builds it against the target user's own `{subdomain}.{base_domain}`
+(or the base domain for a platform admin), never the host the
+`/forgot-password` request happened to arrive on. See
+`docs/security.md#password-reset-checkpoint-44` for the full security
+design, including why the tenant check is enforced independently at
+both the send and reset steps.
 
 ## Audit Logs
 
@@ -549,6 +586,10 @@ served through the `web` middleware group, session-based auth same as
 | `GET` | `/login` | `guest` | Renders `Auth/Login`; redirects to `/dashboard` if already authenticated |
 | `POST` | `/login` | `guest` | Content-negotiated — JSON for `Accept: application/json`, redirect otherwise. See `docs/security.md` |
 | `POST` | `/logout` | `auth` | Same content negotiation |
+| `GET` | `/forgot-password` | `guest` | **New in Checkpoint 44** — renders `Auth/ForgotPassword` |
+| `POST` | `/forgot-password` | `guest` | Body: `{"email": "..."}`. Always redirects back with the same flashed `status` message regardless of outcome — see "Password Reset" below |
+| `GET` | `/reset-password/{token}` | `guest` | Renders `Auth/ResetPassword` with `token` (route param) and `email` (`?email=` query string) as props — neither is looked up or validated here |
+| `POST` | `/reset-password` | `guest` | Body: `{"token": "...", "email": "...", "password": "...", "password_confirmation": "..."}`. Redirects to `/login` with a flashed `status` message on success; a single generic validation error on `email` otherwise — see "Password Reset" below |
 | `GET` | `/dashboard` | `auth`, `tenant.matches` | Real UI (Checkpoint 21) — explicit active-user/active-tenant/`dashboard.view` checks in the controller (no blanket `permission:` middleware, since Platform Super Admin must still reach this page safely — see `docs/security.md#dashboard-foundation`); fetches summary cards client-side from `/api/v1/dashboard`, skipped entirely for platform admins |
 | `GET` | `/employees` | `auth`, `tenant.matches`, `permission:employees.view` | Real UI (Checkpoint 17) — list, fetched client-side from `/api/v1/employees` |
 | `GET` | `/employees/create` | `auth`, `tenant.matches`, `permission:employees.create` | Create form |

@@ -2427,3 +2427,78 @@ biggest remaining gap — see `docs/security.md`), self-service password
 change, MFA, bulk user import, and a "resend/reset credentials" action
 for an account created here. None of these were part of this
 checkpoint's scope.
+
+## Password Reset (Checkpoint 44)
+
+Closes the "biggest remaining gap" Checkpoint 43 itself flagged. See
+[`security.md`](security.md#password-reset-checkpoint-44) for the full
+security model and [`api.md`](api.md#password-reset) for the route
+reference.
+
+**Four new guest-only routes, alongside `login`/`logout` in
+`routes/auth.php` — not under `/api/v1`.** `GET`/`POST /forgot-password`
+and `GET`/`POST /reset-password` follow the exact route-naming
+convention Laravel's own password-reset broker expects
+(`password.request`/`password.email`/`password.reset`/`password.store`),
+since `Illuminate\Auth\Notifications\ResetPassword`'s default URL
+builder calls `route('password.reset', ...)` internally. Living outside
+`/api/v1` matches this app's existing boundary: `/login`/`/logout` are
+the only other guest-reachable, non-tenant-scoped auth endpoints, and
+they aren't under that prefix either.
+
+**No `tenant.matches` on any of the four — correctly, not an
+oversight.** That middleware only ever acts on an authenticated
+`$request->user()` (`EnsureTenantMatchesAuthenticatedUser` returns
+early when there is none); none of these routes ever have one. Tenant
+boundary enforcement lives entirely in `ForgotPasswordRequest`/
+`ResetPasswordRequest` instead — see `docs/security.md` for exactly how.
+`route:audit-tenant-scoping` already excludes `login`/`logout` by
+prefix and only checks routes that actually carry `auth` middleware in
+the first place, so these new routes need no exclusion-list entry — the
+audit correctly never flags them (0 additions to "missing" either way).
+
+**`ResetPassword::createUrlUsing()` in `AppServiceProvider::boot()` is
+the one place a tenant-aware reset URL gets built.** Given a `User`,
+it resolves `{subdomain}.{base_domain}` from `$user->tenant` (falling
+back to the base domain for `is_platform_admin`/no-tenant users), reusing
+the identical subdomain-composition logic `ResolveTenant` middleware
+already uses in reverse (there subdomain → tenant; here tenant →
+subdomain). The scheme comes from `config('app.url')`, not the current
+request — this runs at `POST /forgot-password` time, but there's no
+principled reason the *notified* user's own link should depend on
+whichever scheme the sender happened to use.
+
+**`ForgotPasswordRequest`/`ResetPasswordRequest` duplicate, rather than
+share, the tenant-eligibility check.** The same three-line
+platform-admin-vs-tenant ternary now exists in four places
+(`LoginRequest::isAllowedToLoginHere()`, `EnsureTenantMatchesAuthenticatedUser`,
+and these two new requests) — each validates a different kind of input
+(a login attempt, an authenticated session, an emailed token, a bare
+email address with no session at all), so this follows the same
+"duplicated, not prematurely shared" precedent `StoreUserRequest`
+already set for its own employee-state check in Checkpoint 43, rather
+than introducing a new trait/helper four call sites deep.
+
+**No queued job — the first email this app sends, and it sends
+synchronously.** Nothing in this codebase implements `ShouldQueue` yet
+(see `docs/deployment.md`); rather than make this checkpoint the one
+that introduces queueing, the notification is dispatched synchronously
+inside the same request, exactly as `MAIL_MAILER=log`'s existing
+local/demo posture already implied it eventually would.
+
+**A new shared Inertia prop, `status`.** `HandleInertiaRequests` now
+shares `session('status')` — the first page-to-page, one-time success
+message anywhere in this frontend (every other success/error message in
+this app is either an Inertia validation-error redirect, like
+`/login`, or local component state driven by a direct axios `api` call,
+like every Settings/Employees page). `ForgotPassword.tsx` and
+`Login.tsx` (after a successful reset redirects there) both render it
+as a green banner when present.
+
+### Future
+
+A real invite-email flow reusing this checkpoint's tenant-aware URL
+approach, queuing the reset email once a real queue worker exists, a
+post-reset confirmation email, and IP-based rate limiting on top of the
+existing per-email throttle. None of these were part of this
+checkpoint's scope.

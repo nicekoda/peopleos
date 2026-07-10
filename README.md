@@ -640,6 +640,33 @@ the audit log. HR Manager is granted `users.create` alongside the
 `employees.view`/`document_categories.view` in earlier checkpoints. See
 `docs/architecture.md` and `docs/security.md` for the full design.
 
+## Password Reset (Checkpoint 44)
+
+Closes the single biggest gap Checkpoint 43 itself flagged: there was
+no way for any user — including one just created via `POST /api/v1/users`
+— to set or reset their own password. Adds a real forgot-password flow
+(`GET`/`POST /forgot-password`, `GET`/`POST /reset-password`, alongside
+`login`/`logout` in `routes/auth.php`, not under `/api/v1`) built on the
+`password_reset_tokens` table that's existed unused since Laravel's
+default scaffold — and, in the process, the first real email this app
+sends (`Illuminate\Auth\Notifications\ResetPassword`). **Never reveals
+whether an email exists or which tenant it belongs to**: every response
+is identical regardless of outcome, the same non-enumerating posture
+`LoginRequest` already established for bad credentials. The tenant
+boundary is enforced twice, independently — once when deciding whether
+to actually send a link, once again when a token is redeemed — the same
+platform-admin-vs-tenant check `LoginRequest`/`EnsureTenantMatchesAuthenticatedUser`
+already perform, duplicated rather than shared across four call sites
+now. The emailed link itself is tenant-aware (`AppServiceProvider::boot()`
+builds it against the target user's own subdomain, never the requesting
+host), which is what makes the *matched* case actually land somewhere
+useful. Sends synchronously — deliberately not the first checkpoint to
+introduce a queued job, since nothing in this app queues anything yet.
+**Still no invite-email flow** — Checkpoint 43's create action still
+requires the admin to set a real initial password directly; this
+checkpoint only adds a way to change it afterward. See
+`docs/architecture.md` and `docs/security.md` for the full design.
+
 ## Documentation
 
 - [`docs/architecture.md`](docs/architecture.md) — multi-tenancy, tenant resolution, RBAC overview, internal-vs-public IDs, frontend architecture.

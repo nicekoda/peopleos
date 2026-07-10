@@ -69,6 +69,19 @@ class HandleInertiaRequests extends Middleware
                 'id' => $tenant->id,
                 'name' => $tenant->name,
             ] : null,
+            // Checkpoint 44 — the first page in this app that redirects
+            // back to itself (or elsewhere) with a one-time success
+            // message, rather than either staying on an API-driven page
+            // with local component state, or redirecting straight to a
+            // new authenticated page. Session-flashed, read once
+            // (Laravel clears it after the next request automatically).
+            // Only added to the props array at all when a flash actually
+            // exists — every "page props contain only IDs" test across
+            // this app (Employees, Departments, Leave, Policies, and
+            // more) asserts an exact key list, and every one of those
+            // pages is reached via a plain GET with no flash, so this
+            // must never appear as a spurious null-valued key on them.
+            ...($request->session()->has('status') ? ['status' => $request->session()->get('status')] : []),
         ];
     }
 }

@@ -127,7 +127,7 @@ the frontend is never the security boundary in this app.
 
 ## 6. Known Limitations
 
-- No invitation flow, password reset UI, MFA, or SSO — demo users are pre-seeded, not self-registered.
+- No invitation flow, MFA, or SSO — demo users are pre-seeded, not self-registered. A real password reset flow exists (Checkpoint 44 — "Forgot your password?" on the login page), though demo users shouldn't need it since credentials are already documented above.
 - No RBAC role/permission *editing* UI yet — roles/permissions are viewable, not editable, from the UI.
 - No payroll, performance, notifications, exports, or analytics charts. Onboarding/Offboarding (Checkpoint 33) exists as a foundation — no task templates, approval routing, or notifications yet.
 - HR Documents & Letter Generation (Checkpoint 34) has no DOCX file, e-signature, automated sending, bulk generation, or employee self-service download. PDF download was added in Checkpoint 35 — generated on demand, never stored on disk, with a plain-text "not yet approved" banner on any non-approved document (Checkpoint 37). Template version history was added in Checkpoint 36 — no diff/compare view between versions. A single-approver approval workflow was added in Checkpoint 37 — no multi-level approval routing and no notifications when a document changes state. 8 starter templates and a Duplicate action were added in Checkpoint 38 — tenant-specific only (seeded for `uesl` only, not a global/shared library, and not automatically seeded for new tenants), no AI generation.

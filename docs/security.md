@@ -3017,13 +3017,16 @@ internal appears anywhere in either resource's response.
 
 ### Current limitations
 
-- No user invitation flow — an admin-driven create action now exists
+- No user invitation flow — an admin-driven create action exists
   (`POST /api/v1/users`, Checkpoint 43 — see
   [User Account Provisioning](#user-account-provisioning-checkpoint-43)
-  below), but there's still no self-service signup, no invite-email,
-  and no password-reset flow: the admin creating the account sets its
-  real initial password directly.
-- No password reset UI, MFA setup, or SSO configuration.
+  below), and a real self-service password reset flow exists (Checkpoint
+  44 — see
+  [Password Reset](#password-reset-checkpoint-44) below), but there's
+  still no invite-email specifically: the admin creating an account
+  still sets its real initial password directly, rather than the new
+  user setting their own via a reset-style link on first login.
+- No MFA setup or SSO configuration.
 - No direct permission grant UI — `GET /api/v1/permissions` is
   read-only and unused by any write path this checkpoint; direct
   grants (`UserPermission`, Checkpoint 4) remain API/tinker-only.
@@ -3037,11 +3040,12 @@ internal appears anywhere in either resource's response.
 
 ### Future
 
-- A real invite-email/password-reset flow — the biggest remaining gap
-  after Checkpoint 43's admin-driven create action; see
-  [User Account Provisioning](#user-account-provisioning-checkpoint-43)
-  below.
-- Password reset and MFA setup UI.
+- An invite-email flow specifically (new-account creation still sets a
+  real password directly rather than emailing a set-your-own-password
+  link) — the remaining gap after Checkpoint 43's create action and
+  Checkpoint 44's password reset flow; see
+  [Password Reset](#password-reset-checkpoint-44) below.
+- MFA setup UI.
 - A direct permission grant UI, reusing `User::grantPermission()`/
   `revokePermission()` (already built, Checkpoint 4).
 - Temporary/time-boxed permissions (an `expires_at` column on
@@ -5255,6 +5259,117 @@ cannot create, edit, or delete roles (no `roles.create/update/delete`).
   option once that flow exists.
 - Bulk/CSV user import.
 
+## Password Reset (Checkpoint 44)
+
+Adds this app's first real forgot-password flow — `GET`/`POST
+/forgot-password` and `GET`/`POST /reset-password` — and, in the
+process, the first real email this app ever sends. See
+[`architecture.md`](architecture.md#password-reset-checkpoint-44) for
+the technical writeup; this section covers the security design.
+
+### Never reveals whether an email exists, or which tenant it belongs to
+
+`POST /forgot-password` always returns the identical redirect and
+flashed message — `"If an account exists for that email, we've sent a
+password reset link."` — regardless of whether the email matches a
+real user, matches a user in a *different* tenant, or matches a
+platform admin being requested from a tenant subdomain. This is the
+same non-enumerating posture `LoginRequest` already established for bad
+credentials (`"These credentials do not match our records."` either
+way). `POST /reset-password` mirrors it: every rejection (invalid
+token, expired token, no such user, wrong-tenant submission) surfaces
+the identical generic message, `"This password reset link is invalid or
+has expired."`
+
+### The tenant boundary is enforced twice — once at send, once at reset
+
+Both `ForgotPasswordRequest::sendResetLinkIfEligible()` and
+`ResetPasswordRequest::reset()` independently re-implement the same
+platform-admin-vs-tenant-vs-resolved-tenant check `LoginRequest::isAllowedToLoginHere()`
+and `EnsureTenantMatchesAuthenticatedUser` already perform elsewhere —
+duplicated, not shared (same reasoning already documented for
+`StoreUserRequest`'s duplicated employee-state check in Checkpoint 43:
+these three call sites validate against different sources — an
+authenticated session, a login attempt, and here, an email address with
+no session at all — not worth a premature shared helper).
+
+- **At send time**: a request for `user@tenantA.example` arriving on
+  tenant B's subdomain (or the base domain, or vice versa for a
+  platform admin) never gets `Password::sendResetLink()` called at all
+  — no token is even generated, let alone emailed.
+- **At reset time**: even a genuinely valid token+email pair (the real
+  secret proving the requester received the email) is still rejected if
+  the `POST /reset-password` request arrives on the wrong tenant's
+  subdomain. In the normal flow this never triggers — the emailed link
+  is itself tenant-aware (see below) and always lands the user back on
+  their own subdomain — but it's a real, independent check, not
+  incidental.
+
+### The reset link is tenant-aware, because nothing else would make it usable
+
+`User` has no `BelongsToTenant` scope and no request context to infer a
+host from at notification-build time, so Laravel's default
+`ResetPassword` notification (which builds its URL via a plain
+`route()` call) would never reliably point back to the *right*
+`{subdomain}.{base_domain}`. `AppServiceProvider::boot()` registers
+`ResetPassword::createUrlUsing()` to build the URL explicitly: a tenant
+user's link always points to their own tenant's subdomain; a platform
+admin's (`is_platform_admin` true, or no tenant at all) points to the
+base domain. This runs at send time, inside the same request that
+validated eligibility above — so a link is only ever built for a user
+who actually passed the tenant-boundary check in the first place.
+
+### Every attempt is audit-logged — sent or not, succeeded or not
+
+`password_reset.requested` is written for every `POST /forgot-password`
+call, whether or not a real link was sent (`target_user_id` is `null`
+and `metadata.attempted_email` is recorded when the email doesn't
+resolve to a real user, the same shape `login.failed` already uses).
+`password_reset.completed` / `password_reset.failed` are written for
+every `POST /reset-password` call. None of these ever record the
+token or the new password — `AuditLogger`'s existing `password`/`token`
+substring masking would catch it even if a future edit accidentally
+tried.
+
+### No queued email — a deliberate, documented choice, not an oversight
+
+Nothing in this app implements `ShouldQueue` yet (see
+`docs/deployment.md` "Queue/Cache/Session Readiness" — `QUEUE_CONNECTION`
+is configured but unused in practice). The `ResetPassword` notification
+sends synchronously, inside the same request that handles
+`POST /forgot-password`. This is fine at foundation-stage traffic
+levels and keeps this checkpoint from being the first to introduce a
+queued job; revisit once a queue worker is actually part of this app's
+deployment story.
+
+### Current limitations
+
+- No invite-email flow specifically — creating a new account
+  (Checkpoint 43) still requires the admin to set a real initial
+  password directly; this checkpoint didn't change that flow, only
+  added a way for *any* existing account (including one just created)
+  to reset its own password afterward.
+- No rate limiting beyond Laravel's own built-in per-email token
+  throttle (`config('auth.passwords.users.throttle')`, 60 seconds) — no
+  additional IP-based throttling on `/forgot-password` itself.
+- No "your password was changed" confirmation email after a successful
+  reset — only the audit log records it.
+- Password reset emails are sent synchronously (see above) — a slow
+  mail provider in production would add latency directly to the
+  `POST /forgot-password` request.
+- `MAIL_MAILER=log` locally (see `.env.example`) means the actual reset
+  link only ever appears in `storage/logs/laravel.log`, not a real
+  inbox, until a real mail provider is configured.
+
+### Future
+
+- A real invite-email flow for Checkpoint 43's create action, reusing
+  this checkpoint's tenant-aware URL-building approach.
+- Queue the reset email once this app has a real queue worker story.
+- A post-reset confirmation email.
+- IP-based rate limiting on `/forgot-password`, on top of the existing
+  per-email throttle.
+
 ## Local Demo Credentials
 
 **Local development only — these are not real secrets and only work against your own local database.** Password comes from `SEED_USER_PASSWORD` in `.env` (not committed; `.env.example` has an empty placeholder).
@@ -5282,7 +5397,7 @@ data these six `uesl` logins see (Checkpoint 26's `DemoDataSeeder`).
 ## Known Limitations / Follow-up
 
 - No email verification enforcement on login (column exists, not yet checked).
-- No password reset flow yet (table exists from Laravel's default scaffold, unused).
+- Password reset exists as of Checkpoint 44 (the `password_reset_tokens` table, previously unused, now backs a real forgot-password flow) — see [Password Reset](#password-reset-checkpoint-44) below. Still no invite-email, MFA, or SSO.
 - `DatabaseSeeder` uses `WithoutModelEvents`, which disables the `saving`/`creating` guards (on `User` and `Role`) during seeding. `UserSeeder`/`RoleSeeder` set `tenant_id`/`is_platform_admin`/`is_platform_role` explicitly on every row regardless, so this doesn't cause incorrect data — but it does mean a same-row consistency mistake in seed data would surface as a raw Postgres constraint error rather than the cleaner app-level exception. (The RBAC *assignment* guards — `assignRole()`, `givePermissionTo()`, `grantPermission()` — and audit logging calls are unaffected by this, since they're plain method logic, not Eloquent events.)
 - See "Current limitations" under Audit Logging above for the audit-specific gaps (no read endpoint, `givePermissionTo()`/tenant CRUD not logged yet).
 - No permission caching — `hasPermission()` hits the database on every call (two queries: role-permission lookup, direct-grant lookup). Fine for foundation-stage traffic; revisit if it becomes a hot path.

@@ -190,6 +190,11 @@ Route::middleware(['auth', 'tenant.matches'])->group(function () {
     // 'settings/access/users/{user}' so Laravel doesn't collide the two.
     Route::get('settings/access/users', [UsersAccessUiController::class, 'users'])
         ->middleware('permission:users.view')->name('settings.access.users');
+    // Checkpoint 43 — 'create' must be registered before '{user}' so
+    // Laravel doesn't collide the two, same ordering rule already
+    // followed for roles/create below.
+    Route::get('settings/access/users/create', [UsersAccessUiController::class, 'userCreate'])
+        ->middleware('permission:users.create')->name('settings.access.users.create');
     Route::get('settings/access/users/{user}', [UsersAccessUiController::class, 'show'])
         ->middleware('permission:users.view')->name('settings.access.users.show');
     Route::get('settings/access/roles', [UsersAccessUiController::class, 'roles'])

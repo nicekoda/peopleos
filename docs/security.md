@@ -2837,8 +2837,9 @@ every Settings page's shared props.
 
 ### Future
 
-- Full user management UI (invite, deactivate, assign roles), building
-  on the already-seeded `users.*` permissions.
+- Full user management UI (deactivate and assign roles already exist
+  since Checkpoint 23; create now exists since Checkpoint 43 — a real
+  invite-email flow is the remaining piece).
 - Full RBAC management UI (create/edit roles, assign permissions),
   building on the already-seeded `roles.*`/`permissions.*` permissions.
 - Document category and leave type admin UIs, reusing existing APIs.
@@ -3016,9 +3017,12 @@ internal appears anywhere in either resource's response.
 
 ### Current limitations
 
-- No user invitation flow — users are still created only via
-  `UserSeeder`/`tinker`; no self-service signup or admin-driven invite
-  exists.
+- No user invitation flow — an admin-driven create action now exists
+  (`POST /api/v1/users`, Checkpoint 43 — see
+  [User Account Provisioning](#user-account-provisioning-checkpoint-43)
+  below), but there's still no self-service signup, no invite-email,
+  and no password-reset flow: the admin creating the account sets its
+  real initial password directly.
 - No password reset UI, MFA setup, or SSO configuration.
 - No direct permission grant UI — `GET /api/v1/permissions` is
   read-only and unused by any write path this checkpoint; direct
@@ -3033,7 +3037,10 @@ internal appears anywhere in either resource's response.
 
 ### Future
 
-- A user invitation flow, once a real signup/onboarding story exists.
+- A real invite-email/password-reset flow — the biggest remaining gap
+  after Checkpoint 43's admin-driven create action; see
+  [User Account Provisioning](#user-account-provisioning-checkpoint-43)
+  below.
 - Password reset and MFA setup UI.
 - A direct permission grant UI, reusing `User::grantPermission()`/
   `revokePermission()` (already built, Checkpoint 4).
@@ -5142,6 +5149,111 @@ existing closure.
 - A `source_template_id` trace column, if a future need arises to
   distinguish template-derived tasks from manually created ones beyond
   what the audit log already records.
+
+## User Account Provisioning (Checkpoint 43)
+
+Adds the first user-creation endpoint in this app,
+`POST /api/v1/users`. See
+[`architecture.md`](architecture.md#user-account-provisioning-checkpoint-43)
+for the technical writeup; this section covers the security design.
+
+### A reserved permission, finally wired up — not a new one invented
+
+`users.create` was seeded back in Checkpoint 23 alongside `users.view`/
+`users.deactivate`/`users.assign_role` as a natural CRUD verb, but no
+route ever checked it until this checkpoint. Reusing it means the
+permission catalog doesn't grow for this feature, and any tenant that
+had (unusually) already granted `users.create` to a custom role gets
+the new capability automatically — the same "permission was already
+the right shape, just unused" situation `hr_document_templates.publish`
+was in before Checkpoint 36 wired it up.
+
+### One permission gates a compound action, on purpose
+
+`POST /api/v1/users` requires only `users.create` — not additionally
+`users.assign_role` (even though the endpoint assigns a role) or
+`employees.link_user` (even though it can link an employee in the same
+request). This mirrors the precedent `job_applications.convert_to_employee`
+already set: a single, deliberately-chosen permission gates a
+multi-effect action, rather than requiring the caller to separately
+hold every permission for each individual effect. `User::assignRole()`
+still independently re-checks platform-vs-tenant role scope as a
+backstop (unreachable given `StoreUserRequest`'s own validation, kept
+anyway per this app's layered-guard convention).
+
+### Role and employee validated exactly like their existing single-purpose actions
+
+`role_id` uses the identical tenant-and-scope-restricted `Rule::exists()`
+`AssignUserRoleRequest` already uses (a tenant role, not a platform
+role, belonging to the current tenant). `employee_id` (optional) is
+checked against the same two preconditions `LinkEmployeeUserRequest`
+already enforces for linking an *existing* user — not already linked,
+not terminated — just evaluated against the `employee_id` request
+input instead of a route-bound model, since this endpoint has no
+employee route parameter.
+
+### Transactional — creation, role assignment, and the optional link succeed or fail together
+
+`UserController::store()` wraps `User::create()`, `assignRole()`, and
+the conditional `Employee::update()` in one `DB::transaction()`. There
+is no window where the account exists without a role, or where an
+`employee_id` was accepted but the link silently didn't happen.
+
+### Deliberately manual, never automatic — matching this app's existing linking philosophy
+
+Per your explicit approved scope choice, this is a separate, standalone
+action — never triggered by `JobApplicationController::convertToEmployee()`
+(Checkpoint 40) or `::startOnboarding()` (Checkpoint 41). Both of those
+endpoints' docblocks already stated "no user account... created
+automatically" before this checkpoint existed, and that remains true.
+This mirrors `EmployeeUserLinkController`'s own documented rule that
+linking an existing user is always a deliberate action, never a side
+effect — creating one now follows the identical philosophy.
+
+### The password is never returned, logged, or recoverable through this app
+
+`StoreUserRequest` requires `password` (`confirmed`, `Password::min(8)`)
+— the caller sets the account's real initial password directly, since
+no invite-email/password-reset flow exists (see "Current limitations").
+`UserResource` already excluded `password`/`remember_token` before this
+checkpoint (Checkpoint 23's own `#[Hidden(...)]` attribute on the
+model). The `user.created` audit log's `new_values` records only
+`name`/`email`/`role_id`/`employee_id` — never the password, matching
+every other "never the sensitive input itself" audit log in this app
+(cover letters, rejection reasons, leave reasons, document contents).
+
+### `roles.view` granted to HR Manager for a real, functional reason
+
+The Create User page's role picker calls `GET /api/v1/roles`, which
+independently requires `roles.view` — a permission HR Manager never
+held before this checkpoint. Granting it alongside `users.create` isn't
+a separate trust decision; it's the same "a real gap found while
+building the form" pattern already used for `employees.view`/
+`document_categories.view` in Checkpoints 19/33. HR Manager still
+cannot create, edit, or delete roles (no `roles.create/update/delete`).
+
+### Current limitations
+
+- No invite-email or password-reset flow — the caller sets the real
+  password directly; there is no way for the new user to set their own
+  password without the creator sharing it out of band.
+- No "resend/reset credentials" action for an account created this way.
+- No email verification is enforced (same pre-existing gap as every
+  other user in this app — `email_verified_at` is set immediately,
+  matching `UserSeeder`'s own convention, but nothing ever checks it).
+- No bulk user import or CSV-based provisioning.
+- HR Officer, Line Manager, Employee, and Auditor do not hold
+  `users.create` — only Tenant Admin and HR Manager can create user
+  accounts this checkpoint, the same trust boundary already applied to
+  `employees.link_user`/`unlink_user`.
+
+### Future
+
+- A real invite-email/password-reset flow — the single biggest gap
+  this checkpoint deliberately leaves open.
+- A "resend credentials" or forced-password-change-on-first-login
+  option once that flow exists.
+- Bulk/CSV user import.
 
 ## Local Demo Credentials
 

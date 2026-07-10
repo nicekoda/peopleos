@@ -2341,3 +2341,89 @@ assign IT-setup tasks to the IT Support role") per template; a
 it came from; notifications when a template-derived task's due date
 arrives or passes; and reordering/duplicating templates in bulk. None
 of these were part of this checkpoint's scope.
+
+## User Account Provisioning (Checkpoint 43)
+
+Closes a gap older than the recruitment/lifecycle chain itself. See
+[`security.md`](security.md#user-account-provisioning-checkpoint-43)
+for the full security model and
+[`api.md`](api.md#user-account-provisioning) for the route reference.
+
+**`users.create` was reserved, not invented.** It was seeded back in
+Checkpoint 23 alongside `users.view`/`users.deactivate`/`users.assign_role`
+as part of a natural CRUD verb set, but no route ever used it — the
+only way a `User` row could ever come into existence was `UserSeeder`
+or `tinker`. `UserController::store()` is the first controller action
+in this app to use it. No new permission was invented for this
+checkpoint; the reserved one was simply wired up, the same "find and
+use what was already seeded ahead of time" pattern Checkpoint 36 used
+for `hr_document_templates.publish`.
+
+**One endpoint does three things atomically: create, assign a role,
+optionally link.** `POST /api/v1/users` runs inside a single
+`DB::transaction()`: `User::query()->create(...)`, then
+`$user->assignRole($role, $actor)` (reusing `HasPermissions::assignRole()`
+unchanged — it independently re-checks platform-vs-tenant scope and
+writes its own `role.assigned` audit log, the same layered-guard shape
+`UserRoleController` already relies on), then, only if `employee_id`
+was given, the identical `user_id`/`linked_at`/`linked_by` update
+`EmployeeUserLinkController::store()` already performs. There is no
+moment where the account exists unassigned or the employee is
+momentarily still unlinked if a later step were to fail.
+
+**`employee_id` is optional, and validated the same way linking an
+*existing* user already is.** `StoreUserRequest` re-implements
+`LinkEmployeeUserRequest`'s two employee-state checks (not already
+linked, not terminated) against the employee resolved from the
+`employee_id` *input* rather than a route-bound model, since this
+request has no route parameter to read the employee from. Duplicated
+logic, not shared, because the two requests validate against
+structurally different sources.
+
+**Deliberately a separate, explicit action — never automatic.** Your
+approved scope choice: account creation is never triggered by
+`JobApplicationController::convertToEmployee()` (Checkpoint 40) or
+`::startOnboarding()` (Checkpoint 41) — both endpoints' own docblocks
+already said "no user account... is created automatically" before this
+checkpoint, and that sentence stays true after it. This mirrors
+`EmployeeUserLinkController`'s own documented rule that linking an
+existing user is always a deliberate, manual action, never a side
+effect of something else.
+
+**Still no password-reset or invite-email flow.** The caller (an HR
+Manager or Tenant Admin) sets the account's real initial password
+directly in the create form, confirmed by a second field
+(`password_confirmation`, Laravel's `confirmed` rule) so a typo isn't
+silently locked in. The password is never returned in the API response
+(`UserResource` already excluded it before this checkpoint) and never
+written to the `user.created` audit log's `new_values` — only
+`name`/`email`/`role_id`/`employee_id`. This is a real, documented
+limitation, not a silently patched one — see "Future" below.
+
+**Frontend: a new Settings > Access > Users > Create page, plus a
+shortcut from the Employee detail page.** `Settings/AccessUserCreate.tsx`
+follows `Lifecycle/Create.tsx`'s own `?employeeId=` query-param
+convention exactly — a pre-fill for the employee dropdown's initial
+selection, never a trusted value; the actual `employee_id` sent to the
+backend is always whatever the form currently holds. `EmployeesShow.tsx`
+gained a new "User account" card: a "Create user account" link (gated
+by `users.create`, shown only when `EmployeeResource`'s new
+`linked_user` field is `null`) that pre-selects that employee on the
+Create page, or the linked user's name (linking to their Settings >
+Access > Users detail page, gated by `users.view`) once one exists.
+
+**`EmployeeResource` gained `linked_user: {id, name} | null`** —
+mirrors `UserResource`'s own `linked_employee` shape in reverse, same
+"safe display summary, never the full related record" rule (no email,
+status, or roles). Required eager-loading `Employee::user()` (an
+existing relation, previously unused by `EmployeeController`) alongside
+`department`/`location`/`position` on every action that already loads
+those.
+
+### Future
+
+Documented, not built: a real password-reset/invite-email flow (the
+biggest remaining gap — see `docs/security.md`), self-service password
+change, MFA, bulk user import, and a "resend/reset credentials" action
+for an account created here. None of these were part of this
+checkpoint's scope.

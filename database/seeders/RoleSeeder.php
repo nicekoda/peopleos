@@ -103,7 +103,23 @@ class RoleSeeder extends Seeder
             'leave_types.view', 'leave_types.create', 'leave_types.update', 'leave_types.delete',
             'leave.view', 'leave.view_all', 'leave.request', 'leave.approve', 'leave.reject', 'leave.cancel',
             'announcements.view', 'announcements.create', 'announcements.publish',
-            'users.view',
+            // users.view since Checkpoint 23. users.create + roles.view
+            // added Checkpoint 43 — users.create was seeded back in
+            // Checkpoint 23 for forward compatibility but never wired to
+            // a route until now (see docs/security.md). Same trust
+            // boundary already extended to HR Manager for
+            // employees.link_user/unlink_user below: creating (and
+            // optionally linking) a user account is a natural extension
+            // of the create/update trust this role already holds over
+            // both employees and, now, users. roles.view is granted
+            // alongside it for a real functional reason, not a separate
+            // trust decision: the create-user form's role picker calls
+            // GET /roles, which independently requires roles.view — the
+            // same "a real gap found while building the form" pattern
+            // already used for employees.view/document_categories.view
+            // in Checkpoints 19/33. HR Manager still cannot create,
+            // edit, or delete roles (no roles.create/update/delete).
+            'users.view', 'users.create', 'roles.view',
             // Not archive/export_acknowledgements — reserved for Tenant
             // Admin, per the master spec's own suggested carve-out.
             'policies.view', 'policies.create', 'policies.update', 'policies.publish',

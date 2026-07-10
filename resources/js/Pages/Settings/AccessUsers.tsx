@@ -5,6 +5,7 @@ import PageHeader from '@/Components/PageHeader';
 import Badge from '@/Components/Badge';
 import EmptyState from '@/Components/EmptyState';
 import LoadingState from '@/Components/LoadingState';
+import PermissionGate from '@/Components/PermissionGate';
 import { api, toApiError, redirectIfUnauthenticated, ApiError } from '@/lib/api';
 import { PaginatedResponse, User, UserStatus } from '@/types/user';
 
@@ -50,9 +51,19 @@ export default function SettingsAccessUsers() {
                 title="Users"
                 description="Tenant user accounts"
                 actions={
-                    <Link href="/settings/access" className="text-sm font-medium text-indigo-600 hover:text-indigo-500">
-                        Back to Users &amp; Access
-                    </Link>
+                    <div className="flex items-center gap-3">
+                        <Link href="/settings/access" className="text-sm font-medium text-indigo-600 hover:text-indigo-500">
+                            Back to Users &amp; Access
+                        </Link>
+                        <PermissionGate permission="users.create">
+                            <Link
+                                href="/settings/access/users/create"
+                                className="inline-flex items-center justify-center gap-2 rounded-md bg-indigo-600 px-3.5 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500"
+                            >
+                                Create user
+                            </Link>
+                        </PermissionGate>
+                    </div>
                 }
             />
 

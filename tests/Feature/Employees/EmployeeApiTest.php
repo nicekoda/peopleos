@@ -357,6 +357,39 @@ class EmployeeApiTest extends TestCase
     }
 
     /**
+     * Checkpoint 43 — linked_user mirrors UserResource's own
+     * linked_employee shape in reverse: null unless a user account is
+     * actually linked, otherwise {id, name} only, never the full User
+     * record (no email/status/roles).
+     */
+    public function test_employee_resource_exposes_linked_user_id_and_name_only(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $viewer = $this->userWithPermission($tenant, 'employees.view');
+        $linkedUser = User::factory()->create(['tenant_id' => $tenant->id, 'name' => 'Ada Lovelace', 'email' => 'ada@example.com']);
+        $employee = Employee::factory()->create(['tenant_id' => $tenant->id, 'user_id' => $linkedUser->id]);
+
+        $response = $this->actingAs($viewer)->getJson($this->url($tenant, "employees/{$employee->id}"));
+
+        $response->assertOk();
+        $response->assertJsonPath('data.linked_user.id', $linkedUser->id);
+        $response->assertJsonPath('data.linked_user.name', 'Ada Lovelace');
+        $this->assertStringNotContainsString('ada@example.com', json_encode($response->json('data.linked_user')));
+    }
+
+    public function test_employee_resource_linked_user_is_null_when_unlinked(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $viewer = $this->userWithPermission($tenant, 'employees.view');
+        $employee = Employee::factory()->create(['tenant_id' => $tenant->id, 'user_id' => null]);
+
+        $response = $this->actingAs($viewer)->getJson($this->url($tenant, "employees/{$employee->id}"));
+
+        $response->assertOk();
+        $response->assertJsonPath('data.linked_user', null);
+    }
+
+    /**
      * manager_employee_id is deliberately not a validated field on
      * create as of Checkpoint 13 — a stray value in the request body is
      * silently ignored, not honored and not rejected. Manager

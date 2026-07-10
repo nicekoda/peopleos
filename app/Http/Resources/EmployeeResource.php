@@ -56,6 +56,16 @@ class EmployeeResource extends JsonResource
                 'name' => $this->position->name,
             ] : null,
             'manager_employee_id' => $this->manager_employee_id,
+            // Checkpoint 43 — mirrors UserResource's own linked_employee
+            // shape in reverse (id + a safe display name only, never the
+            // full User record). Drives the Employee detail page's
+            // "create/view user account" affordance without duplicating
+            // EmployeeUserLinkController/UserController's own
+            // independent permission checks.
+            'linked_user' => $this->user ? [
+                'id' => $this->user->id,
+                'name' => $this->user->name,
+            ] : null,
             'start_date' => $this->start_date?->toDateString(),
             'probation_end_date' => $this->probation_end_date?->toDateString(),
             'confirmation_date' => $this->confirmation_date?->toDateString(),

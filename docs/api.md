@@ -156,6 +156,7 @@ a backstop.
 | Method | Path | Permission | Notes |
 |---|---|---|---|
 | `GET` | `/api/v1/users` | `users.view` | Paginated, tenant users only (never platform admins) |
+| `POST` | `/api/v1/users` | `users.create` | **New in Checkpoint 43** — the first user-creation route in this app. Body: `{"name": "...", "email": "...", "password": "...", "password_confirmation": "...", "role_id": 1, "employee_id": "01h..." (optional)}`. Creates the account, assigns the role, and (if `employee_id` given) links an existing, unlinked, non-terminated employee — all inside one transaction. Never triggered automatically by conversion/onboarding — see "User creation" below |
 | `GET` | `/api/v1/users/{user}` | `users.view` | `404` if cross-tenant or a platform admin |
 | `PATCH` | `/api/v1/users/{user}` | `users.deactivate` | Body: `{"status": "active"\|"inactive"\|"suspended"}` — **only** `status` is accepted; `409` if this would leave the tenant with no active Tenant Admin |
 | `GET` | `/api/v1/roles` | `roles.view` | Paginated, tenant roles only (never platform roles) |
@@ -216,6 +217,32 @@ The Users & Access UI's link/unlink actions reuse the existing
 `POST`/`DELETE /employees/{employee}/link-user`/`unlink-user`
 (Checkpoint 11, documented under "User ↔ Employee Linking" above)
 unchanged — no new backend surface for linking exists this checkpoint.
+
+### User creation (Checkpoint 43)
+
+`POST /api/v1/users` is gated by `users.create` alone — not
+additionally `users.assign_role` or `employees.link_user`, even though
+it performs both a role assignment and (optionally) an employee link,
+mirroring the single-permission-gates-a-compound-action precedent
+`job_applications.convert_to_employee` already set. `role_id` is
+validated exactly like `POST /users/{user}/roles` above (a tenant role,
+never a platform role). `employee_id` is optional and validated exactly
+like the existing employee-linking action: the target employee must
+belong to the caller's own tenant, must not already be linked to a
+user, and must not be terminated (`422` with a `validation.errors.employee_id`
+message otherwise, not a raw exception). The response is the same
+`UserResource` shape shown above — the password is never included in
+it, and never written to the `user.created` audit log either.
+
+**Deliberately never automatic.** Unlike Checkpoint 42's task-template
+application (which every process-creation endpoint calls
+automatically), account creation is never triggered by
+`POST /job-applications/{id}/convert-to-employee` or
+`.../start-onboarding` — this stays a separate, explicit action the
+caller reaches on purpose. See
+`docs/security.md#user-account-provisioning-checkpoint-43` for the full
+design and current limitations (no invite-email/password-reset flow —
+the caller sets the account's real initial password directly).
 
 ## Audit Logs
 
@@ -331,6 +358,7 @@ all). Every other field is always present when known.
     "location": null,
     "position": null,
     "manager_employee_id": null,
+    "linked_user": null,
     "start_date": null,
     "probation_end_date": null,
     "confirmation_date": null,
@@ -339,6 +367,12 @@ all). Every other field is always present when known.
   }
 }
 ```
+
+**`linked_user` — added Checkpoint 43.** `null` unless a `User` account
+is already linked, otherwise `{"id": 7, "name": "Jane Doe"}` — mirrors
+`UserResource`'s own `linked_employee` shape in reverse (id + a safe
+display name only, never email/status/roles). Drives the Employee
+detail page's "create/view user account" affordance — see `docs/api.md#user-creation-checkpoint-43`.
 
 **`department`/`location`/`position` (Checkpoint 32)** each resolve to
 `{"id": "...", "name": "..."}` when the corresponding `*_id` field is
@@ -554,6 +588,7 @@ served through the `web` middleware group, session-based auth same as
 | `GET` | `/settings/company` | `auth`, `tenant.matches`, `permission:tenant.view` | Real UI — view/edit, fetched client-side from `/api/v1/tenant` |
 | `GET` | `/settings/access` | `auth`, `tenant.matches`, `permission:users.view` | Real hub UI (Checkpoint 23) — cards linking to Users and Roles pages |
 | `GET` | `/settings/access/users` | `auth`, `tenant.matches`, `permission:users.view` | Real UI — list, fetched client-side from `/api/v1/users` |
+| `GET` | `/settings/access/users/create` | `auth`, `tenant.matches`, `permission:users.create` | **New in Checkpoint 43** — create form (role picker from `/api/v1/roles`, optional employee picker from `/api/v1/employees`); registered before `/settings/access/users/{user}` to avoid route-param collision; accepts an optional `?employeeId=` query param (from an Employee detail page's "Create user account" link) that only pre-selects the employee dropdown |
 | `GET` | `/settings/access/users/{user}` | `auth`, `tenant.matches`, `permission:users.view` | Detail — passes only `userId` as a prop, never user data; `404` if the user belongs to another tenant or is a platform admin |
 | `GET` | `/settings/access/roles` | `auth`, `tenant.matches`, `permission:roles.view` | Real UI — read-only list, fetched client-side from `/api/v1/roles` |
 | `GET` | `/settings/document-categories` | `auth`, `tenant.matches`, `permission:document_categories.view` | Real UI (Checkpoint 25) — list, fetched client-side from `/api/v1/document-categories` |
@@ -1551,7 +1586,9 @@ blocks any further conversion attempt with a `422`.
 **No automatic side effects**: no `User` account, no role assignment,
 no onboarding process is started. The frontend links to the existing
 `/lifecycle/create?employeeId=...&type=onboarding` page as a manual
-next step.
+next step. A separate, explicit `POST /api/v1/users` action can create
+and link a `User` account afterward (Checkpoint 43, see "User creation"
+above) — but conversion itself still triggers nothing automatically.
 
 ## Recruitment-to-onboarding handoff
 
@@ -1603,7 +1640,7 @@ once set.
 - Task templates exist as of Checkpoint 42, but there's still no task dependencies/ordering, approval routing, notifications, or reminders for lifecycle processes/tasks (Checkpoint 33) — see `docs/security.md#onboarding--offboarding-foundation-checkpoint-33` and `docs/security.md#onboarding--offboarding-task-templates-foundation-checkpoint-42`.
 - No standalone `GET` for a single lifecycle task — see "Lifecycle Processes & Tasks" above.
 - No DOCX file generation, e-signature, automated sending, bulk generation, or employee self-service download for HR Documents (Checkpoint 34/35/36/37) — see `docs/security.md#hr-documents--letter-generation-foundation-checkpoint-34`. PDF export exists (Checkpoint 35) but is generate-on-demand only — every download re-renders from `rendered_content`, nothing is ever persisted. Template version history exists (Checkpoint 36) but has no diff/compare UI and no publish-approval workflow. A single-approver approval workflow exists (Checkpoint 37) but has no multi-level/routing approval and no notifications when a document changes state. A starter template library and safe duplication exist (Checkpoint 38 — seeded per-tenant, not a global/shared catalogue) but there's no AI-assisted generation, legal clause library, cross-tenant/global marketplace, template rating, or template import/export.
-- Recruitment & Applicant Tracking (Checkpoint 39/40/41/42) — `resume_document_id` on `recruitment_applications` is reserved/unused (no upload endpoint), no applicant dedupe/merge-by-email (so two independent applications from the same real person could each be converted into separate employee rows), no public candidate portal, no CV parsing/AI screening, no interview scheduling, no offer approval/automation, no email notifications, and no bulk import/conversion. Candidate-to-employee conversion exists (Checkpoint 40) but creates no `User` account or role assignment automatically. A real onboarding handoff exists (Checkpoint 41, `start-onboarding`) and now pre-populates default tasks from the template catalog (Checkpoint 42) — but still creates no `User` account, no role assignment, and no notifications — see `docs/security.md#candidate-to-employee-conversion-foundation-checkpoint-40`, `docs/security.md#recruitment-to-onboarding-handoff-foundation-checkpoint-41`, and `docs/security.md#onboarding--offboarding-task-templates-foundation-checkpoint-42`.
+- Recruitment & Applicant Tracking (Checkpoint 39/40/41/42) — `resume_document_id` on `recruitment_applications` is reserved/unused (no upload endpoint), no applicant dedupe/merge-by-email (so two independent applications from the same real person could each be converted into separate employee rows), no public candidate portal, no CV parsing/AI screening, no interview scheduling, no offer approval/automation, no email notifications, and no bulk import/conversion. Candidate-to-employee conversion exists (Checkpoint 40) but does not itself create a `User` account or assign a role. A real onboarding handoff exists (Checkpoint 41, `start-onboarding`) and now pre-populates default tasks from the template catalog (Checkpoint 42) — but likewise doesn't itself create a `User` account, assign a role, or send notifications. A separate, explicit `POST /api/v1/users` action (Checkpoint 43) can create an account and link it to the converted employee afterward — deliberately never triggered automatically by either endpoint — see `docs/security.md#candidate-to-employee-conversion-foundation-checkpoint-40`, `docs/security.md#recruitment-to-onboarding-handoff-foundation-checkpoint-41`, `docs/security.md#onboarding--offboarding-task-templates-foundation-checkpoint-42`, and `docs/security.md#user-account-provisioning-checkpoint-43`.
 
 ## Future
 

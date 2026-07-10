@@ -32,6 +32,19 @@ class UsersAccessUiController extends Controller
         return Inertia::render('Settings/AccessUserShow', ['userId' => $user->id]);
     }
 
+    /**
+     * Checkpoint 43. Same "backend is the authority" shape as
+     * roleCreate() — role/employee data is fetched client-side from the
+     * existing /api/v1/roles and /api/v1/employees endpoints, never
+     * passed as a page prop. An optional ?employeeId= query param
+     * (from an Employee detail page's "Create user account" link) only
+     * pre-fills the form client-side; nothing about it is trusted here.
+     */
+    public function userCreate(): Response
+    {
+        return Inertia::render('Settings/AccessUserCreate');
+    }
+
     public function roles(): Response
     {
         return Inertia::render('Settings/AccessRoles');

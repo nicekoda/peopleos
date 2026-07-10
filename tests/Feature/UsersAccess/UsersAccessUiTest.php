@@ -47,7 +47,7 @@ class UsersAccessUiTest extends TestCase
         $tenant = Tenant::factory()->create();
         $target = User::factory()->create(['tenant_id' => $tenant->id]);
 
-        foreach (['settings/access/users', "settings/access/users/{$target->id}", 'settings/access/roles'] as $path) {
+        foreach (['settings/access/users', 'settings/access/users/create', "settings/access/users/{$target->id}", 'settings/access/roles'] as $path) {
             $this->get($this->url($tenant, $path))->assertRedirect(route('login'));
         }
     }
@@ -69,6 +69,37 @@ class UsersAccessUiTest extends TestCase
 
         $response->assertOk();
         $response->assertInertia(fn ($page) => $page->component('Settings/AccessUsers'));
+    }
+
+    /**
+     * Checkpoint 43 — /settings/access/users/create. Same guest/
+     * permission-gating shape as every other create page in this app;
+     * gated on users.create, not users.view (matching the API route).
+     */
+    public function test_guest_cannot_access_create_user_page(): void
+    {
+        $tenant = Tenant::factory()->create();
+
+        $this->get($this->url($tenant, 'settings/access/users/create'))->assertRedirect(route('login'));
+    }
+
+    public function test_user_without_users_create_cannot_access_create_user_page(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $user = $this->userWithPermissions($tenant, 'users.view');
+
+        $this->actingAs($user)->get($this->url($tenant, 'settings/access/users/create'))->assertForbidden();
+    }
+
+    public function test_user_with_users_create_can_access_create_user_page(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $user = $this->userWithPermissions($tenant, 'users.create');
+
+        $response = $this->actingAs($user)->get($this->url($tenant, 'settings/access/users/create'));
+
+        $response->assertOk();
+        $response->assertInertia(fn ($page) => $page->component('Settings/AccessUserCreate'));
     }
 
     public function test_user_without_roles_view_cannot_access_role_list_page(): void

@@ -55,6 +55,7 @@ function Field({ label, value }: { label: string; value: string | null | undefin
 export default function EmployeesShow() {
     const { employeeId } = usePage<ShowProps>().props;
     const canViewSensitive = useCan('employees.view_sensitive');
+    const canViewUsers = useCan('users.view');
 
     const [employee, setEmployee] = useState<Employee | null>(null);
     const [error, setError] = useState<ApiError | null>(null);
@@ -185,6 +186,36 @@ export default function EmployeesShow() {
                         <SensitiveField label="Personal email" value={employee.personal_email} canView={canViewSensitive} />
                         <SensitiveField label="Phone" value={employee.phone} canView={canViewSensitive} />
                     </dl>
+                </Card>
+
+                <Card title="User account" className="sm:col-span-2">
+                    {employee.linked_user ? (
+                        canViewUsers ? (
+                            <Link
+                                href={`/settings/access/users/${employee.linked_user.id}`}
+                                className="text-sm font-medium text-indigo-600 hover:text-indigo-500"
+                            >
+                                {employee.linked_user.name}
+                            </Link>
+                        ) : (
+                            <p className="text-sm text-slate-500">Linked to a user account.</p>
+                        )
+                    ) : (
+                        <PermissionGate
+                            permission="users.create"
+                            fallback={<p className="text-sm text-slate-500">No user account linked.</p>}
+                        >
+                            <div className="flex items-center justify-between">
+                                <p className="text-sm text-slate-500">No user account linked.</p>
+                                <Link
+                                    href={`/settings/access/users/create?employeeId=${employee.id}`}
+                                    className="text-sm font-medium text-indigo-600 hover:text-indigo-500"
+                                >
+                                    Create user account
+                                </Link>
+                            </div>
+                        </PermissionGate>
+                    )}
                 </Card>
             </div>
         </AppLayout>

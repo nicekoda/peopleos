@@ -2,11 +2,16 @@
 
 namespace Tests\Feature\UsersAccess;
 
+use App\Enums\EmployeeStatus;
+use App\Models\AuditLog;
+use App\Models\Employee;
 use App\Models\Permission;
 use App\Models\Role;
 use App\Models\Tenant;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Route;
 use Tests\TestCase;
 
 /**
@@ -250,5 +255,276 @@ class UserApiTest extends TestCase
         $response = $this->actingAs($platformAdmin)->getJson('http://'.config('tenancy.base_domain').'/api/v1/users');
 
         $response->assertForbidden();
+    }
+
+    // Checkpoint 43 — POST /api/v1/users (the first user-creation endpoint).
+
+    public function test_guest_cannot_create_user(): void
+    {
+        $tenant = Tenant::factory()->create();
+
+        $this->postJson($this->url($tenant, 'users'), [
+            'name' => 'New Hire', 'email' => 'new.hire@example.com',
+            'password' => 'password123', 'password_confirmation' => 'password123',
+        ])->assertUnauthorized();
+    }
+
+    public function test_user_without_users_create_cannot_create_user(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $actor = $this->userWithPermissions($tenant, 'users.view');
+        $role = Role::factory()->create(['tenant_id' => $tenant->id]);
+
+        $response = $this->actingAs($actor)->postJson($this->url($tenant, 'users'), [
+            'name' => 'New Hire', 'email' => 'new.hire@example.com',
+            'password' => 'password123', 'password_confirmation' => 'password123',
+            'role_id' => $role->id,
+        ]);
+
+        $response->assertForbidden();
+        $this->assertDatabaseMissing('users', ['email' => 'new.hire@example.com']);
+    }
+
+    public function test_user_with_users_create_can_create_user(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $actor = $this->userWithPermissions($tenant, 'users.create');
+        $role = Role::factory()->create(['tenant_id' => $tenant->id]);
+
+        $response = $this->actingAs($actor)->postJson($this->url($tenant, 'users'), [
+            'name' => 'New Hire', 'email' => 'new.hire@example.com',
+            'password' => 'password123', 'password_confirmation' => 'password123',
+            'role_id' => $role->id,
+        ]);
+
+        $response->assertCreated();
+        $created = User::query()->where('email', 'new.hire@example.com')->firstOrFail();
+        $this->assertSame($tenant->id, $created->tenant_id);
+        $this->assertSame(User::STATUS_ACTIVE, $created->status);
+        $this->assertFalse($created->is_platform_admin);
+        $this->assertSame($response->json('data.id'), $created->id);
+    }
+
+    public function test_created_user_password_is_hashed_and_never_exposed(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $actor = $this->userWithPermissions($tenant, 'users.create');
+        $role = Role::factory()->create(['tenant_id' => $tenant->id]);
+
+        $response = $this->actingAs($actor)->postJson($this->url($tenant, 'users'), [
+            'name' => 'New Hire', 'email' => 'new.hire@example.com',
+            'password' => 'correct-horse-battery-staple', 'password_confirmation' => 'correct-horse-battery-staple',
+            'role_id' => $role->id,
+        ]);
+
+        $response->assertCreated();
+        $body = json_encode($response->json());
+        $this->assertStringNotContainsString('correct-horse-battery-staple', $body);
+        $this->assertStringNotContainsString('password', $body);
+
+        $created = User::query()->where('email', 'new.hire@example.com')->firstOrFail();
+        $this->assertTrue(Hash::check('correct-horse-battery-staple', $created->password));
+    }
+
+    public function test_create_user_assigns_role(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $actor = $this->userWithPermissions($tenant, 'users.create');
+        $role = Role::factory()->create(['tenant_id' => $tenant->id, 'name' => 'Line Manager']);
+
+        $response = $this->actingAs($actor)->postJson($this->url($tenant, 'users'), [
+            'name' => 'New Hire', 'email' => 'new.hire@example.com',
+            'password' => 'password123', 'password_confirmation' => 'password123',
+            'role_id' => $role->id,
+        ]);
+
+        $response->assertCreated();
+        $response->assertJsonPath('data.roles.0.id', $role->id);
+        $created = User::query()->where('email', 'new.hire@example.com')->firstOrFail();
+        $this->assertTrue($created->hasRole($role->slug));
+    }
+
+    public function test_create_user_can_link_to_employee(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $actor = $this->userWithPermissions($tenant, 'users.create');
+        $role = Role::factory()->create(['tenant_id' => $tenant->id]);
+        $employee = Employee::factory()->create(['tenant_id' => $tenant->id]);
+
+        $response = $this->actingAs($actor)->postJson($this->url($tenant, 'users'), [
+            'name' => 'New Hire', 'email' => 'new.hire@example.com',
+            'password' => 'password123', 'password_confirmation' => 'password123',
+            'role_id' => $role->id, 'employee_id' => $employee->id,
+        ]);
+
+        $response->assertCreated();
+        $created = User::query()->where('email', 'new.hire@example.com')->firstOrFail();
+        $employee->refresh();
+        $this->assertSame($created->id, $employee->user_id);
+        $this->assertNotNull($employee->linked_at);
+        $this->assertSame($actor->id, $employee->linked_by);
+        $response->assertJsonPath('data.linked_employee.id', $employee->id);
+    }
+
+    public function test_create_user_cannot_link_already_linked_employee(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $actor = $this->userWithPermissions($tenant, 'users.create');
+        $role = Role::factory()->create(['tenant_id' => $tenant->id]);
+        $existingUser = User::factory()->create(['tenant_id' => $tenant->id]);
+        $employee = Employee::factory()->create(['tenant_id' => $tenant->id, 'user_id' => $existingUser->id]);
+
+        $response = $this->actingAs($actor)->postJson($this->url($tenant, 'users'), [
+            'name' => 'New Hire', 'email' => 'new.hire@example.com',
+            'password' => 'password123', 'password_confirmation' => 'password123',
+            'role_id' => $role->id, 'employee_id' => $employee->id,
+        ]);
+
+        $response->assertStatus(422)->assertJsonValidationErrors('employee_id');
+        $this->assertDatabaseMissing('users', ['email' => 'new.hire@example.com']);
+    }
+
+    public function test_create_user_cannot_link_terminated_employee(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $actor = $this->userWithPermissions($tenant, 'users.create');
+        $role = Role::factory()->create(['tenant_id' => $tenant->id]);
+        $employee = Employee::factory()->create(['tenant_id' => $tenant->id, 'status' => EmployeeStatus::Terminated->value]);
+
+        $response = $this->actingAs($actor)->postJson($this->url($tenant, 'users'), [
+            'name' => 'New Hire', 'email' => 'new.hire@example.com',
+            'password' => 'password123', 'password_confirmation' => 'password123',
+            'role_id' => $role->id, 'employee_id' => $employee->id,
+        ]);
+
+        $response->assertStatus(422)->assertJsonValidationErrors('employee_id');
+    }
+
+    public function test_create_user_cannot_link_another_tenants_employee(): void
+    {
+        $tenantA = Tenant::factory()->create();
+        $tenantB = Tenant::factory()->create();
+        $actor = $this->userWithPermissions($tenantA, 'users.create');
+        $role = Role::factory()->create(['tenant_id' => $tenantA->id]);
+        $employeeB = Employee::factory()->create(['tenant_id' => $tenantB->id]);
+
+        $response = $this->actingAs($actor)->postJson($this->url($tenantA, 'users'), [
+            'name' => 'New Hire', 'email' => 'new.hire@example.com',
+            'password' => 'password123', 'password_confirmation' => 'password123',
+            'role_id' => $role->id, 'employee_id' => $employeeB->id,
+        ]);
+
+        $response->assertStatus(422)->assertJsonValidationErrors('employee_id');
+    }
+
+    public function test_create_user_role_must_belong_to_current_tenant(): void
+    {
+        $tenantA = Tenant::factory()->create();
+        $tenantB = Tenant::factory()->create();
+        $actor = $this->userWithPermissions($tenantA, 'users.create');
+        $roleB = Role::factory()->create(['tenant_id' => $tenantB->id]);
+
+        $response = $this->actingAs($actor)->postJson($this->url($tenantA, 'users'), [
+            'name' => 'New Hire', 'email' => 'new.hire@example.com',
+            'password' => 'password123', 'password_confirmation' => 'password123',
+            'role_id' => $roleB->id,
+        ]);
+
+        $response->assertStatus(422)->assertJsonValidationErrors('role_id');
+    }
+
+    public function test_create_user_cannot_assign_platform_role(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $actor = $this->userWithPermissions($tenant, 'users.create');
+        $platformRole = Role::factory()->platform()->create();
+
+        $response = $this->actingAs($actor)->postJson($this->url($tenant, 'users'), [
+            'name' => 'New Hire', 'email' => 'new.hire@example.com',
+            'password' => 'password123', 'password_confirmation' => 'password123',
+            'role_id' => $platformRole->id,
+        ]);
+
+        $response->assertStatus(422)->assertJsonValidationErrors('role_id');
+    }
+
+    public function test_email_must_be_globally_unique(): void
+    {
+        $tenantA = Tenant::factory()->create();
+        $tenantB = Tenant::factory()->create();
+        $actor = $this->userWithPermissions($tenantA, 'users.create');
+        $role = Role::factory()->create(['tenant_id' => $tenantA->id]);
+        User::factory()->create(['tenant_id' => $tenantB->id, 'email' => 'taken@example.com']);
+
+        $response = $this->actingAs($actor)->postJson($this->url($tenantA, 'users'), [
+            'name' => 'New Hire', 'email' => 'taken@example.com',
+            'password' => 'password123', 'password_confirmation' => 'password123',
+            'role_id' => $role->id,
+        ]);
+
+        $response->assertStatus(422)->assertJsonValidationErrors('email');
+    }
+
+    public function test_forged_platform_admin_flag_is_ignored(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $actor = $this->userWithPermissions($tenant, 'users.create');
+        $role = Role::factory()->create(['tenant_id' => $tenant->id]);
+
+        $response = $this->actingAs($actor)->postJson($this->url($tenant, 'users'), [
+            'name' => 'New Hire', 'email' => 'new.hire@example.com',
+            'password' => 'password123', 'password_confirmation' => 'password123',
+            'role_id' => $role->id, 'is_platform_admin' => true, 'tenant_id' => Tenant::factory()->create()->id,
+            'status' => 'suspended',
+        ]);
+
+        $response->assertCreated();
+        $created = User::query()->where('email', 'new.hire@example.com')->firstOrFail();
+        $this->assertFalse($created->is_platform_admin);
+        $this->assertSame($tenant->id, $created->tenant_id);
+        $this->assertSame(User::STATUS_ACTIVE, $created->status);
+    }
+
+    public function test_create_user_writes_audit_log(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $actor = $this->userWithPermissions($tenant, 'users.create');
+        $role = Role::factory()->create(['tenant_id' => $tenant->id]);
+
+        $this->actingAs($actor)->postJson($this->url($tenant, 'users'), [
+            'name' => 'New Hire', 'email' => 'new.hire@example.com',
+            'password' => 'password123', 'password_confirmation' => 'password123',
+            'role_id' => $role->id,
+        ])->assertCreated();
+
+        $created = User::query()->where('email', 'new.hire@example.com')->firstOrFail();
+
+        $this->assertDatabaseHas('audit_logs', [
+            'action' => 'user.created',
+            'module' => 'users',
+            'actor_user_id' => $actor->id,
+            'target_user_id' => $created->id,
+        ]);
+        // The role assignment writes its own independent audit log too
+        // (HasPermissions::assignRole()).
+        $this->assertDatabaseHas('audit_logs', [
+            'action' => 'role.assigned',
+            'module' => 'rbac',
+            'target_user_id' => $created->id,
+        ]);
+
+        $auditRow = AuditLog::query()->where('action', 'user.created')->firstOrFail();
+        $this->assertStringNotContainsString('password123', json_encode($auditRow->new_values));
+    }
+
+    public function test_create_user_route_includes_tenant_matches_middleware(): void
+    {
+        $routes = collect(Route::getRoutes())->filter(fn ($route) => $route->uri() === 'api/v1/users' && in_array('POST', $route->methods()));
+
+        $this->assertCount(1, $routes);
+
+        foreach ($routes as $route) {
+            $this->assertContains('tenant.matches', $route->gatherMiddleware());
+        }
     }
 }

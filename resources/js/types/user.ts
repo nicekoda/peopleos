@@ -25,6 +25,21 @@ export interface User {
     created_at: string | null;
 }
 
+/**
+ * Checkpoint 43 — the allowlisted fields the Create form may submit,
+ * matching what StoreUserRequest actually accepts. password_confirmation
+ * is never sent to the API on its own; the api client sends it alongside
+ * password so Laravel's `confirmed` rule can compare them.
+ */
+export interface UserCreateFormPayload {
+    name: string;
+    email: string;
+    password: string;
+    password_confirmation: string;
+    role_id: string;
+    employee_id: string;
+}
+
 export interface PaginatedResponse<T> {
     data: T[];
     meta?: {

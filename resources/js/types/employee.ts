@@ -31,6 +31,10 @@ export interface Employee {
     location: { id: string; name: string } | null;
     position: { id: string; name: string } | null;
     manager_employee_id: string | null;
+    // Checkpoint 43 — null unless a user account already exists and is
+    // linked; drives the Employee detail page's "create/view user
+    // account" affordance.
+    linked_user: { id: number; name: string } | null;
     start_date: string | null;
     probation_end_date: string | null;
     confirmation_date: string | null;

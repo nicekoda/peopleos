@@ -613,6 +613,33 @@ assignee, no notifications, and no traceability back to the template
 that generated a given task.** See `docs/architecture.md` and
 `docs/security.md` for the full design.
 
+## User Account Provisioning (Checkpoint 43)
+
+Closes a gap that predates this app's entire recruitment/lifecycle
+chain: `users.create` was seeded back in Checkpoint 23 for forward
+compatibility but never wired to a route — until now, a User account
+could only ever be made via `UserSeeder`/tinker. `POST /api/v1/users`
+is the first real user-creation endpoint, gated by `users.create` alone.
+It always requires `role_id` (a tenant role, never a platform role,
+independently re-checked by `User::assignRole()`) and accepts an
+optional `employee_id` to link the new account to an existing,
+unlinked, non-terminated employee in the same request — creation, role
+assignment, and the optional link all happen inside one transaction.
+**Deliberately a separate, explicit action, not automatic** — per your
+approved scope choice, it is never triggered by candidate-to-employee
+conversion (Checkpoint 40) or onboarding start (Checkpoint 41); an HR
+Manager reaches it on purpose, either from Settings > Access > Users or
+from an Employee's own detail page (a new "Create user account"
+link, shown only when that employee has no linked user yet). **There is
+still no password-reset or invite-email flow** — the caller sets the
+account's real initial password directly in the form (confirmed by a
+second field), and it is never returned in the response or written to
+the audit log. HR Manager is granted `users.create` alongside the
+`roles.view` its own create-user form's role picker requires — the same
+"a real gap found while building the form" pattern already used for
+`employees.view`/`document_categories.view` in earlier checkpoints. See
+`docs/architecture.md` and `docs/security.md` for the full design.
+
 ## Documentation
 
 - [`docs/architecture.md`](docs/architecture.md) — multi-tenancy, tenant resolution, RBAC overview, internal-vs-public IDs, frontend architecture.

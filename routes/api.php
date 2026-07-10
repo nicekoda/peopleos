@@ -76,6 +76,8 @@ Route::middleware(['auth', 'tenant.matches'])->prefix('api/v1')->group(function 
     // controllers manually filters by tenant_id; this is the primary
     // tenant boundary here, not defense-in-depth on top of a scope.
     Route::get('users', [UserController::class, 'index'])->middleware('permission:users.view');
+    // Checkpoint 43 — the first user-creation route in this app.
+    Route::post('users', [UserController::class, 'store'])->middleware('permission:users.create');
     Route::get('users/{user}', [UserController::class, 'show'])->middleware('permission:users.view');
     Route::patch('users/{user}', [UserController::class, 'update'])->middleware('permission:users.deactivate');
     Route::post('users/{user}/roles', [UserRoleController::class, 'store'])->middleware('permission:users.assign_role');

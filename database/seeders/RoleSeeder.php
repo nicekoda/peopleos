@@ -133,6 +133,11 @@ class RoleSeeder extends Seeder
             // manage rights, per your explicit approved mapping.
             'lifecycle.view', 'lifecycle.create', 'lifecycle.update', 'lifecycle.delete',
             'lifecycle.assign_task', 'lifecycle.complete_task',
+            // Checkpoint 42 — Onboarding & Offboarding Task Templates
+            // Foundation. Full manage rights on the template catalog,
+            // mirroring HR Manager's full lifecycle.* grant above.
+            'lifecycle_task_templates.view', 'lifecycle_task_templates.create',
+            'lifecycle_task_templates.update', 'lifecycle_task_templates.delete',
             // Checkpoint 34 — HR Documents & Letter Generation Foundation.
             // Full manage rights on both templates and generated
             // documents, per your explicit approved mapping. .publish
@@ -182,6 +187,12 @@ class RoleSeeder extends Seeder
             // already has, closing that gap.
             'lifecycle.view', 'lifecycle.create', 'lifecycle.update', 'lifecycle.delete',
             'lifecycle.assign_task', 'lifecycle.complete_task',
+            // Checkpoint 42 — same full template-management grant as HR
+            // Manager, for the identical reason: HR Director holds full
+            // lifecycle.* already, so it should manage the same template
+            // catalog that feeds it.
+            'lifecycle_task_templates.view', 'lifecycle_task_templates.create',
+            'lifecycle_task_templates.update', 'lifecycle_task_templates.delete',
         ]);
 
         $this->grantByKeys($roles['Employee'], [
@@ -261,6 +272,11 @@ class RoleSeeder extends Seeder
             // delete/cancel, per your explicit "safer" option.
             'lifecycle.view', 'lifecycle.create', 'lifecycle.update',
             'lifecycle.assign_task', 'lifecycle.complete_task',
+            // Checkpoint 42 — view/create/update on the template catalog,
+            // no delete — same "safer" no-delete posture as its
+            // lifecycle.* grant directly above.
+            'lifecycle_task_templates.view', 'lifecycle_task_templates.create',
+            'lifecycle_task_templates.update',
             // Checkpoint 34 — view templates only (no manage rights over
             // the template catalog); view/create/generate/update on
             // generated documents, no delete/archive — per your explicit
@@ -296,6 +312,8 @@ class RoleSeeder extends Seeder
             'departments.view', 'positions.view', 'locations.view',
             // Checkpoint 33 — view only, per your explicit approved mapping.
             'lifecycle.view',
+            // Checkpoint 42 — view only, same posture as lifecycle.view above.
+            'lifecycle_task_templates.view',
             // Checkpoint 34 — view only, per your explicit approved mapping.
             'hr_document_templates.view', 'hr_generated_documents.view',
             // Checkpoint 39 — view only, per your explicit approved mapping.

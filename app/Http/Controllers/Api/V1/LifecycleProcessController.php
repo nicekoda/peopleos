@@ -10,10 +10,12 @@ use App\Http\Resources\LifecycleProcessResource;
 use App\Models\LifecycleProcess;
 use App\Models\Tenant;
 use App\Services\Audit\AuditLogger;
+use App\Services\LifecycleTaskTemplateApplier;
 use App\Services\LifecycleVisibilityService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
+use Illuminate\Support\Facades\DB;
 
 class LifecycleProcessController extends Controller
 {
@@ -39,6 +41,15 @@ class LifecycleProcessController extends Controller
         return LifecycleProcessResource::collection($query->paginate());
     }
 
+    /**
+     * Checkpoint 42 — after creating the process itself, applies every
+     * matching (same tenant + type) LifecycleTaskTemplate via
+     * LifecycleTaskTemplateApplier, so a process no longer starts
+     * completely bare when templates exist for its type. Wrapped in a
+     * transaction (new this checkpoint — store() had none before) so
+     * the process and its template-derived tasks are created together
+     * or not at all.
+     */
     public function store(StoreLifecycleProcessRequest $request): JsonResponse
     {
         $validated = $request->validated();
@@ -50,7 +61,13 @@ class LifecycleProcessController extends Controller
         $validated['created_by'] = $request->user()->id;
         $validated['updated_by'] = $request->user()->id;
 
-        $process = LifecycleProcess::query()->create($validated);
+        $process = DB::transaction(function () use ($validated, $request) {
+            $process = LifecycleProcess::query()->create($validated);
+
+            LifecycleTaskTemplateApplier::applyToProcess($process, $request->user()->id);
+
+            return $process;
+        });
 
         AuditLogger::logFor(
             actor: $request->user(),
@@ -66,7 +83,23 @@ class LifecycleProcessController extends Controller
             userAgent: $request->userAgent(),
         );
 
-        return (new LifecycleProcessResource($process))->response()->setStatusCode(201);
+        $taskCount = $process->tasks()->count();
+        if ($taskCount > 0) {
+            AuditLogger::logFor(
+                actor: $request->user(),
+                action: 'lifecycle_process.tasks_applied_from_templates',
+                module: 'lifecycle',
+                tenantId: $process->tenant_id,
+                auditableType: LifecycleProcess::class,
+                auditableId: $process->id,
+                description: "{$taskCount} task(s) applied from templates ({$process->type->value}).",
+                metadata: ['task_count' => $taskCount, 'type' => $process->type->value],
+                ipAddress: $request->ip(),
+                userAgent: $request->userAgent(),
+            );
+        }
+
+        return (new LifecycleProcessResource($process->load('tasks')))->response()->setStatusCode(201);
     }
 
     public function show(Request $request, LifecycleProcess $lifecycleProcess): LifecycleProcessResource

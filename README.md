@@ -584,6 +584,35 @@ only the process record itself — no tasks, no user account, no role
 assignment, no notifications.** See `docs/architecture.md` and
 `docs/security.md` for the full design.
 
+## Onboarding & Offboarding Task Templates Foundation (Checkpoint 42)
+
+Closes the gap Checkpoint 41 itself flagged as future work: starting an
+onboarding (or offboarding) process created a completely bare
+`LifecycleProcess` — zero tasks, every one added by hand. A new
+tenant-owned `lifecycle_task_templates` catalog (its own admin page,
+`/settings/lifecycle-task-templates`, gated by a new
+`lifecycle_task_templates.{view,create,update,delete}` permission
+group) lets HR define default tasks per process type — title,
+optional description, an optional "due N days after the process
+starts" offset, and a sort order. Whenever a process is created —
+either directly (`POST /api/v1/lifecycle-processes`) or via the
+recruitment handoff (`POST /job-applications/{id}/start-onboarding`,
+Checkpoint 41) — every active template matching that process's own
+tenant and type is copied into a real `LifecycleTask` row via the new
+`LifecycleTaskTemplateApplier` service. Generated tasks are completely
+independent of their template from that moment on (editing or
+archiving a template later never touches tasks already created from
+it — no live link is kept, on purpose), and nothing is assigned to
+anyone automatically, since a template can't know who should get a
+task. Both process-creation endpoints now run inside a database
+transaction (new for the direct-create endpoint) so a process and its
+template-derived tasks succeed or fail together. Nine starter templates
+(five onboarding, four offboarding) are seeded for the `uesl` demo
+tenant. **Still deliberately out of scope: task templates carry no
+assignee, no notifications, and no traceability back to the template
+that generated a given task.** See `docs/architecture.md` and
+`docs/security.md` for the full design.
+
 ## Documentation
 
 - [`docs/architecture.md`](docs/architecture.md) — multi-tenancy, tenant resolution, RBAC overview, internal-vs-public IDs, frontend architecture.

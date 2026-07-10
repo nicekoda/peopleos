@@ -39,6 +39,13 @@ class PermissionSeeder extends Seeder
             // offboarding are just a `type` value on the same resource,
             // not separately-permissioned resources).
             'lifecycle' => ['view', 'create', 'update', 'delete', 'assign_task', 'complete_task'],
+            // Checkpoint 42 — Onboarding & Offboarding Task Templates
+            // Foundation. Its own permission group, not folded into
+            // lifecycle.* above — managing the template catalog is an
+            // admin-configuration concern distinct from working the
+            // processes/tasks it feeds, the same split
+            // document_categories.*/documents.* already established.
+            'lifecycle_task_templates' => ['view', 'create', 'update', 'delete'],
             'announcements' => ['view', 'create', 'publish'],
             'audit' => ['view', 'export'],
             // Checkpoint 34 — HR Documents & Letter Generation Foundation.

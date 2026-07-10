@@ -5020,10 +5020,12 @@ already-safe `full_name`/`employee_number`.
 
 ### Current limitations
 
-- Creates only the bare `LifecycleProcess` record — no tasks, no task
-  templates, no `User` account, no role assignment, and no
-  notifications to the new employee or their manager. All deliberately
-  out of scope, unchanged from Checkpoint 40's original deferred list.
+- Creates only the bare `LifecycleProcess` record — no `User` account,
+  no role assignment, and no notifications to the new employee or
+  their manager. Deliberately out of scope, unchanged from Checkpoint
+  40's original deferred list. (Task templates — the other item
+  originally listed here — were resolved in Checkpoint 42, immediately
+  below.)
 - The "no other active onboarding process" guard checks the converted
   employee's `LifecycleProcess` rows generally, not specifically ones
   created through this same recruitment path — correct behavior, but
@@ -5033,12 +5035,113 @@ already-safe `full_name`/`employee_number`.
 
 ### Future
 
-- Automatic task creation/templates on the newly started process.
 - Notifications to the new employee or their manager that onboarding
   has started.
 - Automatic `User` account creation and role assignment at this same
   handoff point — Checkpoint 40's original deferred scope, still
   unaddressed.
+
+## Onboarding & Offboarding Task Templates Foundation (Checkpoint 42)
+
+Adds `lifecycle_task_templates` and its full CRUD API
+(`/api/v1/lifecycle-task-templates`). See
+[`architecture.md`](architecture.md#onboarding--offboarding-task-templates-foundation-checkpoint-42)
+for the schema/technical writeup; this section covers the security
+design.
+
+### Its own permission group, mirroring each role's existing lifecycle.* posture exactly
+
+`lifecycle_task_templates.{view,create,update,delete}` is deliberately
+separate from `lifecycle.*` — managing the template catalog (admin
+configuration) is a different trust level from working the actual
+processes/tasks it feeds, the same split this app already applies to
+`document_categories.*` vs. `documents.*`. Rather than making a fresh
+judgment call on who should hold it, each role's grant mirrors its
+*existing* `lifecycle.*` posture exactly: Tenant Admin (blanket, as
+always), HR Manager and HR Director both hold full `lifecycle.*`
+already and get full template-manage rights too; HR Officer holds
+`lifecycle.view/create/update` (no delete) and gets the identical
+view/create/update-only template grant; Auditor holds `lifecycle.view`
+only and gets template-view only. Employee and Line Manager hold
+neither `lifecycle.create`/`update`/`delete` nor any
+`lifecycle_task_templates.*` permission — they interact with tasks
+already on a process, never the template catalog that seeds them.
+
+### Standard two-layer tenant isolation, same as every other lookup catalog
+
+`LifecycleTaskTemplateController` follows the identical
+`BelongsToTenant` global scope + `ensureBelongsToCurrentTenant()`
+defense-in-depth shape as `DepartmentController`/`PositionController`/
+`LocationController` — a cross-tenant template ID 404s on show/update/
+destroy, and `Rule::unique()` on create/update is scoped to
+`(tenant_id, type)`, so a forged `tenant_id` in the request body can
+never collide with (or overwrite) another tenant's template, and can
+never make a new template visible cross-tenant either (the explicit
+`tenant_id = app(Tenant::class)->id` assignment in `store()` ignores
+whatever the request body claims).
+
+### Template application never crosses a tenant or type boundary
+
+`LifecycleTaskTemplateApplier::applyToProcess()` queries strictly by
+the *process's own* `tenant_id` and `type` — there is no code path
+that could apply tenant A's templates to a process created in tenant
+B, or apply an offboarding template to an onboarding process (or vice
+versa). Archived (soft-deleted) templates are excluded automatically,
+since the query never adds `withTrashed()`.
+
+### Generated tasks are copied, not linked — an archived template can never retroactively change anything
+
+Once `LifecycleTaskTemplateApplier` copies a template's `title`/
+`description`/computed `due_date` into a real `LifecycleTask` row, that
+row has no foreign key or other reference back to the template it came
+from. Editing or archiving a template afterward has zero effect on any
+task already generated from it — the same non-retroactive guarantee
+HR Document generation already provides for `rendered_content` vs. its
+source template (Checkpoint 34).
+
+### No request field lets a caller control who a generated task is assigned to, or its actual status
+
+`LifecycleTaskTemplateApplier` hardcodes `assigned_to_user_id: null`
+and `status: pending` on every task it creates — neither is read from
+the template row (templates don't have either column at all) nor from
+any request input, since process creation (`StoreLifecycleProcessRequest`)
+and the onboarding handoff (Checkpoint 41) both take no per-task input
+whatsoever. Assigning a generated task to someone remains the existing,
+separately-permissioned `lifecycle.assign_task` action via
+`LifecycleTaskController::update()`.
+
+### Transactional — new for the direct-create endpoint
+
+`LifecycleProcessController::store()` did not previously need a
+transaction (a single-row `create()`); now that it also creates however
+many template-derived tasks in the same request, both happen inside one
+`DB::transaction()`, so a failure partway through (e.g. a future
+constraint this app's own validation doesn't yet anticipate) can never
+leave a process with only some of its expected starter tasks.
+`JobApplicationController::startOnboarding()`'s existing transaction
+(Checkpoint 41) simply gained the same applier call inside its already-
+existing closure.
+
+### Current limitations
+
+- No default assignee per template, no notifications when a
+  template-derived task's due date arrives, no bulk reorder/duplicate
+  of templates, and no traceability from a generated task back to the
+  template that created it — all deliberate scope cuts, not oversights.
+- The "no other active onboarding process" guard (Checkpoint 41) and
+  this checkpoint's template application are independent checks; a
+  future checkpoint that wants to skip re-applying certain templates on
+  a *resubmitted* process (there is no such concept yet) would need new
+  design work, not an extension of what exists today.
+
+### Future
+
+- A default-assignee-by-role option per template (e.g. "IT setup tasks
+  always assign to whoever holds the IT Support role").
+- Due-date notifications/reminders for template-derived tasks.
+- A `source_template_id` trace column, if a future need arises to
+  distinguish template-derived tasks from manually created ones beyond
+  what the audit log already records.
 
 ## Local Demo Credentials
 
@@ -5108,6 +5211,6 @@ data these six `uesl` logins see (Checkpoint 26's `DemoDataSeeder`).
 - **No role import/export, access review workflow, approval workflow for permission changes, segregation-of-duties engine, or permission risk scoring** — see [RBAC Role & Permission Management UI](#rbac-role--permission-management-ui-checkpoint-28) above.
 - **Departments/Positions/Locations (Checkpoint 32) have no hierarchy, no usage-count guard before archiving, and no bulk import/export** — see [Employee Lifecycle Foundation](#employee-lifecycle-foundation-checkpoint-32) above.
 - **Employment Type remains a fixed enum, not a tenant-configurable lookup table** (Checkpoint 32, deliberate scope decision) — see [Employee Lifecycle Foundation](#employee-lifecycle-foundation-checkpoint-32) above.
-- **Onboarding & Offboarding (Checkpoint 33) has no task templates, task dependencies/ordering, approval routing, notifications, IT/asset provisioning integration, document generation, e-signature, recruitment-to-employee conversion, or performance/probation review integration; Line Manager visibility is direct-reports only, not the full reporting tree** — see [Onboarding & Offboarding Foundation](#onboarding--offboarding-foundation-checkpoint-33) above.
+- **Onboarding & Offboarding (Checkpoint 33) has task templates as of Checkpoint 42, but still no task dependencies/ordering, approval routing, notifications, IT/asset provisioning integration, document generation, e-signature, or performance/probation review integration; Line Manager visibility is direct-reports only, not the full reporting tree** — see [Onboarding & Offboarding Foundation](#onboarding--offboarding-foundation-checkpoint-33) and [Onboarding & Offboarding Task Templates Foundation](#onboarding--offboarding-task-templates-foundation-checkpoint-42) above.
 - **HR Documents & Letter Generation (Checkpoint 34) has no DOCX file, e-signature, automated sending, or bulk/employee-self-service generation — PDF export was added in Checkpoint 35 (generate-on-demand, never stored), template version history in Checkpoint 36 (no diff/compare UI, no publish-approval workflow), a single-approver approval workflow in Checkpoint 37 (no multi-level/routing approval, no notifications), and 8 seeded starter templates plus template duplication in Checkpoint 38 (tenant-specific only, no global/shared library, no AI generation)** — see [HR Documents & Letter Generation Foundation](#hr-documents--letter-generation-foundation-checkpoint-34), [PDF Export Dependency Review & Prototype](#pdf-export-dependency-review--prototype-checkpoint-35), [HR Document Template Versioning Foundation](#hr-document-template-versioning-foundation-checkpoint-36), [HR Document Approval Workflow Foundation](#hr-document-approval-workflow-foundation-checkpoint-37), and [HR Document Template Library & Starter Templates](#hr-document-template-library--starter-templates-checkpoint-38) above.
-- **Recruitment & Applicant Tracking (Checkpoint 39) has no public candidate portal, no CV parsing/AI screening, no interview scheduling, no offer approval/automation, no email notifications, no bulk import, and no applicant dedupe/merge-by-email — Line Manager and Employee hold no recruitment permissions at all this checkpoint. Candidate-to-employee conversion was added in Checkpoint 40, gated by its own job_applications.convert_to_employee permission (not granted to HR Officer by default), but creates no User account or role assignment automatically. A real, trackable onboarding handoff was added in Checkpoint 41 (`start-onboarding`, gated by `lifecycle.create`) — but it creates only the bare LifecycleProcess record, with no tasks, no User account, no role assignment, and no notifications** — see [Recruitment & Applicant Tracking Foundation](#recruitment--applicant-tracking-foundation-checkpoint-39), [Candidate-to-Employee Conversion Foundation](#candidate-to-employee-conversion-foundation-checkpoint-40), and [Recruitment-to-Onboarding Handoff Foundation](#recruitment-to-onboarding-handoff-foundation-checkpoint-41) above.
+- **Recruitment & Applicant Tracking (Checkpoint 39) has no public candidate portal, no CV parsing/AI screening, no interview scheduling, no offer approval/automation, no email notifications, no bulk import, and no applicant dedupe/merge-by-email — Line Manager and Employee hold no recruitment permissions at all this checkpoint. Candidate-to-employee conversion was added in Checkpoint 40, gated by its own job_applications.convert_to_employee permission (not granted to HR Officer by default), but creates no User account or role assignment automatically. A real, trackable onboarding handoff was added in Checkpoint 41 (`start-onboarding`, gated by `lifecycle.create`) and now pre-populates default tasks from the template catalog (Checkpoint 42) — but still creates no User account, no role assignment, and no notifications** — see [Recruitment & Applicant Tracking Foundation](#recruitment--applicant-tracking-foundation-checkpoint-39), [Candidate-to-Employee Conversion Foundation](#candidate-to-employee-conversion-foundation-checkpoint-40), [Recruitment-to-Onboarding Handoff Foundation](#recruitment-to-onboarding-handoff-foundation-checkpoint-41), and [Onboarding & Offboarding Task Templates Foundation](#onboarding--offboarding-task-templates-foundation-checkpoint-42) above.

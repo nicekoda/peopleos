@@ -102,6 +102,14 @@ const sections: Section[] = [
         comingLater: false,
     },
     {
+        key: 'lifecycle_task_templates',
+        title: 'Onboarding & Offboarding Task Templates',
+        description: 'Manage default tasks automatically added to newly started processes.',
+        href: '/settings/lifecycle-task-templates',
+        permission: 'lifecycle_task_templates.view',
+        comingLater: false,
+    },
+    {
         key: 'security',
         title: 'Security & Audit',
         description: 'Review security and audit settings.',

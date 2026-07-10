@@ -10,6 +10,7 @@ use App\Http\Controllers\HrDocumentTemplateUiController;
 use App\Http\Controllers\HrGeneratedDocumentUiController;
 use App\Http\Controllers\LeaveTypeUiController;
 use App\Http\Controllers\LeaveUiController;
+use App\Http\Controllers\LifecycleTaskTemplateUiController;
 use App\Http\Controllers\LifecycleUiController;
 use App\Http\Controllers\LocationUiController;
 use App\Http\Controllers\PolicyUiController;
@@ -246,6 +247,16 @@ Route::middleware(['auth', 'tenant.matches'])->group(function () {
         ->middleware('permission:positions.create')->name('settings.positions.create');
     Route::get('settings/positions/{position}/edit', [PositionUiController::class, 'edit'])
         ->middleware('permission:positions.update')->name('settings.positions.edit');
+
+    // Checkpoint 42 — Onboarding & Offboarding Task Templates Foundation.
+    // Same thin-page-route pattern as Departments/Positions/Locations
+    // above.
+    Route::get('settings/lifecycle-task-templates', [LifecycleTaskTemplateUiController::class, 'index'])
+        ->middleware('permission:lifecycle_task_templates.view')->name('settings.lifecycle-task-templates');
+    Route::get('settings/lifecycle-task-templates/create', [LifecycleTaskTemplateUiController::class, 'create'])
+        ->middleware('permission:lifecycle_task_templates.create')->name('settings.lifecycle-task-templates.create');
+    Route::get('settings/lifecycle-task-templates/{lifecycleTaskTemplate}/edit', [LifecycleTaskTemplateUiController::class, 'edit'])
+        ->middleware('permission:lifecycle_task_templates.update')->name('settings.lifecycle-task-templates.edit');
 
     Route::get('settings/locations', [LocationUiController::class, 'index'])
         ->middleware('permission:locations.view')->name('settings.locations');

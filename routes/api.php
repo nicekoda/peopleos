@@ -19,6 +19,7 @@ use App\Http\Controllers\Api\V1\LeaveRequestController;
 use App\Http\Controllers\Api\V1\LeaveTypeController;
 use App\Http\Controllers\Api\V1\LifecycleProcessController;
 use App\Http\Controllers\Api\V1\LifecycleTaskController;
+use App\Http\Controllers\Api\V1\LifecycleTaskTemplateController;
 use App\Http\Controllers\Api\V1\LocationController;
 use App\Http\Controllers\Api\V1\MeController;
 use App\Http\Controllers\Api\V1\PermissionController;
@@ -241,6 +242,16 @@ Route::middleware(['auth', 'tenant.matches'])->prefix('api/v1')->group(function 
     // is necessary but not sufficient for Line Manager/Employee callers.
     Route::post('lifecycle-tasks/{lifecycleTask}/complete', [LifecycleTaskController::class, 'complete'])->middleware('permission:lifecycle.complete_task');
     Route::post('lifecycle-tasks/{lifecycleTask}/skip', [LifecycleTaskController::class, 'skip'])->middleware('permission:lifecycle.complete_task');
+
+    // Checkpoint 42 — Onboarding & Offboarding Task Templates
+    // Foundation. Its own permission group (lifecycle_task_templates.*),
+    // not lifecycle.* — managing the template catalog is a distinct
+    // admin-configuration concern from working processes/tasks.
+    Route::get('lifecycle-task-templates', [LifecycleTaskTemplateController::class, 'index'])->middleware('permission:lifecycle_task_templates.view');
+    Route::post('lifecycle-task-templates', [LifecycleTaskTemplateController::class, 'store'])->middleware('permission:lifecycle_task_templates.create');
+    Route::get('lifecycle-task-templates/{lifecycleTaskTemplate}', [LifecycleTaskTemplateController::class, 'show'])->middleware('permission:lifecycle_task_templates.view');
+    Route::patch('lifecycle-task-templates/{lifecycleTaskTemplate}', [LifecycleTaskTemplateController::class, 'update'])->middleware('permission:lifecycle_task_templates.update');
+    Route::delete('lifecycle-task-templates/{lifecycleTaskTemplate}', [LifecycleTaskTemplateController::class, 'destroy'])->middleware('permission:lifecycle_task_templates.delete');
 
     // Checkpoint 34 — HR Documents & Letter Generation Foundation.
     // Content-only MVP (Option A, approved): rendered_content is stored

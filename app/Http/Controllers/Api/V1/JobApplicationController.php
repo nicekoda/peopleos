@@ -23,6 +23,7 @@ use App\Models\RecruitmentApplication;
 use App\Models\RecruitmentApplicationNote;
 use App\Models\Tenant;
 use App\Services\Audit\AuditLogger;
+use App\Services\LifecycleTaskTemplateApplier;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
@@ -370,11 +371,11 @@ class JobApplicationController extends Controller
      * server-derived, never accepted from input. Gated by lifecycle.create
      * (not a new recruitment-specific permission, per your explicit
      * approved choice — starting onboarding is a lifecycle action, not
-     * just a recruitment one). Creates only the LifecycleProcess itself
-     * (status: draft) — no tasks, no user account, no role assignment,
-     * no notifications (all explicitly out of scope this checkpoint).
-     * Runs in a transaction: the process and the application's
-     * onboarding_process_id link succeed or fail together.
+     * just a recruitment one). No user account, role assignment, or
+     * notifications (explicitly out of scope). Runs in a transaction:
+     * the process, its template-derived tasks (Checkpoint 42 — see
+     * LifecycleTaskTemplateApplier), and the application's
+     * onboarding_process_id link all succeed or fail together.
      */
     public function startOnboarding(Request $request, RecruitmentApplication $jobApplication): JsonResponse
     {
@@ -402,6 +403,8 @@ class JobApplicationController extends Controller
                 'created_by' => $request->user()->id,
                 'updated_by' => $request->user()->id,
             ]);
+
+            LifecycleTaskTemplateApplier::applyToProcess($process, $request->user()->id);
 
             $jobApplication->onboarding_process_id = $process->id;
             $jobApplication->updated_by = $request->user()->id;
@@ -435,6 +438,22 @@ class JobApplicationController extends Controller
             ipAddress: $request->ip(),
             userAgent: $request->userAgent(),
         );
+
+        $taskCount = $process->tasks()->count();
+        if ($taskCount > 0) {
+            AuditLogger::logFor(
+                actor: $request->user(),
+                action: 'lifecycle_process.tasks_applied_from_templates',
+                module: 'lifecycle',
+                tenantId: $jobApplication->tenant_id,
+                auditableType: LifecycleProcess::class,
+                auditableId: $process->id,
+                description: "{$taskCount} task(s) applied from templates (onboarding).",
+                metadata: ['task_count' => $taskCount, 'type' => 'onboarding'],
+                ipAddress: $request->ip(),
+                userAgent: $request->userAgent(),
+            );
+        }
 
         return (new JobApplicationResource($jobApplication->fresh(['job', 'applicant', 'convertedEmployee', 'onboardingProcess'])))->response()->setStatusCode(200);
     }

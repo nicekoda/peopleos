@@ -2252,7 +2252,92 @@ a separate page the user then has to fill in themselves.
 
 Documented, not built: automatic task creation/templates on the newly
 started process (the process is created bare, exactly as a manual
-Lifecycle Create would leave it); notifications to the new employee or
-their manager that onboarding has started; and automatic `User`
-account/role-assignment at this same handoff point — all three remain
-Checkpoint 40's original deferred scope, unchanged by this checkpoint.
+Lifecycle Create would leave it — **resolved next checkpoint, see
+below**); notifications to the new employee or their manager that
+onboarding has started; and automatic `User` account/role-assignment
+at this same handoff point — the latter two remain Checkpoint 40's
+original deferred scope, unchanged by this checkpoint.
+
+## Onboarding & Offboarding Task Templates Foundation (Checkpoint 42)
+
+Closes the "process starts bare" gap Checkpoint 41 flagged immediately
+above. See
+[`security.md`](security.md#onboarding--offboarding-task-templates-foundation-checkpoint-42)
+for the full security model and
+[`api.md`](api.md#onboarding--offboarding-task-templates) for the
+route reference.
+
+**A new table, `lifecycle_task_templates` — deliberately its own
+table, not a column/flag on `employee_lifecycle_tasks`.** A template
+needs to be edited or archived without ever touching a task that was
+already generated from it; keeping them as two separate tables makes
+that structurally true rather than something application code has to
+enforce. Columns: `tenant_id`, `type` (reuses `LifecycleProcessType` —
+onboarding/offboarding — rather than a new enum, since a template's
+whole purpose is "which process type does this apply to"), `title`,
+`description` (nullable), `due_in_days` (nullable, 0-365), `sort_order`
+(default 0), plus the usual `created_by`/`updated_by`/soft-delete
+columns every tenant-owned lookup model in this app has. Unique on
+`(tenant_id, type, title)` — the same title can exist for onboarding
+and offboarding independently, since they're really two separate lists
+that happen to share a table.
+
+**`LifecycleTaskTemplateApplier` is the one place template-copying
+logic lives — called from both process-creation entry points, not
+duplicated between them.** `LifecycleProcessController::store()` and
+`JobApplicationController::startOnboarding()` (Checkpoint 41) both
+create a `LifecycleProcess` and then call
+`LifecycleTaskTemplateApplier::applyToProcess($process, $actorUserId)`,
+which queries every non-archived template matching the process's own
+`tenant_id` + `type`, ordered by `sort_order` then `title`, and creates
+one real `LifecycleTask` per template — `title`/`description` copied
+verbatim, `due_date` computed as `now()->addDays($template->due_in_days)`
+when set (left `null` when the template has no due-day offset, not
+defaulted to "today"), `status` always `pending`, and
+`assigned_to_user_id` always `null` — a template has no way to know
+who should get the task, so every generated task starts unassigned and
+gets assigned the same way a manually created task already does
+(`LifecycleTaskController::update()`).
+
+**Generated tasks keep zero live link back to their template.** No
+`source_template_id` column exists on `employee_lifecycle_tasks` —
+once copied, a task is exactly as independent of its template as a
+manually created one always was, the same "generate once, then
+independent" posture HR Documents established (Checkpoint 34) for
+rendered content vs. template content. This is a deliberate scope cut,
+not an oversight — see "Future" below.
+
+**Both process-creation endpoints now run inside a transaction.**
+`LifecycleProcessController::store()` had none before this checkpoint
+(a single-row `create()` didn't need one); now that it also creates N
+task rows in the same request, the process and every template-derived
+task succeed or fail together. `JobApplicationController::startOnboarding()`
+already had a transaction (Checkpoint 41); the applier call was simply
+added inside the existing closure.
+
+**Permission: its own group, `lifecycle_task_templates.*`, not folded
+into `lifecycle.*`.** Managing the template catalog (an admin
+configuration concern) is kept distinct from working the
+processes/tasks it feeds, mirroring the existing
+`document_categories.*`/`documents.*` split. Granted to Tenant Admin
+(blanket)/HR Manager/HR Director (full manage) and HR Officer
+(view/create/update, no delete) in the identical shape each role
+already holds `lifecycle.*` itself, and view-only to Auditor — see
+`docs/security.md` for the full mapping.
+
+**Nine starter templates seeded for the `uesl` demo tenant** (five
+onboarding: welcome email, IT/equipment setup, buddy assignment,
+new-hire paperwork, orientation; four offboarding: revoke access,
+collect equipment, exit interview, final settlement), via
+`DemoDataSeeder::seedLifecycleTaskTemplates()`, the same idempotent
+`firstOrCreate` pattern `seedHrDocumentTemplates()` already
+established.
+
+### Future
+
+Documented, not built: assigning a default assignee (e.g. "always
+assign IT-setup tasks to the IT Support role") per template; a
+`source_template_id` trace from a generated task back to the template
+it came from; notifications when a template-derived task's due date
+arrives or passes; and reordering/duplicating templates in bulk. None
+of these were part of this checkpoint's scope.

@@ -2,12 +2,14 @@
 
 namespace Tests\Feature;
 
+use App\Enums\LifecycleProcessType;
 use App\Models\Employee;
 use App\Models\EmployeeDocument;
 use App\Models\HrDocumentTemplate;
 use App\Models\LeaveBalance;
 use App\Models\LeaveRequest;
 use App\Models\LeaveType;
+use App\Models\LifecycleTaskTemplate;
 use App\Models\Policy;
 use App\Models\PolicyAcknowledgement;
 use App\Models\Tenant;
@@ -93,6 +95,12 @@ class DemoDataSeederTest extends TestCase
                 );
             }
         }
+
+        // Checkpoint 42 — 5 onboarding + 4 offboarding starter task templates.
+        $taskTemplates = LifecycleTaskTemplate::query()->where('tenant_id', $tenant->id)->get();
+        $this->assertCount(9, $taskTemplates);
+        $this->assertSame(5, $taskTemplates->where('type', LifecycleProcessType::Onboarding)->count());
+        $this->assertSame(4, $taskTemplates->where('type', LifecycleProcessType::Offboarding)->count());
     }
 
     public function test_demo_data_seeder_has_no_orphaned_foreign_keys(): void

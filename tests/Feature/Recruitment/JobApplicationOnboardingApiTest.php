@@ -7,6 +7,7 @@ use App\Enums\LifecycleProcessStatus;
 use App\Enums\LifecycleProcessType;
 use App\Models\Employee;
 use App\Models\LifecycleProcess;
+use App\Models\LifecycleTaskTemplate;
 use App\Models\Permission;
 use App\Models\RecruitmentApplicant;
 use App\Models\RecruitmentApplication;
@@ -292,5 +293,23 @@ class JobApplicationOnboardingApiTest extends TestCase
         $response->assertOk();
         $response->assertJsonPath('data.onboarding_process.status', 'draft');
         $this->assertNotNull($response->json('data.onboarding_process.id'));
+    }
+
+    // Checkpoint 42 — starting onboarding this way applies matching
+    // onboarding task templates exactly like a direct lifecycle-processes
+    // create does (same LifecycleTaskTemplateApplier call).
+    public function test_start_onboarding_applies_matching_task_templates(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $user = $this->userWithPermissions($tenant, 'lifecycle.create');
+        LifecycleTaskTemplate::factory()->onboarding()->create(['tenant_id' => $tenant->id, 'title' => 'Send welcome email']);
+        LifecycleTaskTemplate::factory()->offboarding()->create(['tenant_id' => $tenant->id, 'title' => 'Revoke access']);
+        $application = $this->convertedApplication($tenant);
+
+        $this->actingAs($user)->postJson($this->url($tenant, "job-applications/{$application->id}/start-onboarding"))->assertOk();
+
+        $processId = $application->fresh()->onboarding_process_id;
+        $this->assertDatabaseHas('employee_lifecycle_tasks', ['process_id' => $processId, 'title' => 'Send welcome email']);
+        $this->assertDatabaseMissing('employee_lifecycle_tasks', ['process_id' => $processId, 'title' => 'Revoke access']);
     }
 }

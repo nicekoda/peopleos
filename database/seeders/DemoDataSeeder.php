@@ -13,6 +13,7 @@ use App\Enums\HrDocumentTemplateVersionStatus;
 use App\Enums\HrDocumentType;
 use App\Enums\LeaveRequestStatus;
 use App\Enums\LeaveTypeStatus;
+use App\Enums\LifecycleProcessType;
 use App\Enums\PolicyStatus;
 use App\Models\Department;
 use App\Models\DocumentCategory;
@@ -23,6 +24,7 @@ use App\Models\HrDocumentTemplateVersion;
 use App\Models\LeaveBalance;
 use App\Models\LeaveRequest;
 use App\Models\LeaveType;
+use App\Models\LifecycleTaskTemplate;
 use App\Models\Location;
 use App\Models\Policy;
 use App\Models\PolicyAcknowledgement;
@@ -77,6 +79,8 @@ class DemoDataSeeder extends Seeder
         $this->seedPolicies($tenant, $employees);
 
         $this->seedHrDocumentTemplates($tenant, $employees);
+
+        $this->seedLifecycleTaskTemplates($tenant, $employees);
     }
 
     /**
@@ -778,6 +782,43 @@ class DemoDataSeeder extends Seeder
             if ($template->current_version_id === null) {
                 $template->forceFill(['current_version_id' => $version->id])->save();
             }
+        }
+    }
+
+    /**
+     * Checkpoint 42 — starter task templates so newly started onboarding/
+     * offboarding processes on this demo tenant are never bare. Same
+     * "uesl only, idempotent firstOrCreate" posture as
+     * seedHrDocumentTemplates() above.
+     *
+     * @param  array<string, Employee>  $employees
+     */
+    private function seedLifecycleTaskTemplates(Tenant $tenant, array $employees): void
+    {
+        $hrManagerUserId = $employees['hr_manager']->user_id;
+
+        $starterTemplates = [
+            ['type' => LifecycleProcessType::Onboarding, 'title' => 'Send welcome email', 'due_in_days' => 0, 'sort_order' => 10],
+            ['type' => LifecycleProcessType::Onboarding, 'title' => 'Set up IT accounts and equipment', 'due_in_days' => 1, 'sort_order' => 20],
+            ['type' => LifecycleProcessType::Onboarding, 'title' => 'Assign onboarding buddy', 'due_in_days' => 2, 'sort_order' => 30],
+            ['type' => LifecycleProcessType::Onboarding, 'title' => 'Complete new-hire paperwork', 'due_in_days' => 3, 'sort_order' => 40],
+            ['type' => LifecycleProcessType::Onboarding, 'title' => 'Schedule orientation session', 'due_in_days' => 5, 'sort_order' => 50],
+            ['type' => LifecycleProcessType::Offboarding, 'title' => 'Revoke system access', 'due_in_days' => 0, 'sort_order' => 10],
+            ['type' => LifecycleProcessType::Offboarding, 'title' => 'Collect company equipment', 'due_in_days' => 0, 'sort_order' => 20],
+            ['type' => LifecycleProcessType::Offboarding, 'title' => 'Conduct exit interview', 'due_in_days' => 3, 'sort_order' => 30],
+            ['type' => LifecycleProcessType::Offboarding, 'title' => 'Process final settlement', 'due_in_days' => 7, 'sort_order' => 40],
+        ];
+
+        foreach ($starterTemplates as $starter) {
+            LifecycleTaskTemplate::query()->firstOrCreate(
+                ['tenant_id' => $tenant->id, 'type' => $starter['type'], 'title' => $starter['title']],
+                [
+                    'due_in_days' => $starter['due_in_days'],
+                    'sort_order' => $starter['sort_order'],
+                    'created_by' => $hrManagerUserId,
+                    'updated_by' => $hrManagerUserId,
+                ],
+            );
         }
     }
 }

@@ -5,6 +5,8 @@ namespace Tests\Feature\Lifecycle;
 use App\Enums\LifecycleProcessStatus;
 use App\Models\Employee;
 use App\Models\LifecycleProcess;
+use App\Models\LifecycleTask;
+use App\Models\LifecycleTaskTemplate;
 use App\Models\Permission;
 use App\Models\Role;
 use App\Models\Tenant;
@@ -495,6 +497,118 @@ class LifecycleProcessApiTest extends TestCase
         $this->actingAs($user)->deleteJson($this->url($tenant, "lifecycle-processes/{$process->id}"))->assertOk();
 
         $this->assertDatabaseHas('employee_lifecycle_processes', ['id' => $process->id]);
+    }
+
+    // Checkpoint 42 — creating a process applies matching same-tenant,
+    // same-type templates as real tasks.
+    public function test_creating_a_process_applies_matching_task_templates(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $user = $this->userWithPermissions($tenant, 'lifecycle.create');
+        $employee = Employee::factory()->create(['tenant_id' => $tenant->id]);
+        LifecycleTaskTemplate::factory()->onboarding()->create([
+            'tenant_id' => $tenant->id, 'title' => 'Send welcome email', 'due_in_days' => 0, 'sort_order' => 10,
+        ]);
+        LifecycleTaskTemplate::factory()->onboarding()->create([
+            'tenant_id' => $tenant->id, 'title' => 'Schedule orientation', 'due_in_days' => 5, 'sort_order' => 20,
+        ]);
+        // A different type's template must never be applied.
+        LifecycleTaskTemplate::factory()->offboarding()->create([
+            'tenant_id' => $tenant->id, 'title' => 'Revoke access',
+        ]);
+
+        $response = $this->actingAs($user)->postJson($this->url($tenant, 'lifecycle-processes'), [
+            'employee_id' => $employee->id,
+            'type' => 'onboarding',
+        ]);
+
+        $response->assertCreated();
+        $processId = $response->json('data.id');
+
+        // due_date is a 'date' cast — assertDatabaseHas compares raw DB
+        // strings (which include a time portion, e.g. "2026-07-10
+        // 00:00:00"), so fetch the models and compare the cast Carbon
+        // value instead of a fragile raw-string match.
+        $welcomeTask = LifecycleTask::query()->where('process_id', $processId)->where('title', 'Send welcome email')->firstOrFail();
+        $this->assertTrue($welcomeTask->due_date->isSameDay(now()));
+        $this->assertSame('pending', $welcomeTask->status->value);
+
+        $orientationTask = LifecycleTask::query()->where('process_id', $processId)->where('title', 'Schedule orientation')->firstOrFail();
+        $this->assertTrue($orientationTask->due_date->isSameDay(now()->addDays(5)));
+
+        $this->assertDatabaseMissing('employee_lifecycle_tasks', ['process_id' => $processId, 'title' => 'Revoke access']);
+        $this->assertSame(2, LifecycleTask::query()->where('process_id', $processId)->count());
+    }
+
+    // No templates for this tenant/type — process still creates fine, just empty
+    public function test_creating_a_process_with_no_matching_templates_creates_no_tasks(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $user = $this->userWithPermissions($tenant, 'lifecycle.create');
+        $employee = Employee::factory()->create(['tenant_id' => $tenant->id]);
+
+        $response = $this->actingAs($user)->postJson($this->url($tenant, 'lifecycle-processes'), [
+            'employee_id' => $employee->id,
+            'type' => 'onboarding',
+        ]);
+
+        $response->assertCreated();
+        $this->assertDatabaseCount('employee_lifecycle_tasks', 0);
+    }
+
+    // Archived templates are never applied to newly created processes
+    public function test_archived_templates_are_not_applied_to_new_processes(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $user = $this->userWithPermissions($tenant, 'lifecycle.create');
+        $employee = Employee::factory()->create(['tenant_id' => $tenant->id]);
+        LifecycleTaskTemplate::factory()->onboarding()->create(['tenant_id' => $tenant->id, 'title' => 'Archived task'])->delete();
+
+        $response = $this->actingAs($user)->postJson($this->url($tenant, 'lifecycle-processes'), [
+            'employee_id' => $employee->id,
+            'type' => 'onboarding',
+        ]);
+
+        $response->assertCreated();
+        $this->assertDatabaseCount('employee_lifecycle_tasks', 0);
+    }
+
+    // Another tenant's templates, even for the same type, are never applied
+    public function test_another_tenants_templates_are_not_applied(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $otherTenant = Tenant::factory()->create();
+        $user = $this->userWithPermissions($tenant, 'lifecycle.create');
+        $employee = Employee::factory()->create(['tenant_id' => $tenant->id]);
+        LifecycleTaskTemplate::factory()->onboarding()->create(['tenant_id' => $otherTenant->id, 'title' => 'Other tenant task']);
+
+        $response = $this->actingAs($user)->postJson($this->url($tenant, 'lifecycle-processes'), [
+            'employee_id' => $employee->id,
+            'type' => 'onboarding',
+        ]);
+
+        $response->assertCreated();
+        $this->assertDatabaseCount('employee_lifecycle_tasks', 0);
+    }
+
+    // Applying templates writes its own audit log entry, distinct from lifecycle_process.created
+    public function test_applying_templates_writes_audit_log(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $user = $this->userWithPermissions($tenant, 'lifecycle.create');
+        $employee = Employee::factory()->create(['tenant_id' => $tenant->id]);
+        LifecycleTaskTemplate::factory()->onboarding()->create(['tenant_id' => $tenant->id]);
+
+        $this->actingAs($user)->postJson($this->url($tenant, 'lifecycle-processes'), [
+            'employee_id' => $employee->id,
+            'type' => 'onboarding',
+        ])->assertCreated();
+
+        $this->assertDatabaseHas('audit_logs', [
+            'action' => 'lifecycle_process.tasks_applied_from_templates',
+            'module' => 'lifecycle',
+            'actor_user_id' => $user->id,
+        ]);
     }
 
     // All lifecycle-processes routes carry tenant.matches

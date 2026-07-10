@@ -1139,7 +1139,7 @@ single `lifecycle.*` permission set.
 | Method | Path | Permission | Notes |
 |---|---|---|---|
 | `GET` | `/api/v1/lifecycle-processes` | `lifecycle.view` | Paginated; scoped by `LifecycleVisibilityService` for non-HR/Admin/Auditor callers — see `docs/security.md` |
-| `POST` | `/api/v1/lifecycle-processes` | `lifecycle.create` | |
+| `POST` | `/api/v1/lifecycle-processes` | `lifecycle.create` | **Checkpoint 42** — also applies every matching (same tenant + type) `lifecycle_task_templates` row as a real task, inside the same transaction — see "Onboarding & Offboarding Task Templates" below |
 | `GET` | `/api/v1/lifecycle-processes/{lifecycleProcess}` | `lifecycle.view` | 404 if cross-tenant or outside the caller's visible scope |
 | `PATCH` | `/api/v1/lifecycle-processes/{lifecycleProcess}` | `lifecycle.update` | Rejected (422) if the process is `completed`/`cancelled`, or if the requested status isn't a legal transition |
 | `DELETE` | `/api/v1/lifecycle-processes/{lifecycleProcess}` | `lifecycle.delete` | Soft-cancel: transitions to `cancelled` (unless already terminal) then soft-deletes |
@@ -1148,10 +1148,31 @@ single `lifecycle.*` permission set.
 | `DELETE` | `/api/v1/lifecycle-tasks/{lifecycleTask}` | `lifecycle.delete` | Soft delete only |
 | `POST` | `/api/v1/lifecycle-tasks/{lifecycleTask}/complete` | `lifecycle.complete_task` | Also requires `LifecycleVisibilityService::canAccessTask()` — own assignment, a direct report's process, or HR/Admin-tier |
 | `POST` | `/api/v1/lifecycle-tasks/{lifecycleTask}/skip` | `lifecycle.complete_task` | Same object-level scope as complete |
+| `GET` | `/api/v1/lifecycle-task-templates` | `lifecycle_task_templates.view` | Paginated, ordered by type then sort_order then title |
+| `POST` | `/api/v1/lifecycle-task-templates` | `lifecycle_task_templates.create` | Body: `{"type": "onboarding"\|"offboarding", "title": "...", "description": "..." (optional), "due_in_days": 0-365 (optional), "sort_order": 0-1000 (optional, default 0)}` |
+| `GET` | `/api/v1/lifecycle-task-templates/{lifecycleTaskTemplate}` | `lifecycle_task_templates.view` | |
+| `PATCH` | `/api/v1/lifecycle-task-templates/{lifecycleTaskTemplate}` | `lifecycle_task_templates.update` | Same body shape, all fields `sometimes` |
+| `DELETE` | `/api/v1/lifecycle-task-templates/{lifecycleTaskTemplate}` | `lifecycle_task_templates.delete` | Soft delete ("archive") — stops being applied to new processes, never affects tasks already generated |
 
 **No standalone `GET` for a single task** — the Task Edit UI fetches
 the parent process (which eager-loads `tasks`) and finds the task
 client-side by ID instead.
+
+## Onboarding & Offboarding Task Templates
+
+Checkpoint 42. A tenant-owned catalog (`lifecycle_task_templates`) of
+default tasks per `LifecycleProcess` type. `LifecycleTaskTemplateApplier`
+copies every non-archived template matching a newly created process's
+own tenant + type into a real `LifecycleTask` row — on both
+`POST /api/v1/lifecycle-processes` and
+`POST /job-applications/{id}/start-onboarding` (Checkpoint 41). Copied
+fields: `title`, `description` verbatim; `due_date` computed as
+`now()->addDays(due_in_days)` when the template has one, otherwise left
+`null`; `status` always `pending`; `assigned_to_user_id` always `null`
+(no template can know who should get the task — assign it afterward via
+the existing `PATCH /api/v1/lifecycle-tasks/{id}`). See
+`docs/security.md` for the full permission model and tenant-isolation
+guarantees.
 
 ### Response shape
 
@@ -1579,10 +1600,10 @@ once set.
 - No document approval workflow endpoint — `documents.approve` permission and `approved_by`/`approved_at` columns are reserved, unused.
 - Pagination uses Laravel's default page-number style; no cursor pagination or configurable page size yet.
 - Session-based auth only — see "Authentication" above for the full future Sanctum/token plan.
-- No task templates, task dependencies/ordering, approval routing, notifications, or reminders for lifecycle processes/tasks (Checkpoint 33) — see `docs/security.md#onboarding--offboarding-foundation-checkpoint-33`.
+- Task templates exist as of Checkpoint 42, but there's still no task dependencies/ordering, approval routing, notifications, or reminders for lifecycle processes/tasks (Checkpoint 33) — see `docs/security.md#onboarding--offboarding-foundation-checkpoint-33` and `docs/security.md#onboarding--offboarding-task-templates-foundation-checkpoint-42`.
 - No standalone `GET` for a single lifecycle task — see "Lifecycle Processes & Tasks" above.
 - No DOCX file generation, e-signature, automated sending, bulk generation, or employee self-service download for HR Documents (Checkpoint 34/35/36/37) — see `docs/security.md#hr-documents--letter-generation-foundation-checkpoint-34`. PDF export exists (Checkpoint 35) but is generate-on-demand only — every download re-renders from `rendered_content`, nothing is ever persisted. Template version history exists (Checkpoint 36) but has no diff/compare UI and no publish-approval workflow. A single-approver approval workflow exists (Checkpoint 37) but has no multi-level/routing approval and no notifications when a document changes state. A starter template library and safe duplication exist (Checkpoint 38 — seeded per-tenant, not a global/shared catalogue) but there's no AI-assisted generation, legal clause library, cross-tenant/global marketplace, template rating, or template import/export.
-- Recruitment & Applicant Tracking (Checkpoint 39/40/41) — `resume_document_id` on `recruitment_applications` is reserved/unused (no upload endpoint), no applicant dedupe/merge-by-email (so two independent applications from the same real person could each be converted into separate employee rows), no public candidate portal, no CV parsing/AI screening, no interview scheduling, no offer approval/automation, no email notifications, and no bulk import/conversion. Candidate-to-employee conversion exists (Checkpoint 40) but creates no `User` account or role assignment automatically. A real onboarding handoff exists (Checkpoint 41, `start-onboarding`) but creates only the bare `LifecycleProcess` record — no tasks, no `User` account, no role assignment, and no notifications — see `docs/security.md#candidate-to-employee-conversion-foundation-checkpoint-40` and `docs/security.md#recruitment-to-onboarding-handoff-foundation-checkpoint-41`.
+- Recruitment & Applicant Tracking (Checkpoint 39/40/41/42) — `resume_document_id` on `recruitment_applications` is reserved/unused (no upload endpoint), no applicant dedupe/merge-by-email (so two independent applications from the same real person could each be converted into separate employee rows), no public candidate portal, no CV parsing/AI screening, no interview scheduling, no offer approval/automation, no email notifications, and no bulk import/conversion. Candidate-to-employee conversion exists (Checkpoint 40) but creates no `User` account or role assignment automatically. A real onboarding handoff exists (Checkpoint 41, `start-onboarding`) and now pre-populates default tasks from the template catalog (Checkpoint 42) — but still creates no `User` account, no role assignment, and no notifications — see `docs/security.md#candidate-to-employee-conversion-foundation-checkpoint-40`, `docs/security.md#recruitment-to-onboarding-handoff-foundation-checkpoint-41`, and `docs/security.md#onboarding--offboarding-task-templates-foundation-checkpoint-42`.
 
 ## Future
 

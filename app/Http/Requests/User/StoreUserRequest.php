@@ -22,6 +22,15 @@ use Illuminate\Validation\Validator;
  * terminated — the same two preconditions LinkEmployeeUserRequest already
  * enforces for linking an *existing* user, checked here again since this
  * request creates and links in a single step.
+ *
+ * Checkpoint 46 — send_invite is now the required field that decides
+ * whether password is required at all. Your approved scope choice was
+ * "admin's choice, not invite-only" — the caller either sets a real
+ * initial password directly (send_invite: false, today's original
+ * Checkpoint 43 behavior) or has one emailed instead (send_invite:
+ * true) via UserController::store(). Both paths remain gated by the
+ * same single users.create permission — nothing about *how* the
+ * password gets set changes who may create an account.
  */
 class StoreUserRequest extends FormRequest
 {
@@ -45,7 +54,13 @@ class StoreUserRequest extends FormRequest
             // models in this app, alongside Role, that predates
             // BelongsToTenant).
             'email' => ['required', 'email', 'max:255', Rule::unique('users', 'email')],
-            'password' => ['required', 'confirmed', Password::min(8)],
+            'send_invite' => ['required', 'boolean'],
+            // required_if, not always-required — when send_invite is
+            // true, UserController::store() generates an unusable
+            // random password instead, so there's nothing for the
+            // caller to submit at all (see withValidator below, which
+            // rejects submitting one anyway).
+            'password' => [Rule::requiredIf(fn () => ! $this->boolean('send_invite')), 'confirmed', Password::min(8)],
             'role_id' => [
                 'required', 'integer',
                 Rule::exists('roles', 'id')->where(fn ($query) => $query
@@ -73,6 +88,14 @@ class StoreUserRequest extends FormRequest
     public function withValidator(Validator $validator): void
     {
         $validator->after(function (Validator $validator): void {
+            // Checkpoint 46 — a caller submitting both send_invite: true
+            // AND a password is almost certainly a mistake (which one did
+            // they actually mean?), so this is rejected outright rather
+            // than silently preferring one over the other.
+            if ($this->boolean('send_invite') && $this->filled('password')) {
+                $validator->errors()->add('password', 'Cannot set a password directly when sending an invite email.');
+            }
+
             $employeeId = $this->input('employee_id');
 
             if (! $employeeId) {

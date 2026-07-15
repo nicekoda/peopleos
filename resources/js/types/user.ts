@@ -30,10 +30,16 @@ export interface User {
  * matching what StoreUserRequest actually accepts. password_confirmation
  * is never sent to the API on its own; the api client sends it alongside
  * password so Laravel's `confirmed` rule can compare them.
+ *
+ * Checkpoint 46 — send_invite is now required (true: an invite email is
+ * sent and password/password_confirmation are omitted from the request
+ * entirely; false: password/password_confirmation are sent, same as
+ * before this checkpoint).
  */
 export interface UserCreateFormPayload {
     name: string;
     email: string;
+    send_invite: boolean;
     password: string;
     password_confirmation: string;
     role_id: string;

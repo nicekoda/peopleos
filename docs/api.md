@@ -156,7 +156,7 @@ a backstop.
 | Method | Path | Permission | Notes |
 |---|---|---|---|
 | `GET` | `/api/v1/users` | `users.view` | Paginated, tenant users only (never platform admins) |
-| `POST` | `/api/v1/users` | `users.create` | **New in Checkpoint 43** — the first user-creation route in this app. Body: `{"name": "...", "email": "...", "password": "...", "password_confirmation": "...", "role_id": 1, "employee_id": "01h..." (optional)}`. Creates the account, assigns the role, and (if `employee_id` given) links an existing, unlinked, non-terminated employee — all inside one transaction. Never triggered automatically by conversion/onboarding — see "User creation" below |
+| `POST` | `/api/v1/users` | `users.create` | The first user-creation route in this app (Checkpoint 43). Body: `{"name": "...", "email": "...", "send_invite": true\|false, "password": "..." (required only if send_invite is false), "password_confirmation": "..." (same), "role_id": 1, "employee_id": "01h..." (optional)}`. Creates the account, assigns the role, and (if `employee_id` given) links an existing, unlinked, non-terminated employee — all inside one transaction. **Checkpoint 46** — when `send_invite` is true, the account gets an unusable random password and an invite email instead; see "Invite-Email Flow for New Accounts" below. Never triggered automatically by conversion/onboarding — see "User creation" below |
 | `GET` | `/api/v1/users/{user}` | `users.view` | `404` if cross-tenant or a platform admin |
 | `PATCH` | `/api/v1/users/{user}` | `users.deactivate` | Body: `{"status": "active"\|"inactive"\|"suspended"}` — **only** `status` is accepted; `409` if this would leave the tenant with no active Tenant Admin |
 | `GET` | `/api/v1/roles` | `roles.view` | Paginated, tenant roles only (never platform roles) |
@@ -241,10 +241,8 @@ automatically), account creation is never triggered by
 `.../start-onboarding` — this stays a separate, explicit action the
 caller reaches on purpose. See
 `docs/security.md#user-account-provisioning-checkpoint-43` for the full
-design and current limitations (no invite-email flow — the caller sets
-the account's real initial password directly; a real password reset
-flow now exists for that account afterward — see "Password Reset"
-below).
+design. **Checkpoint 46 added `send_invite`** — see "Invite-Email Flow
+for New Accounts" below for the current request body shape.
 
 ### Password Reset
 
@@ -280,6 +278,47 @@ builds it against the target user's own `{subdomain}.{base_domain}`
 `docs/security.md#password-reset-checkpoint-44` for the full security
 design, including why the tenant check is enforced independently at
 both the send and reset steps.
+
+### Invite-Email Flow for New Accounts
+
+Checkpoint 46. `POST /api/v1/users`'s `send_invite` field (required,
+boolean) decides how the new account gets its password:
+
+```json
+// POST /api/v1/users — send_invite: true
+{
+  "name": "New Hire",
+  "email": "new.hire@example.com",
+  "send_invite": true,
+  "role_id": 4
+}
+```
+
+`password`/`password_confirmation` must be omitted entirely on this
+path — submitting either alongside `send_invite: true` is rejected
+(`422`, error on `password`). The account is created with an unusable
+random password, then an invite email
+(`App\Notifications\UserInvited`) is sent pointing to the exact same
+`GET /reset-password/{token}` page documented above — no new route
+exists for "accepting" an invite; it's indistinguishable from a
+forgot-password link once sent, only the email's subject/copy differs.
+
+```json
+// POST /api/v1/users — send_invite: false (Checkpoint 43's original shape)
+{
+  "name": "New Hire",
+  "email": "new.hire@example.com",
+  "send_invite": false,
+  "password": "correct-horse-battery-staple",
+  "password_confirmation": "correct-horse-battery-staple",
+  "role_id": 4
+}
+```
+
+Response shape is the same `UserResource` either way — never the
+password, never the invite token. See
+`docs/security.md#invite-email-flow-for-new-accounts-checkpoint-46` for
+the full security design.
 
 ## Audit Logs
 

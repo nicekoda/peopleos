@@ -709,6 +709,31 @@ the same wall-clock moment, every day their tasks remain overdue or
 due-soon. See `docs/architecture.md`, `docs/security.md`, and
 `docs/deployment.md` for the full design.
 
+## Invite-Email Flow for New Accounts (Checkpoint 46)
+
+Closes the gap repeatedly flagged as "the single biggest remaining
+gap" since Checkpoint 43: `POST /api/v1/users` no longer *always*
+requires the caller to set a real password and share it out of band.
+`send_invite` is now a required field on account creation — your
+approved scope choice was "admin's choice," not "invite-only," so both
+paths remain fully supported. `send_invite: false` is byte-for-byte
+Checkpoint 43's original behavior (the caller sets and confirms a real
+password directly). `send_invite: true` (the Create User form's
+default) instead creates the account with an unusable random password
+and emails the new user a link to set their own — reusing Checkpoint
+44's exact `/reset-password/{token}` page and validation, just with new
+welcome-style wording (`App\Notifications\UserInvited`) rather than a
+reuse of Laravel's built-in `ResetPassword` notification, which would
+have been a confusing thing to send someone who never had a password to
+"reset." Submitting a password alongside `send_invite: true` is
+rejected outright — the two paths are mutually exclusive, never a
+priority order. No new permission was introduced; both paths remain
+gated by the same `users.create` permission Checkpoint 43 already
+established. **Still no "resend invite" action for an expired link, and
+no visual indicator distinguishing a pending-invite account from one
+with a real password** — see `docs/security.md` for the full design and
+remaining gaps.
+
 ## Documentation
 
 - [`docs/architecture.md`](docs/architecture.md) — multi-tenancy, tenant resolution, RBAC overview, internal-vs-public IDs, frontend architecture.

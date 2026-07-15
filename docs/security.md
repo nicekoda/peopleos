@@ -2838,8 +2838,8 @@ every Settings page's shared props.
 ### Future
 
 - Full user management UI (deactivate and assign roles already exist
-  since Checkpoint 23; create now exists since Checkpoint 43 — a real
-  invite-email flow is the remaining piece).
+  since Checkpoint 23; create now exists since Checkpoint 43, and an
+  invite-email flow since Checkpoint 46).
 - Full RBAC management UI (create/edit roles, assign permissions),
   building on the already-seeded `roles.*`/`permissions.*` permissions.
 - Document category and leave type admin UIs, reusing existing APIs.
@@ -3017,15 +3017,11 @@ internal appears anywhere in either resource's response.
 
 ### Current limitations
 
-- No user invitation flow — an admin-driven create action exists
-  (`POST /api/v1/users`, Checkpoint 43 — see
-  [User Account Provisioning](#user-account-provisioning-checkpoint-43)
-  below), and a real self-service password reset flow exists (Checkpoint
-  44 — see
-  [Password Reset](#password-reset-checkpoint-44) below), but there's
-  still no invite-email specifically: the admin creating an account
-  still sets its real initial password directly, rather than the new
-  user setting their own via a reset-style link on first login.
+- ~~No user invitation flow~~ — closed in Checkpoint 46
+  (`send_invite: true` on `POST /api/v1/users`; see
+  [Invite-Email Flow for New Accounts](#invite-email-flow-for-new-accounts-checkpoint-46)
+  below), built on the admin-driven create action (Checkpoint 43) and
+  the self-service reset flow (Checkpoint 44) that already existed.
 - No MFA setup or SSO configuration.
 - No direct permission grant UI — `GET /api/v1/permissions` is
   read-only and unused by any write path this checkpoint; direct
@@ -3040,11 +3036,9 @@ internal appears anywhere in either resource's response.
 
 ### Future
 
-- An invite-email flow specifically (new-account creation still sets a
-  real password directly rather than emailing a set-your-own-password
-  link) — the remaining gap after Checkpoint 43's create action and
-  Checkpoint 44's password reset flow; see
-  [Password Reset](#password-reset-checkpoint-44) below.
+- ~~An invite-email flow specifically~~ — done in Checkpoint 46; see
+  [Invite-Email Flow for New Accounts](#invite-email-flow-for-new-accounts-checkpoint-46)
+  below.
 - MFA setup UI.
 - A direct permission grant UI, reusing `User::grantPermission()`/
   `revokePermission()` (already built, Checkpoint 4).
@@ -5228,9 +5222,11 @@ effect — creating one now follows the identical philosophy.
 ### The password is never returned, logged, or recoverable through this app
 
 `StoreUserRequest` requires `password` (`confirmed`, `Password::min(8)`)
-— the caller sets the account's real initial password directly, since
-no invite-email/password-reset flow exists (see "Current limitations").
-`UserResource` already excluded `password`/`remember_token` before this
+only on the `send_invite: false` path — the caller sets the account's
+real initial password directly. As of Checkpoint 46, `send_invite: true`
+is the recommended alternative (see
+[Invite-Email Flow for New Accounts](#invite-email-flow-for-new-accounts-checkpoint-46)
+below). `UserResource` already excluded `password`/`remember_token` before this
 checkpoint (Checkpoint 23's own `#[Hidden(...)]` attribute on the
 model). The `user.created` audit log's `new_values` records only
 `name`/`email`/`role_id`/`employee_id` — never the password, matching
@@ -5249,10 +5245,14 @@ cannot create, edit, or delete roles (no `roles.create/update/delete`).
 
 ### Current limitations
 
-- No invite-email or password-reset flow — the caller sets the real
+- ~~No invite-email or password-reset flow — the caller sets the real
   password directly; there is no way for the new user to set their own
-  password without the creator sharing it out of band.
-- No "resend/reset credentials" action for an account created this way.
+  password without the creator sharing it out of band.~~ Closed in
+  Checkpoint 46 (`send_invite: true`) — "set it directly" (`send_invite:
+  false`) still exists as the other, equally-supported option.
+- No "resend invite" action for an account whose invite link expired
+  before they used it (Checkpoint 46) — see that checkpoint's own
+  "Current limitations" below.
 - No email verification is enforced (same pre-existing gap as every
   other user in this app — `email_verified_at` is set immediately,
   matching `UserSeeder`'s own convention, but nothing ever checks it).
@@ -5264,10 +5264,12 @@ cannot create, edit, or delete roles (no `roles.create/update/delete`).
 
 ### Future
 
-- A real invite-email/password-reset flow — the single biggest gap
-  this checkpoint deliberately leaves open.
+- ~~A real invite-email/password-reset flow — the single biggest gap
+  this checkpoint deliberately leaves open.~~ Closed in Checkpoint 46.
 - A "resend credentials" or forced-password-change-on-first-login
-  option once that flow exists.
+  option — partially addressed by Checkpoint 46 (the invite flow *is*
+  effectively forced-password-change-on-first-login for that path), but
+  no dedicated "resend" action exists yet for an expired invite.
 - Bulk/CSV user import.
 
 ## Password Reset (Checkpoint 44)
@@ -5355,11 +5357,11 @@ deployment story.
 
 ### Current limitations
 
-- No invite-email flow specifically — creating a new account
-  (Checkpoint 43) still requires the admin to set a real initial
-  password directly; this checkpoint didn't change that flow, only
-  added a way for *any* existing account (including one just created)
-  to reset its own password afterward.
+- ~~No invite-email flow specifically~~ — this checkpoint's own
+  `/reset-password/{token}` page is exactly what Checkpoint 46's invite
+  flow reuses; see
+  [Invite-Email Flow for New Accounts](#invite-email-flow-for-new-accounts-checkpoint-46)
+  below.
 - No rate limiting beyond Laravel's own built-in per-email token
   throttle (`config('auth.passwords.users.throttle')`, 60 seconds) — no
   additional IP-based throttling on `/forgot-password` itself.
@@ -5374,8 +5376,12 @@ deployment story.
 
 ### Future
 
-- A real invite-email flow for Checkpoint 43's create action, reusing
-  this checkpoint's tenant-aware URL-building approach.
+- ~~A real invite-email flow for Checkpoint 43's create action, reusing
+  this checkpoint's tenant-aware URL-building approach.~~ Done in
+  Checkpoint 46 — reused the `/reset-password/{token}` page directly
+  rather than the URL-building *approach* specifically (that logic is
+  duplicated a third time, not shared — see Checkpoint 46's own design
+  notes).
 - Queue the reset email once this app has a real queue worker story.
 - A post-reset confirmation email.
 - IP-based rate limiting on `/forgot-password`, on top of the existing
@@ -5500,6 +5506,102 @@ infrastructure dependency, not two.
   real need for that emerges — explicitly out of scope for this
   checkpoint, which only added display ordering.
 
+## Invite-Email Flow for New Accounts (Checkpoint 46)
+
+Closes the gap repeatedly flagged as "the single biggest remaining
+gap" since Checkpoint 43. See
+[`architecture.md`](architecture.md#invite-email-flow-for-new-accounts-checkpoint-46)
+for the technical writeup; this section covers the security design.
+
+### `send_invite` is required — an explicit choice, never inferred
+
+`StoreUserRequest` requires `send_invite` as a boolean on every
+`POST /api/v1/users` call. There is no default inferred from whether
+`password` happens to be present — a caller must say which path they
+mean. Submitting `send_invite: true` alongside a non-empty `password`
+is rejected (422) rather than silently picking one; the two paths are
+mutually exclusive, not a priority order.
+
+### The account is unusable until a real password is set
+
+When `send_invite` is true, `UserController::store()` sets the new
+account's password to `Str::random(64)` — cast through the same
+`'password' => 'hashed'` Eloquent cast every other password on this
+model uses, so it's a real bcrypt hash of an unguessable value nobody
+(including the creator) ever sees. Login is cryptographically
+impossible until the invited user actually uses the emailed link to set
+a real one. This is a materially stronger property than Checkpoint 43's
+original `send_invite: false` path, where the creator does briefly know
+the account's real password (mitigated there by never logging or
+returning it — see that checkpoint's own security notes).
+
+### Same permission, same audit posture, one new independent log entry
+
+No new permission was introduced — both paths remain gated by the
+single `users.create` permission from Checkpoint 43; *how* a password
+gets set doesn't change *who* may create an account. `user.created` is
+still written for every creation (now with `metadata.invited`); a
+second, independent `user.invited` entry is written only when the
+invite email is actually sent, mirroring Checkpoint 42's
+`lifecycle_process.tasks_applied_from_templates` precedent of a
+distinct real-world event getting its own log entry rather than being
+folded into the primary one's metadata alone. Neither entry ever
+records the random password, the reset token, or the invite URL.
+
+### Reuses Checkpoint 44's token/notification infrastructure — deliberately not `Password::sendResetLink()`
+
+`Password::createToken($user)` is called directly to mint a real
+`password_reset_tokens` row, then `App\Notifications\UserInvited` is
+sent explicitly. `Password::sendResetLink()` was deliberately *not*
+used here even though it would have generated the same kind of token —
+that method always sends Laravel's built-in `ResetPassword` notification
+internally (hardcoded via `CanResetPassword::sendPasswordResetNotification()`),
+whose "Reset Password" subject/copy would be confusing for someone who
+never had a password to reset in the first place. This means an
+invited user's link is functionally identical to a forgot-password
+link (same token table, same `/reset-password/{token}` page, same
+`ResetPasswordRequest::reset()` validation and tenant-boundary
+enforcement) — only the *email that pointed them there* differs in
+wording.
+
+### Sent synchronously, outside the creation transaction — same reasoning as Checkpoint 44
+
+`Password::createToken()` and `$user->notify(new UserInvited(...))` run
+strictly after `DB::transaction()` commits, not inside it — a mail-send
+failure must never roll back an otherwise-successful account creation,
+the identical reasoning `ForgotPasswordRequest::sendResetLinkIfEligible()`
+already established for its own `Password::sendResetLink()` call.
+Nothing in this app queues anything yet (see `docs/deployment.md` §6);
+this notification is no exception.
+
+### Current limitations
+
+- No "resend invite" action — if an invite link expires
+  (`config('auth.passwords.users.expire')`, 60 minutes by default)
+  before the invited user clicks it, the only recovery path today is a
+  standard forgot-password request from the login page. That works
+  (the account exists, with a real if unusable password hash) but isn't
+  a purpose-built "resend" affordance reachable from the Users list.
+- No visual indicator on the Users list/detail page distinguishing an
+  account that's never completed its invite (still holds the random
+  unusable password) from one with a real, user-chosen password.
+- No expiry-aware messaging — an invited user who waits too long sees
+  the same generic "This password reset link is invalid or has
+  expired" message `ResetPasswordRequest` already gives for every other
+  expired-token case, not an invite-specific one.
+- Self-service password change (an already-authenticated user changing
+  their own known password) still doesn't exist — this checkpoint and
+  Checkpoint 44 both only ever address "I don't have/know a working
+  password," not "I know mine and want to change it."
+
+### Future
+
+- A "resend invite" action, reusing the same `Password::createToken()`
+  + `UserInvited` pair this checkpoint already built.
+- A "pending invite" visual indicator on the Users list.
+- Self-service password change for an authenticated user.
+- MFA and bulk/CSV user import remain out of scope, as before.
+
 ## Local Demo Credentials
 
 **Local development only — these are not real secrets and only work against your own local database.** Password comes from `SEED_USER_PASSWORD` in `.env` (not committed; `.env.example` has an empty placeholder).
@@ -5527,7 +5629,7 @@ data these six `uesl` logins see (Checkpoint 26's `DemoDataSeeder`).
 ## Known Limitations / Follow-up
 
 - No email verification enforcement on login (column exists, not yet checked).
-- Password reset exists as of Checkpoint 44 (the `password_reset_tokens` table, previously unused, now backs a real forgot-password flow) — see [Password Reset](#password-reset-checkpoint-44) below. Still no invite-email, MFA, or SSO.
+- Password reset exists as of Checkpoint 44 (the `password_reset_tokens` table, previously unused, now backs a real forgot-password flow) — see [Password Reset](#password-reset-checkpoint-44) below. An invite-email flow (built on the same token table) exists as of Checkpoint 46 — see [Invite-Email Flow for New Accounts](#invite-email-flow-for-new-accounts-checkpoint-46) below. Still no MFA or SSO.
 - This app's first scheduled task exists as of Checkpoint 45 (`lifecycle:send-task-digest`, registered via `bootstrap/app.php`'s `->withSchedule()`) — see [Lifecycle Task Ordering & Reminders](#lifecycle-task-ordering--reminders-checkpoint-45) below. Production deployments must now add a `php artisan schedule:run` cron entry, which was never required before this checkpoint (see `docs/deployment.md` §6). Still no queued jobs anywhere in the app.
 - `DatabaseSeeder` uses `WithoutModelEvents`, which disables the `saving`/`creating` guards (on `User` and `Role`) during seeding. `UserSeeder`/`RoleSeeder` set `tenant_id`/`is_platform_admin`/`is_platform_role` explicitly on every row regardless, so this doesn't cause incorrect data — but it does mean a same-row consistency mistake in seed data would surface as a raw Postgres constraint error rather than the cleaner app-level exception. (The RBAC *assignment* guards — `assignRole()`, `givePermissionTo()`, `grantPermission()` — and audit logging calls are unaffected by this, since they're plain method logic, not Eloquent events.)
 - See "Current limitations" under Audit Logging above for the audit-specific gaps (no read endpoint, `givePermissionTo()`/tenant CRUD not logged yet).

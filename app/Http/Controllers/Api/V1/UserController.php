@@ -10,12 +10,15 @@ use App\Models\Employee;
 use App\Models\Role;
 use App\Models\Tenant;
 use App\Models\User;
+use App\Notifications\UserInvited;
 use App\Services\Audit\AuditLogger;
 use App\Services\TenantAdminProtectionService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Password;
+use Illuminate\Support\Str;
 
 /**
  * User and Role (Checkpoint 23) are the first tenant-scoped models in
@@ -52,18 +55,22 @@ class UserController extends Controller
     /**
      * Checkpoint 43 — the first user-creation endpoint in this app.
      * users.create was reserved back in Checkpoint 23 for exactly this
-     * gap (see docs/security.md's "no user invitation flow" limitation —
-     * still true after this checkpoint: there's no password-reset/
-     * invite-email flow, so the caller sets the initial password
-     * directly, and it's never returned or logged anywhere). A separate,
-     * explicit, single-permission-gated action, per your approved scope
-     * choice — never triggered automatically by candidate-to-employee
-     * conversion or onboarding start, same "explicit, never automatic"
-     * posture EmployeeUserLinkController already documents for linking
-     * an *existing* user. role assignment and the optional employee link
-     * happen inside the same transaction as user creation — never a
-     * moment where the account exists but is unassigned/unlinked if a
-     * later step in the request were to fail.
+     * gap. A separate, explicit, single-permission-gated action, per
+     * your approved scope choice — never triggered automatically by
+     * candidate-to-employee conversion or onboarding start, same
+     * "explicit, never automatic" posture EmployeeUserLinkController
+     * already documents for linking an *existing* user. role assignment
+     * and the optional employee link happen inside the same transaction
+     * as user creation — never a moment where the account exists but is
+     * unassigned/unlinked if a later step in the request were to fail.
+     *
+     * Checkpoint 46 — send_invite decides how the account gets its
+     * password. When false (Checkpoint 43's original behavior), the
+     * caller's own submitted password is set directly. When true, the
+     * account is created with an unusable random password instead
+     * (Str::random(64) — nobody knows it, login is impossible until a
+     * real one is set), and an invite email is sent once the
+     * transaction has committed.
      */
     public function store(StoreUserRequest $request): JsonResponse
     {
@@ -71,13 +78,14 @@ class UserController extends Controller
         $tenantId = app(Tenant::class)->id;
         $role = Role::query()->findOrFail($validated['role_id']);
         $employee = isset($validated['employee_id']) ? Employee::query()->findOrFail($validated['employee_id']) : null;
+        $sendInvite = $validated['send_invite'];
 
-        $user = DB::transaction(function () use ($validated, $tenantId, $role, $employee, $request) {
+        $user = DB::transaction(function () use ($validated, $tenantId, $role, $employee, $request, $sendInvite) {
             $user = User::query()->create([
                 'tenant_id' => $tenantId,
                 'name' => $validated['name'],
                 'email' => $validated['email'],
-                'password' => $validated['password'],
+                'password' => $sendInvite ? Str::random(64) : $validated['password'],
                 'status' => User::STATUS_ACTIVE,
                 'is_platform_admin' => false,
                 // No verification flow exists yet (same posture as
@@ -114,9 +122,36 @@ class UserController extends Controller
                 ? "User account '{$user->name}' ({$user->email}) created and linked to employee #{$employee->id}."
                 : "User account '{$user->name}' ({$user->email}) created.",
             newValues: ['name' => $user->name, 'email' => $user->email, 'role_id' => $role->id, 'employee_id' => $employee?->id],
+            metadata: ['invited' => $sendInvite],
             ipAddress: $request->ip(),
             userAgent: $request->userAgent(),
         );
+
+        // Deliberately outside the transaction above, same reasoning
+        // Checkpoint 44's ForgotPasswordRequest already established for
+        // its own Password::sendResetLink() call: a mail-send failure
+        // here must never roll back an otherwise-successful account
+        // creation. Password::createToken() is called directly (not
+        // Password::sendResetLink(), which always sends Laravel's
+        // built-in ResetPassword notification internally) so this can
+        // send UserInvited's own welcome-style copy instead.
+        if ($sendInvite) {
+            $token = Password::createToken($user);
+            $user->notify(new UserInvited($token));
+
+            AuditLogger::logFor(
+                actor: $request->user(),
+                action: 'user.invited',
+                module: 'users',
+                tenantId: $tenantId,
+                auditableType: User::class,
+                auditableId: (string) $user->id,
+                targetUserId: $user->id,
+                description: "Invite email sent to '{$user->email}' for user #{$user->id}.",
+                ipAddress: $request->ip(),
+                userAgent: $request->userAgent(),
+            );
+        }
 
         $user->loadMissing(['roles', 'employee']);
 

@@ -9,8 +9,11 @@ use App\Models\Permission;
 use App\Models\Role;
 use App\Models\Tenant;
 use App\Models\User;
+use App\Notifications\UserInvited;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Notification;
+use Illuminate\Support\Facades\Password;
 use Illuminate\Support\Facades\Route;
 use Tests\TestCase;
 
@@ -265,7 +268,7 @@ class UserApiTest extends TestCase
 
         $this->postJson($this->url($tenant, 'users'), [
             'name' => 'New Hire', 'email' => 'new.hire@example.com',
-            'password' => 'password123', 'password_confirmation' => 'password123',
+            'send_invite' => false, 'password' => 'password123', 'password_confirmation' => 'password123',
         ])->assertUnauthorized();
     }
 
@@ -277,7 +280,7 @@ class UserApiTest extends TestCase
 
         $response = $this->actingAs($actor)->postJson($this->url($tenant, 'users'), [
             'name' => 'New Hire', 'email' => 'new.hire@example.com',
-            'password' => 'password123', 'password_confirmation' => 'password123',
+            'send_invite' => false, 'password' => 'password123', 'password_confirmation' => 'password123',
             'role_id' => $role->id,
         ]);
 
@@ -293,7 +296,7 @@ class UserApiTest extends TestCase
 
         $response = $this->actingAs($actor)->postJson($this->url($tenant, 'users'), [
             'name' => 'New Hire', 'email' => 'new.hire@example.com',
-            'password' => 'password123', 'password_confirmation' => 'password123',
+            'send_invite' => false, 'password' => 'password123', 'password_confirmation' => 'password123',
             'role_id' => $role->id,
         ]);
 
@@ -313,7 +316,7 @@ class UserApiTest extends TestCase
 
         $response = $this->actingAs($actor)->postJson($this->url($tenant, 'users'), [
             'name' => 'New Hire', 'email' => 'new.hire@example.com',
-            'password' => 'correct-horse-battery-staple', 'password_confirmation' => 'correct-horse-battery-staple',
+            'send_invite' => false, 'password' => 'correct-horse-battery-staple', 'password_confirmation' => 'correct-horse-battery-staple',
             'role_id' => $role->id,
         ]);
 
@@ -334,7 +337,7 @@ class UserApiTest extends TestCase
 
         $response = $this->actingAs($actor)->postJson($this->url($tenant, 'users'), [
             'name' => 'New Hire', 'email' => 'new.hire@example.com',
-            'password' => 'password123', 'password_confirmation' => 'password123',
+            'send_invite' => false, 'password' => 'password123', 'password_confirmation' => 'password123',
             'role_id' => $role->id,
         ]);
 
@@ -353,7 +356,7 @@ class UserApiTest extends TestCase
 
         $response = $this->actingAs($actor)->postJson($this->url($tenant, 'users'), [
             'name' => 'New Hire', 'email' => 'new.hire@example.com',
-            'password' => 'password123', 'password_confirmation' => 'password123',
+            'send_invite' => false, 'password' => 'password123', 'password_confirmation' => 'password123',
             'role_id' => $role->id, 'employee_id' => $employee->id,
         ]);
 
@@ -376,7 +379,7 @@ class UserApiTest extends TestCase
 
         $response = $this->actingAs($actor)->postJson($this->url($tenant, 'users'), [
             'name' => 'New Hire', 'email' => 'new.hire@example.com',
-            'password' => 'password123', 'password_confirmation' => 'password123',
+            'send_invite' => false, 'password' => 'password123', 'password_confirmation' => 'password123',
             'role_id' => $role->id, 'employee_id' => $employee->id,
         ]);
 
@@ -393,7 +396,7 @@ class UserApiTest extends TestCase
 
         $response = $this->actingAs($actor)->postJson($this->url($tenant, 'users'), [
             'name' => 'New Hire', 'email' => 'new.hire@example.com',
-            'password' => 'password123', 'password_confirmation' => 'password123',
+            'send_invite' => false, 'password' => 'password123', 'password_confirmation' => 'password123',
             'role_id' => $role->id, 'employee_id' => $employee->id,
         ]);
 
@@ -410,7 +413,7 @@ class UserApiTest extends TestCase
 
         $response = $this->actingAs($actor)->postJson($this->url($tenantA, 'users'), [
             'name' => 'New Hire', 'email' => 'new.hire@example.com',
-            'password' => 'password123', 'password_confirmation' => 'password123',
+            'send_invite' => false, 'password' => 'password123', 'password_confirmation' => 'password123',
             'role_id' => $role->id, 'employee_id' => $employeeB->id,
         ]);
 
@@ -426,7 +429,7 @@ class UserApiTest extends TestCase
 
         $response = $this->actingAs($actor)->postJson($this->url($tenantA, 'users'), [
             'name' => 'New Hire', 'email' => 'new.hire@example.com',
-            'password' => 'password123', 'password_confirmation' => 'password123',
+            'send_invite' => false, 'password' => 'password123', 'password_confirmation' => 'password123',
             'role_id' => $roleB->id,
         ]);
 
@@ -441,7 +444,7 @@ class UserApiTest extends TestCase
 
         $response = $this->actingAs($actor)->postJson($this->url($tenant, 'users'), [
             'name' => 'New Hire', 'email' => 'new.hire@example.com',
-            'password' => 'password123', 'password_confirmation' => 'password123',
+            'send_invite' => false, 'password' => 'password123', 'password_confirmation' => 'password123',
             'role_id' => $platformRole->id,
         ]);
 
@@ -458,7 +461,7 @@ class UserApiTest extends TestCase
 
         $response = $this->actingAs($actor)->postJson($this->url($tenantA, 'users'), [
             'name' => 'New Hire', 'email' => 'taken@example.com',
-            'password' => 'password123', 'password_confirmation' => 'password123',
+            'send_invite' => false, 'password' => 'password123', 'password_confirmation' => 'password123',
             'role_id' => $role->id,
         ]);
 
@@ -473,7 +476,7 @@ class UserApiTest extends TestCase
 
         $response = $this->actingAs($actor)->postJson($this->url($tenant, 'users'), [
             'name' => 'New Hire', 'email' => 'new.hire@example.com',
-            'password' => 'password123', 'password_confirmation' => 'password123',
+            'send_invite' => false, 'password' => 'password123', 'password_confirmation' => 'password123',
             'role_id' => $role->id, 'is_platform_admin' => true, 'tenant_id' => Tenant::factory()->create()->id,
             'status' => 'suspended',
         ]);
@@ -493,7 +496,7 @@ class UserApiTest extends TestCase
 
         $this->actingAs($actor)->postJson($this->url($tenant, 'users'), [
             'name' => 'New Hire', 'email' => 'new.hire@example.com',
-            'password' => 'password123', 'password_confirmation' => 'password123',
+            'send_invite' => false, 'password' => 'password123', 'password_confirmation' => 'password123',
             'role_id' => $role->id,
         ])->assertCreated();
 
@@ -526,5 +529,170 @@ class UserApiTest extends TestCase
         foreach ($routes as $route) {
             $this->assertContains('tenant.matches', $route->gatherMiddleware());
         }
+    }
+
+    // Checkpoint 46 — invite-email flow (send_invite: true)
+
+    public function test_send_invite_is_required(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $actor = $this->userWithPermissions($tenant, 'users.create');
+        $role = Role::factory()->create(['tenant_id' => $tenant->id]);
+
+        $response = $this->actingAs($actor)->postJson($this->url($tenant, 'users'), [
+            'name' => 'New Hire', 'email' => 'new.hire@example.com',
+            'role_id' => $role->id,
+        ]);
+
+        $response->assertStatus(422)->assertJsonValidationErrors('send_invite');
+    }
+
+    public function test_send_invite_true_does_not_require_a_password(): void
+    {
+        Notification::fake();
+        $tenant = Tenant::factory()->create();
+        $actor = $this->userWithPermissions($tenant, 'users.create');
+        $role = Role::factory()->create(['tenant_id' => $tenant->id]);
+
+        $response = $this->actingAs($actor)->postJson($this->url($tenant, 'users'), [
+            'name' => 'New Hire', 'email' => 'new.hire@example.com',
+            'send_invite' => true, 'role_id' => $role->id,
+        ]);
+
+        $response->assertCreated();
+        $created = User::query()->where('email', 'new.hire@example.com')->firstOrFail();
+        Notification::assertSentTo($created, UserInvited::class);
+    }
+
+    public function test_send_invite_true_rejects_a_submitted_password(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $actor = $this->userWithPermissions($tenant, 'users.create');
+        $role = Role::factory()->create(['tenant_id' => $tenant->id]);
+
+        $response = $this->actingAs($actor)->postJson($this->url($tenant, 'users'), [
+            'name' => 'New Hire', 'email' => 'new.hire@example.com',
+            'send_invite' => true, 'password' => 'password123', 'password_confirmation' => 'password123',
+            'role_id' => $role->id,
+        ]);
+
+        $response->assertStatus(422)->assertJsonValidationErrors('password');
+        $this->assertDatabaseMissing('users', ['email' => 'new.hire@example.com']);
+    }
+
+    public function test_send_invite_false_still_requires_a_password(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $actor = $this->userWithPermissions($tenant, 'users.create');
+        $role = Role::factory()->create(['tenant_id' => $tenant->id]);
+
+        $response = $this->actingAs($actor)->postJson($this->url($tenant, 'users'), [
+            'name' => 'New Hire', 'email' => 'new.hire@example.com',
+            'send_invite' => false, 'role_id' => $role->id,
+        ]);
+
+        $response->assertStatus(422)->assertJsonValidationErrors('password');
+    }
+
+    public function test_invited_user_is_created_with_an_unusable_password(): void
+    {
+        Notification::fake();
+        $tenant = Tenant::factory()->create();
+        $actor = $this->userWithPermissions($tenant, 'users.create');
+        $role = Role::factory()->create(['tenant_id' => $tenant->id]);
+
+        $this->actingAs($actor)->postJson($this->url($tenant, 'users'), [
+            'name' => 'New Hire', 'email' => 'new.hire@example.com',
+            'send_invite' => true, 'role_id' => $role->id,
+        ])->assertCreated();
+
+        $created = User::query()->where('email', 'new.hire@example.com')->firstOrFail();
+        // Nobody knows this random value — logging in with any guessable
+        // password must fail until the invite link is used.
+        $this->assertFalse(Hash::check('password', $created->password));
+        $this->assertFalse(Hash::check('', $created->password));
+    }
+
+    public function test_invite_writes_a_user_invited_audit_log_separately_from_user_created(): void
+    {
+        Notification::fake();
+        $tenant = Tenant::factory()->create();
+        $actor = $this->userWithPermissions($tenant, 'users.create');
+        $role = Role::factory()->create(['tenant_id' => $tenant->id]);
+
+        $this->actingAs($actor)->postJson($this->url($tenant, 'users'), [
+            'name' => 'New Hire', 'email' => 'new.hire@example.com',
+            'send_invite' => true, 'role_id' => $role->id,
+        ])->assertCreated();
+
+        $created = User::query()->where('email', 'new.hire@example.com')->firstOrFail();
+
+        $this->assertDatabaseHas('audit_logs', [
+            'action' => 'user.created',
+            'module' => 'users',
+            'target_user_id' => $created->id,
+        ]);
+        $this->assertDatabaseHas('audit_logs', [
+            'action' => 'user.invited',
+            'module' => 'users',
+            'actor_user_id' => $actor->id,
+            'target_user_id' => $created->id,
+        ]);
+    }
+
+    public function test_send_invite_false_never_writes_a_user_invited_audit_log(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $actor = $this->userWithPermissions($tenant, 'users.create');
+        $role = Role::factory()->create(['tenant_id' => $tenant->id]);
+
+        $this->actingAs($actor)->postJson($this->url($tenant, 'users'), [
+            'name' => 'New Hire', 'email' => 'new.hire@example.com',
+            'send_invite' => false, 'password' => 'password123', 'password_confirmation' => 'password123',
+            'role_id' => $role->id,
+        ])->assertCreated();
+
+        $this->assertDatabaseMissing('audit_logs', ['action' => 'user.invited']);
+    }
+
+    /**
+     * End-to-end: an invited user's emailed link actually works, the same
+     * /reset-password/{token} page and endpoint Checkpoint 44 already
+     * built — no separate "accept invite" route was needed.
+     */
+    public function test_invited_user_can_set_a_real_password_via_the_reset_password_link(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $actor = $this->userWithPermissions($tenant, 'users.create');
+        $role = Role::factory()->create(['tenant_id' => $tenant->id]);
+
+        $this->actingAs($actor)->postJson($this->url($tenant, 'users'), [
+            'name' => 'New Hire', 'email' => 'new.hire@example.com',
+            'send_invite' => true, 'role_id' => $role->id,
+        ])->assertCreated();
+
+        $created = User::query()->where('email', 'new.hire@example.com')->firstOrFail();
+        $token = Password::createToken($created->fresh());
+
+        // The reset-password routes are guest-only — actingAs($actor)
+        // above otherwise bleeds into this request too (Laravel's test
+        // auth state persists across calls within a test method), which
+        // would make the guest middleware silently redirect this request
+        // away before NewPasswordController::store() ever runs. That
+        // redirect looks identical to a real success (both are 302) to
+        // a bare assertRedirect() with no target, which is why this
+        // asserts the specific destination below, not just "a redirect
+        // happened."
+        auth()->logout();
+
+        $response = $this->post('http://'.$tenant->subdomain.'.'.config('tenancy.base_domain').'/reset-password', [
+            'token' => $token,
+            'email' => $created->email,
+            'password' => 'a-real-chosen-password',
+            'password_confirmation' => 'a-real-chosen-password',
+        ]);
+
+        $response->assertRedirect(route('login'));
+        $this->assertTrue(Hash::check('a-real-chosen-password', $created->fresh()->password));
     }
 }

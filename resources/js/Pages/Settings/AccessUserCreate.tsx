@@ -20,10 +20,13 @@ import { Employee, PaginatedResponse as EmployeePaginatedResponse } from '@/type
  * pre-fill, never a trusted value" rule Lifecycle/Create.tsx already
  * follows for its own employeeId param — the actual value sent to the
  * backend is always whatever this form currently holds.
- * There's no password-reset/invite-email flow yet (see docs/security.md),
- * so the password typed here is the account's real initial password —
- * confirmed by a second field, never shown back to the caller after
- * submit.
+ *
+ * Checkpoint 46 — send_invite defaults to true (send an invite email);
+ * switching to "Set password now" reveals the password/confirm fields,
+ * matching Checkpoint 43's original behavior exactly. Only one path's
+ * fields are ever included in the submitted payload — never both, since
+ * StoreUserRequest rejects a password submitted alongside send_invite:
+ * true outright.
  */
 export default function SettingsAccessUserCreate() {
     const params = useMemo(() => new URLSearchParams(window.location.search), []);
@@ -31,6 +34,7 @@ export default function SettingsAccessUserCreate() {
     const [form, setForm] = useState<UserCreateFormPayload>({
         name: '',
         email: '',
+        send_invite: true,
         password: '',
         password_confirmation: '',
         role_id: '',
@@ -79,9 +83,9 @@ export default function SettingsAccessUserCreate() {
         const payload = {
             name: form.name,
             email: form.email,
-            password: form.password,
-            password_confirmation: form.password_confirmation,
+            send_invite: form.send_invite,
             role_id: Number(form.role_id),
+            ...(form.send_invite ? {} : { password: form.password, password_confirmation: form.password_confirmation }),
             ...(form.employee_id ? { employee_id: form.employee_id } : {}),
         };
 
@@ -108,7 +112,7 @@ export default function SettingsAccessUserCreate() {
 
             <PageHeader
                 title="Create user account"
-                description="Set an initial password directly — there's no invite-email flow yet, so share it with the new user out of band."
+                description="Send an invite email so the new user sets their own password, or set an initial password directly yourself."
                 actions={
                     <Link href="/settings/access/users" className="text-sm font-medium text-indigo-600 hover:text-indigo-500">
                         Back to Users
@@ -143,23 +147,37 @@ export default function SettingsAccessUserCreate() {
                             onChange={(e) => set('email', e.target.value)}
                             error={fieldError('email')}
                         />
-                        <InputField
-                            label="Password"
-                            name="password"
-                            type="password"
+                        <SelectField
+                            label="Password setup"
+                            name="send_invite"
                             required
-                            value={form.password}
-                            onChange={(e) => set('password', e.target.value)}
-                            error={fieldError('password')}
-                        />
-                        <InputField
-                            label="Confirm password"
-                            name="password_confirmation"
-                            type="password"
-                            required
-                            value={form.password_confirmation}
-                            onChange={(e) => set('password_confirmation', e.target.value)}
-                        />
+                            value={form.send_invite ? 'invite' : 'set'}
+                            onChange={(e) => set('send_invite', e.target.value === 'invite')}
+                        >
+                            <option value="invite">Send invite email (recommended)</option>
+                            <option value="set">Set password now</option>
+                        </SelectField>
+                        {!form.send_invite && (
+                            <>
+                                <InputField
+                                    label="Password"
+                                    name="password"
+                                    type="password"
+                                    required
+                                    value={form.password}
+                                    onChange={(e) => set('password', e.target.value)}
+                                    error={fieldError('password')}
+                                />
+                                <InputField
+                                    label="Confirm password"
+                                    name="password_confirmation"
+                                    type="password"
+                                    required
+                                    value={form.password_confirmation}
+                                    onChange={(e) => set('password_confirmation', e.target.value)}
+                                />
+                            </>
+                        )}
                         <SelectField
                             label="Role"
                             name="role_id"

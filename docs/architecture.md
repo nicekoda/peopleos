@@ -2392,15 +2392,19 @@ checkpoint, and that sentence stays true after it. This mirrors
 existing user is always a deliberate, manual action, never a side
 effect of something else.
 
-**Still no password-reset or invite-email flow.** The caller (an HR
-Manager or Tenant Admin) sets the account's real initial password
-directly in the create form, confirmed by a second field
+**Password handling, updated by Checkpoint 46.** Originally, the caller
+(an HR Manager or Tenant Admin) always set the account's real initial
+password directly in the create form, confirmed by a second field
 (`password_confirmation`, Laravel's `confirmed` rule) so a typo isn't
-silently locked in. The password is never returned in the API response
+silently locked in — that path still exists (`send_invite: false`), but
+as of Checkpoint 46 there's now a second, recommended path
+(`send_invite: true`) that emails the new user a link to set their own
+password instead — see
+[Invite-Email Flow for New Accounts](#invite-email-flow-for-new-accounts-checkpoint-46)
+below. Either way, the password is never returned in the API response
 (`UserResource` already excluded it before this checkpoint) and never
 written to the `user.created` audit log's `new_values` — only
-`name`/`email`/`role_id`/`employee_id`. This is a real, documented
-limitation, not a silently patched one — see "Future" below.
+`name`/`email`/`role_id`/`employee_id`.
 
 **Frontend: a new Settings > Access > Users > Create page, plus a
 shortcut from the Employee detail page.** `Settings/AccessUserCreate.tsx`
@@ -2424,11 +2428,12 @@ those.
 
 ### Future
 
-Documented, not built: a real password-reset/invite-email flow (the
-biggest remaining gap — see `docs/security.md`), self-service password
-change, MFA, bulk user import, and a "resend/reset credentials" action
-for an account created here. None of these were part of this
-checkpoint's scope.
+Documented, not built: ~~a real password-reset/invite-email flow~~ —
+done in Checkpoint 46. Self-service password change (an *authenticated*
+user changing their own known password, distinct from both the
+forgot-password flow and the invite flow), MFA, bulk user import, and a
+"resend invite" action for an account whose invite link expired before
+they used it. None of these were part of this checkpoint's scope.
 
 ## Password Reset (Checkpoint 44)
 
@@ -2499,11 +2504,13 @@ as a green banner when present.
 
 ### Future
 
-A real invite-email flow reusing this checkpoint's tenant-aware URL
-approach, queuing the reset email once a real queue worker exists, a
-post-reset confirmation email, and IP-based rate limiting on top of the
-existing per-email throttle. None of these were part of this
-checkpoint's scope.
+~~A real invite-email flow reusing this checkpoint's tenant-aware URL
+approach~~ — done in Checkpoint 46 (which reuses this checkpoint's
+`/reset-password/{token}` page directly, rather than the URL-building
+approach specifically — see below). Queuing the reset email once a real
+queue worker exists, a post-reset confirmation email, and IP-based rate
+limiting on top of the existing per-email throttle. None of these were
+part of this checkpoint's scope.
 
 ## Lifecycle Task Ordering & Reminders (Checkpoint 45)
 
@@ -2624,3 +2631,96 @@ production; and bulk-reordering the `lifecycle_task_templates` catalog
 itself (this checkpoint only reordered generated tasks, not the
 templates that generate them). None of these were part of this
 checkpoint's scope.
+
+## Invite-Email Flow for New Accounts (Checkpoint 46)
+
+Closes the gap repeatedly flagged as "the single biggest remaining
+gap" since Checkpoint 43: `POST /api/v1/users` no longer *always*
+requires the caller to set (and share out of band) the new account's
+real initial password. See
+[`security.md`](security.md#invite-email-flow-for-new-accounts-checkpoint-46)
+for the full security model and
+[`api.md`](api.md#invite-email-flow-for-new-accounts) for the route
+reference.
+
+**`send_invite` is now the required field deciding how the account gets
+its password — your approved scope choice was "admin's choice," not
+"invite-only."** `StoreUserRequest::rules()`'s `password` field changed
+from unconditionally `required` to `Rule::requiredIf(fn () => !
+$this->boolean('send_invite'))` — required only on the `send_invite:
+false` path (Checkpoint 43's original behavior, unchanged). A
+`withValidator` closure rejects `send_invite: true` submitted alongside
+a non-empty `password` outright (422) rather than silently preferring
+one over the other — a caller sending both almost certainly meant only
+one of them.
+
+**`UserController::store()`'s two paths, after the same transaction
+either way.** `send_invite: false` is byte-for-byte Checkpoint 43's
+original behavior — the submitted password is set directly, inside the
+transaction, alongside role assignment and the optional employee link.
+`send_invite: true` creates the account with `Str::random(64)` as its
+password instead (an unusable value nobody knows — cast through the
+same `'password' => 'hashed'` Eloquent cast every other password on
+this model already uses, so login is impossible until it's actually
+replaced). Once the transaction commits, `Password::createToken($user)`
+generates a real password-reset token and a new
+`App\Notifications\UserInvited` is sent — deliberately outside the
+transaction, the same reasoning Checkpoint 44's
+`ForgotPasswordRequest::sendResetLinkIfEligible()` already established
+for its own `Password::sendResetLink()` call: a mail-send failure must
+never roll back an otherwise-successful account creation.
+
+**`UserInvited` reuses Checkpoint 44's `/reset-password/{token}` page
+directly — no new route, page, or token table.** "Set a password given
+a valid token" is identical whether it's a genuine forgot-password
+request or a brand-new account's first-ever password; the only thing
+that needed to differ is the *wording*. This is why `UserInvited` is
+its own `Notification` class rather than a reuse/subclass of
+`Illuminate\Auth\Notifications\ResetPassword` — that class's default
+"Reset Password" subject would be a confusing thing to send someone who
+never had a password to reset. Getting a token for `UserInvited`
+required calling `Password::createToken($user)` directly rather than
+`Password::sendResetLink()` — the latter always sends the built-in
+`ResetPassword` notification internally
+(`CanResetPassword::sendPasswordResetNotification()` is hardcoded to
+it), which would defeat the point of a differently-worded notification
+existing at all.
+
+**`UserInvited`'s tenant-aware URL logic is now duplicated a third
+time, not extracted into a shared helper.** The same
+`{subdomain}.{base_domain}`-plus-scheme construction now appears in
+`AppServiceProvider::boot()`'s `ResetPassword::createUrlUsing()`
+closure (Checkpoint 44), `SendLifecycleTaskDigest::tenantLifecycleUrl()`
+(Checkpoint 45), and here. Deliberately still duplicated rather than
+shared, the same "duplicate until a real need for a helper appears"
+posture already applied to the tenant-eligibility check duplicated
+across `LoginRequest`/`ForgotPasswordRequest`/`ResetPasswordRequest` —
+worth revisiting if a fourth call site ever needs the identical logic.
+
+**Two audit log entries, not one, mirroring Checkpoint 45's
+"tasks_applied_from_templates" precedent.** `user.created` is written
+for both paths (with a new `metadata.invited` boolean); `user.invited`
+is written as a second, independent entry only on the `send_invite:
+true` path, right after the notification is actually sent — a distinct
+real-world event (an email went out) gets its own log entry, the same
+"one entry per resource touched" convention already established for
+template application (Checkpoint 42) and the recruitment-to-onboarding
+handoff (Checkpoint 41).
+
+**Frontend: a "Password setup" select on the Create User form,
+replacing the always-visible password fields.** Defaults to "Send
+invite email" — switching to "Set password now" reveals the
+password/confirm-password fields exactly as they existed before this
+checkpoint. Only one path's fields are ever included in the submitted
+payload; the other is omitted entirely, not sent as empty strings.
+
+### Future
+
+Self-service password change for an already-authenticated user (a
+distinct feature from both the forgot-password flow and this one — not
+addressed by either); MFA; bulk/CSV user import; and a "resend invite"
+action for an account whose invite link expired before they used it —
+the only way to get a fresh link today is a real forgot-password
+request from the login page, which works (the account exists and has a
+real, if unusable, password hash) but isn't a purpose-built "resend"
+affordance. None of these were part of this checkpoint's scope.

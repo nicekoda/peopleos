@@ -1,6 +1,7 @@
 <?php
 
 use App\Console\Commands\SendLifecycleTaskDigest;
+use App\Http\Middleware\EnsureModuleEnabled;
 use App\Http\Middleware\EnsurePermission;
 use App\Http\Middleware\EnsureTenantMatchesAuthenticatedUser;
 use App\Http\Middleware\HandleInertiaRequests;
@@ -29,6 +30,7 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->alias([
             'permission' => EnsurePermission::class,
             'tenant.matches' => EnsureTenantMatchesAuthenticatedUser::class,
+            'module' => EnsureModuleEnabled::class,
         ]);
 
         // Checkpoint 16: a real 'login' named route now exists (the

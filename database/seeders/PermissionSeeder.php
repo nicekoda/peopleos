@@ -19,7 +19,17 @@ class PermissionSeeder extends Seeder
     {
         $tenantPermissions = [
             'dashboard' => ['view'],
-            'tenant' => ['view', 'update', 'settings.view', 'settings.update'],
+            // Checkpoint 47 — Module Registry & Branding Foundation.
+            // modules.manage is Tenant-Admin-only (your explicit
+            // approved decision); modules.view/branding.view/
+            // branding.manage may additionally be granted to HR
+            // Director/HR Manager. branding.view and branding.manage
+            // are deliberately separate keys even though every role
+            // that gets one gets the other today — preserves future
+            // flexibility (a role that can see branding but not change
+            // it), matching the view/manage pattern already used by
+            // tenant.view/tenant.update.
+            'tenant' => ['view', 'update', 'settings.view', 'settings.update', 'modules.view', 'modules.manage', 'branding.view', 'branding.manage'],
             'users' => ['view', 'create', 'update', 'deactivate', 'assign_role'],
             'roles' => ['view', 'create', 'update', 'delete'],
             'permissions' => ['view', 'assign', 'grant_direct', 'revoke_direct'],

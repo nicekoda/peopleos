@@ -1579,6 +1579,43 @@ a mismatched-tenant applicant would silently insert `null` into
 `Employee`'s `NOT NULL` `first_name`/`last_name` columns — surfacing as
 a raw SQL constraint violation instead of a clean assertion failure.
 
+## Proving a negative: the Platform Super Admin test that checks the *reason*, not just the status code (Checkpoint 47)
+
+`TenantModuleApiTest::test_platform_super_admin_cannot_bypass_a_disabled_module_via_tenant_routes()`
+needed to prove something a plain `assertForbidden()` can't: that a
+platform admin hitting a disabled-module tenant route is blocked by
+`tenant.matches`, not by the `module:{key}` gate noticing the module
+happens to be off. Both middleware return `403`, so the status code
+alone is indistinguishable between "the right thing blocked you" and
+"a different, coincidentally-also-403 thing blocked you" — which
+matters here because if the module gate were ever reachable by a
+platform admin, they could use a disabled module's specific error
+reason as an oracle to learn a tenant's module configuration without
+ever authenticating as that tenant. The test disables Recruitment for
+a real tenant, hits a Recruitment route as a platform admin, and
+asserts the response body does **not** contain `module_disabled` — the
+one string only the module gate ever emits. A second, simpler test
+(`test_platform_super_admin_cannot_reach_tenant_module_routes_at_all`)
+covers the more obvious case (blocked outright, module state
+irrelevant). Together they turn "we assume PSA can't get in" into
+"we checked exactly which middleware is doing the blocking."
+
+## `JsonResource`'s auto-201 and an "update-or-initialize" endpoint (Checkpoint 47)
+
+`PATCH /api/v1/tenant/branding` calls `TenantBranding::firstOrNew()`
+then `save()` — the first time a tenant sets any branding, this is a
+genuine `INSERT`, and Laravel's `JsonResource` auto-detects
+`$model->wasRecentlyCreated === true` and defaults the HTTP status to
+`201` instead of `200`. Four tests in `TenantBrandingApiTest` initially
+failed with "Expected `200` but received `201`" — a real framework
+behavior, not a test bug, but the wrong status for this endpoint's
+actual semantics: from the caller's perspective, "set your tenant's
+brand colors" is conceptually never a "create" action, whether or not
+a row already existed underneath. Fixed by forcing the status
+explicitly (`->response()->setStatusCode(200)`) rather than adjusting
+the tests to expect `201` — the tests were catching a real
+API-consistency issue, not a false positive.
+
 ## Known limitations
 
 - No test coverage reporting configured yet.

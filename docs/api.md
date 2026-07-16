@@ -320,6 +320,88 @@ password, never the invite token. See
 `docs/security.md#invite-email-flow-for-new-accounts-checkpoint-46` for
 the full security design.
 
+## Tenant Modules & Branding (Checkpoint 47)
+
+Both are singleton-style tenant resources (no `{tenant}` URL
+parameter, same pattern as `GET/PATCH /api/v1/tenant` — always
+operates on `app(Tenant::class)`). See
+`docs/architecture.md#module-registry--branding-foundation-checkpoint-47`
+for the design and `docs/platform-vision.md` for the direction this
+checkpoint is the first foundation of.
+
+| Method | Path | Permission | Notes |
+|---|---|---|---|
+| `GET` | `/api/v1/tenant/modules` | `tenant.modules.view` | Every toggleable module, current `enabled` state, and a `warning_count` where available |
+| `PATCH` | `/api/v1/tenant/modules/{moduleKey}` | `tenant.modules.manage` | Body: `{"enabled": true\|false}`. `422` if `moduleKey` is unknown or a core (non-toggleable) module |
+| `GET` | `/api/v1/tenant/branding` | `tenant.branding.view` | Returns an empty-valued shape if the tenant has no branding row yet |
+| `PATCH` | `/api/v1/tenant/branding` | `tenant.branding.manage` | Body: `{"primary_color": "#RRGGBB", "secondary_color": "#RRGGBB"}` — both optional/nullable, strict 6-digit hex only |
+| `POST` | `/api/v1/tenant/branding/logo` | `tenant.branding.manage` | Multipart `logo` field — PNG/JPG/JPEG only, no SVG, max 2MB, max 2000×2000px. Replaces any existing logo |
+| `DELETE` | `/api/v1/tenant/branding/logo` | `tenant.branding.manage` | Removes the current logo file and clears the field |
+
+### Response shapes
+
+```json
+// GET /api/v1/tenant/modules
+{
+  "data": [
+    {
+      "module_key": "recruitment",
+      "label": "Recruitment",
+      "description": "Job openings, applications, and the hiring pipeline.",
+      "enabled": true,
+      "toggleable": true,
+      "related_modules": ["lifecycle"],
+      "warning_count": 3
+    }
+  ]
+}
+
+// GET /api/v1/tenant/branding
+{
+  "data": {
+    "logo_url": "https://uesl.peopleos.test/storage/tenant-branding/01h.../aB3...xyz.png",
+    "logo_original_filename": "logo.png",
+    "primary_color": "#1D4ED8",
+    "secondary_color": "#F59E0B"
+  }
+}
+```
+
+Never returned: `tenant_modules`/`tenant_branding` row IDs,
+`enabled_by`/`disabled_by`/`created_by`/`updated_by`, the internal
+`logo_path`, or any raw database row. A disabled module's routes
+(anything under that module's own prefix — see
+`TenantModule::routeGroupPrefixes()`) return:
+
+```json
+// 403 — module disabled, from any route gated by module:{key}
+{
+  "message": "This module is not enabled for your organisation.",
+  "reason": "module_disabled"
+}
+```
+
+`reason: "module_disabled"` is stable and machine-checkable — the
+frontend's `toApiError()` (`resources/js/lib/api.ts`) special-cases it
+to surface this exact message rather than a generic
+"you don't have permission" string.
+
+### Module gate coverage — every toggleable-module route, not just the ones above
+
+The routes above manage *whether* a module is enabled. Separately,
+every existing route that belongs to a toggleable module now carries
+a `module:{key}` middleware (Recruitment → `job-openings`/
+`job-applications`/`recruitment`; Lifecycle → `lifecycle-processes`/
+`lifecycle-tasks`/`lifecycle`/`settings/lifecycle-task-templates`,
+plus the `start-onboarding` action; Leave → `leave-types`/`leave`/
+`leave-balances`, plus `me/leave-balances`; Documents →
+`employees/{employee}/documents`/`document-categories`/`documents`/
+`settings/document-categories`; Policies → `policies`; HR Documents →
+`hr-document-templates`/`hr-generated-documents`). `php artisan
+route:audit-module-gates` (mirroring the pre-existing `route:audit-
+tenant-scoping`) fails CI if any route under a toggleable module's
+prefix is missing this gate.
+
 ## Audit Logs
 
 Read-only (Checkpoint 24) — no create/update/delete route exists

@@ -14,9 +14,23 @@ export interface AuthUser {
     permissions: string[];
 }
 
+/**
+ * Checkpoint 47 — modules is a plain module_key => enabled map (missing
+ * key defaults to enabled, mirroring the backend's own fail-open
+ * fallback); branding exposes only the public logo URL and hex colors,
+ * never logo_path/row IDs/actor IDs/timestamps — see
+ * TenantModuleResource/TenantBrandingResource, which enforce the
+ * identical safe shape for the API responses this mirrors.
+ */
 export interface SharedTenant {
     id: string;
     name: string;
+    modules: Record<string, boolean> | null;
+    branding: {
+        logo_url: string | null;
+        primary_color: string | null;
+        secondary_color: string | null;
+    };
 }
 
 export interface PageProps {

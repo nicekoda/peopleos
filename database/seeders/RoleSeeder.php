@@ -175,6 +175,10 @@ class RoleSeeder extends Seeder
             'job_applications.update_stage', 'job_applications.add_note', 'job_applications.mark_ready_for_conversion',
             // Checkpoint 40 — per your explicit approved mapping.
             'job_applications.convert_to_employee',
+            // Checkpoint 47 — view module state and manage branding, not
+            // manage modules (Tenant-Admin-only), per your explicit
+            // approved mapping.
+            'tenant.modules.view', 'tenant.branding.view', 'tenant.branding.manage',
         ]);
 
         // Checkpoint 34 — HR Director previously had no permissions
@@ -209,6 +213,9 @@ class RoleSeeder extends Seeder
             // catalog that feeds it.
             'lifecycle_task_templates.view', 'lifecycle_task_templates.create',
             'lifecycle_task_templates.update', 'lifecycle_task_templates.delete',
+            // Checkpoint 47 — identical grant as HR Manager, per your
+            // explicit approved mapping.
+            'tenant.modules.view', 'tenant.branding.view', 'tenant.branding.manage',
         ]);
 
         $this->grantByKeys($roles['Employee'], [

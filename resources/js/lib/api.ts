@@ -38,14 +38,23 @@ export interface ApiError {
  */
 export function toApiError(error: unknown): ApiError {
     if (axios.isAxiosError(error)) {
-        const axiosError = error as AxiosError<{ message?: string; errors?: Record<string, string[]> }>;
+        const axiosError = error as AxiosError<{ message?: string; errors?: Record<string, string[]>; reason?: string }>;
         const status = axiosError.response?.status ?? 0;
 
         switch (status) {
             case 401:
                 return { status, message: 'Your session has expired. Please log in again.' };
             case 403:
-                return { status, message: "You don't have permission to do this." };
+                // Checkpoint 47 — a disabled-module 403 carries its own
+                // specific message (never a generic "no permission" one,
+                // since that's a different, misleading cause).
+                return {
+                    status,
+                    message:
+                        axiosError.response?.data?.reason === 'module_disabled'
+                            ? (axiosError.response?.data?.message ?? 'This module is not enabled for your organisation.')
+                            : "You don't have permission to do this.",
+                };
             case 404:
                 return { status, message: 'Not found.' };
             case 409:

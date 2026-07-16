@@ -63,11 +63,11 @@ Route::middleware(['auth', 'tenant.matches'])->group(function () {
     // 'documents/upload' must be registered before 'documents/{document}'
     // so Laravel doesn't treat "upload" as a {document} route parameter.
     Route::get('employees/{employee}/documents', [EmployeeDocumentUiController::class, 'index'])
-        ->middleware('permission:documents.view')->name('employees.documents.index');
+        ->middleware(['module:documents', 'permission:documents.view'])->name('employees.documents.index');
     Route::get('employees/{employee}/documents/upload', [EmployeeDocumentUiController::class, 'create'])
-        ->middleware('permission:documents.upload')->name('employees.documents.create');
+        ->middleware(['module:documents', 'permission:documents.upload'])->name('employees.documents.create');
     Route::get('employees/{employee}/documents/{document}', [EmployeeDocumentUiController::class, 'show'])
-        ->middleware('permission:documents.view')->name('employees.documents.show');
+        ->middleware(['module:documents', 'permission:documents.view'])->name('employees.documents.show');
 
     // Leave Management UI (Checkpoint 18) — same thin-page-route pattern
     // as Employee Records (Checkpoint 17): the actual leave request/
@@ -76,11 +76,11 @@ Route::middleware(['auth', 'tenant.matches'])->group(function () {
     // 'leave/create' must be registered before 'leave/{leaveRequest}' so
     // Laravel doesn't treat "create" as a route parameter.
     Route::get('leave', [LeaveUiController::class, 'index'])
-        ->middleware('permission:leave.view')->name('leave.index');
+        ->middleware(['module:leave', 'permission:leave.view'])->name('leave.index');
     Route::get('leave/create', [LeaveUiController::class, 'create'])
-        ->middleware('permission:leave.request')->name('leave.create');
+        ->middleware(['module:leave', 'permission:leave.request'])->name('leave.create');
     Route::get('leave/{leaveRequest}', [LeaveUiController::class, 'show'])
-        ->middleware('permission:leave.view')->name('leave.show');
+        ->middleware(['module:leave', 'permission:leave.view'])->name('leave.show');
 
     // Onboarding & Offboarding Foundation UI (Checkpoint 33) — generic
     // /lifecycle routes internally; page components label each process
@@ -92,20 +92,20 @@ Route::middleware(['auth', 'tenant.matches'])->group(function () {
     // '{lifecycleProcess}'/'{lifecycleProcess}/edit' so Laravel doesn't
     // treat them as route parameters.
     Route::get('lifecycle', [LifecycleUiController::class, 'index'])
-        ->middleware('permission:lifecycle.view')->name('lifecycle.index');
+        ->middleware(['module:lifecycle', 'permission:lifecycle.view'])->name('lifecycle.index');
     Route::get('lifecycle/create', [LifecycleUiController::class, 'create'])
-        ->middleware('permission:lifecycle.create')->name('lifecycle.create');
+        ->middleware(['module:lifecycle', 'permission:lifecycle.create'])->name('lifecycle.create');
     Route::get('lifecycle/{lifecycleProcess}', [LifecycleUiController::class, 'show'])
-        ->middleware('permission:lifecycle.view')->name('lifecycle.show');
+        ->middleware(['module:lifecycle', 'permission:lifecycle.view'])->name('lifecycle.show');
     Route::get('lifecycle/{lifecycleProcess}/edit', [LifecycleUiController::class, 'edit'])
-        ->middleware('permission:lifecycle.update')->name('lifecycle.edit');
+        ->middleware(['module:lifecycle', 'permission:lifecycle.update'])->name('lifecycle.edit');
     Route::get('lifecycle/{lifecycleProcess}/tasks/create', [LifecycleUiController::class, 'taskCreate'])
-        ->middleware('permission:lifecycle.create')->name('lifecycle.tasks.create');
+        ->middleware(['module:lifecycle', 'permission:lifecycle.create'])->name('lifecycle.tasks.create');
     Route::get('lifecycle/tasks/{lifecycleTask}/edit', [LifecycleUiController::class, 'taskEdit'])
-        ->middleware('permission:lifecycle.update')->name('lifecycle.tasks.edit');
+        ->middleware(['module:lifecycle', 'permission:lifecycle.update'])->name('lifecycle.tasks.edit');
 
     Route::get('documents', fn () => Inertia::render('Documents/Index'))
-        ->middleware('permission:documents.view')->name('documents.index');
+        ->middleware(['module:documents', 'permission:documents.view'])->name('documents.index');
 
     // Recruitment & Applicant Tracking Foundation UI (Checkpoint 39) —
     // same thin-page-route pattern as every other module: job/application
@@ -116,19 +116,19 @@ Route::middleware(['auth', 'tenant.matches'])->group(function () {
     // each card there is separately gated by its own permission; 'create'
     // routes must be registered before '{id}'/'{id}/edit' so Laravel
     // doesn't treat them as route parameters.
-    Route::get('recruitment', [RecruitmentUiController::class, 'index'])->name('recruitment.index');
+    Route::get('recruitment', [RecruitmentUiController::class, 'index'])->middleware('module:recruitment')->name('recruitment.index');
     Route::get('recruitment/jobs', [RecruitmentUiController::class, 'jobsIndex'])
-        ->middleware('permission:job_openings.view')->name('recruitment.jobs.index');
+        ->middleware(['module:recruitment', 'permission:job_openings.view'])->name('recruitment.jobs.index');
     Route::get('recruitment/jobs/create', [RecruitmentUiController::class, 'jobsCreate'])
-        ->middleware('permission:job_openings.create')->name('recruitment.jobs.create');
+        ->middleware(['module:recruitment', 'permission:job_openings.create'])->name('recruitment.jobs.create');
     Route::get('recruitment/jobs/{jobOpening}/edit', [RecruitmentUiController::class, 'jobsEdit'])
-        ->middleware('permission:job_openings.update')->name('recruitment.jobs.edit');
+        ->middleware(['module:recruitment', 'permission:job_openings.update'])->name('recruitment.jobs.edit');
     Route::get('recruitment/applications', [RecruitmentUiController::class, 'applicationsIndex'])
-        ->middleware('permission:job_applications.view')->name('recruitment.applications.index');
+        ->middleware(['module:recruitment', 'permission:job_applications.view'])->name('recruitment.applications.index');
     Route::get('recruitment/applications/create', [RecruitmentUiController::class, 'applicationsCreate'])
-        ->middleware('permission:job_applications.create')->name('recruitment.applications.create');
+        ->middleware(['module:recruitment', 'permission:job_applications.create'])->name('recruitment.applications.create');
     Route::get('recruitment/applications/{jobApplication}', [RecruitmentUiController::class, 'applicationsShow'])
-        ->middleware('permission:job_applications.view')->name('recruitment.applications.show');
+        ->middleware(['module:recruitment', 'permission:job_applications.view'])->name('recruitment.applications.show');
 
     // HR Documents & Letter Generation Foundation UI (Checkpoint 34) —
     // same thin-page-route pattern as every other module: document data
@@ -137,11 +137,11 @@ Route::middleware(['auth', 'tenant.matches'])->group(function () {
     // 'create' must be registered before '{hrGeneratedDocument}' so
     // Laravel doesn't treat "create" as a route parameter.
     Route::get('hr-documents', [HrGeneratedDocumentUiController::class, 'index'])
-        ->middleware('permission:hr_generated_documents.view')->name('hr-documents.index');
+        ->middleware(['module:hr_documents', 'permission:hr_generated_documents.view'])->name('hr-documents.index');
     Route::get('hr-documents/create', [HrGeneratedDocumentUiController::class, 'create'])
-        ->middleware('permission:hr_generated_documents.generate')->name('hr-documents.create');
+        ->middleware(['module:hr_documents', 'permission:hr_generated_documents.generate'])->name('hr-documents.create');
     Route::get('hr-documents/{hrGeneratedDocument}', [HrGeneratedDocumentUiController::class, 'show'])
-        ->middleware('permission:hr_generated_documents.view')->name('hr-documents.show');
+        ->middleware(['module:hr_documents', 'permission:hr_generated_documents.view'])->name('hr-documents.show');
 
     // Policy Management UI (Checkpoint 20) — same thin-page-route pattern
     // as every other module: policy/version/acknowledgement data is
@@ -150,21 +150,21 @@ Route::middleware(['auth', 'tenant.matches'])->group(function () {
     // registered before 'policies/{policy}' so Laravel doesn't treat
     // "create" as a route parameter.
     Route::get('policies', [PolicyUiController::class, 'index'])
-        ->middleware('permission:policies.view')->name('policies.index');
+        ->middleware(['module:policies', 'permission:policies.view'])->name('policies.index');
     Route::get('policies/create', [PolicyUiController::class, 'create'])
-        ->middleware('permission:policies.create')->name('policies.create');
+        ->middleware(['module:policies', 'permission:policies.create'])->name('policies.create');
     Route::get('policies/{policy}', [PolicyUiController::class, 'show'])
-        ->middleware('permission:policies.view')->name('policies.show');
+        ->middleware(['module:policies', 'permission:policies.view'])->name('policies.show');
     Route::get('policies/{policy}/edit', [PolicyUiController::class, 'edit'])
-        ->middleware('permission:policies.update')->name('policies.edit');
+        ->middleware(['module:policies', 'permission:policies.update'])->name('policies.edit');
     // Version creation shares policies.update, same as the API endpoint
     // it drives (POST /api/v1/policies/{policy}/versions).
     Route::get('policies/{policy}/versions/create', [PolicyUiController::class, 'createVersion'])
-        ->middleware('permission:policies.update')->name('policies.versions.create');
+        ->middleware(['module:policies', 'permission:policies.update'])->name('policies.versions.create');
     Route::get('policies/{policy}/assign', [PolicyUiController::class, 'assign'])
-        ->middleware('permission:policies.assign')->name('policies.assign');
+        ->middleware(['module:policies', 'permission:policies.assign'])->name('policies.assign');
     Route::get('policies/{policy}/acknowledgements', [PolicyUiController::class, 'acknowledgements'])
-        ->middleware('permission:policies.view_acknowledgements')->name('policies.acknowledgements');
+        ->middleware(['module:policies', 'permission:policies.view_acknowledgements'])->name('policies.acknowledgements');
     // Settings Foundation (Checkpoint 22) — same "access, not data"
     // two-layer design as the Dashboard (Checkpoint 21):
     // tenant.settings.view grants reaching /settings; each section
@@ -174,6 +174,11 @@ Route::middleware(['auth', 'tenant.matches'])->group(function () {
     Route::get('settings', [SettingsController::class, 'index'])->name('settings.index');
     Route::get('settings/company', [SettingsController::class, 'company'])
         ->middleware('permission:tenant.view')->name('settings.company');
+    // Checkpoint 47 — Module Registry & Branding Foundation.
+    Route::get('settings/modules', [SettingsController::class, 'modules'])
+        ->middleware('permission:tenant.modules.view')->name('settings.modules');
+    Route::get('settings/branding', [SettingsController::class, 'branding'])
+        ->middleware('permission:tenant.branding.view')->name('settings.branding');
 
     // Safe "coming later" placeholders — same pattern originally used
     // for Documents/Policies in Checkpoint 16, each gated by the
@@ -213,27 +218,27 @@ Route::middleware(['auth', 'tenant.matches'])->group(function () {
     // passed through as an Inertia prop. 'create' must be registered
     // before '{documentCategory}/edit' so Laravel doesn't collide the two.
     Route::get('settings/document-categories', [DocumentCategoryUiController::class, 'index'])
-        ->middleware('permission:document_categories.view')->name('settings.document-categories');
+        ->middleware(['module:documents', 'permission:document_categories.view'])->name('settings.document-categories');
     Route::get('settings/document-categories/create', [DocumentCategoryUiController::class, 'create'])
-        ->middleware('permission:document_categories.create')->name('settings.document-categories.create');
+        ->middleware(['module:documents', 'permission:document_categories.create'])->name('settings.document-categories.create');
     Route::get('settings/document-categories/{documentCategory}/edit', [DocumentCategoryUiController::class, 'edit'])
-        ->middleware('permission:document_categories.update')->name('settings.document-categories.edit');
+        ->middleware(['module:documents', 'permission:document_categories.update'])->name('settings.document-categories.edit');
 
     // HR Document Templates Admin UI (Checkpoint 34) — same thin-page-
     // route pattern as Document Categories above. 'create' must be
     // registered before '{hrDocumentTemplate}/edit' so Laravel doesn't
     // collide the two.
     Route::get('settings/hr-document-templates', [HrDocumentTemplateUiController::class, 'index'])
-        ->middleware('permission:hr_document_templates.view')->name('settings.hr-document-templates');
+        ->middleware(['module:hr_documents', 'permission:hr_document_templates.view'])->name('settings.hr-document-templates');
     Route::get('settings/hr-document-templates/create', [HrDocumentTemplateUiController::class, 'create'])
-        ->middleware('permission:hr_document_templates.create')->name('settings.hr-document-templates.create');
+        ->middleware(['module:hr_documents', 'permission:hr_document_templates.create'])->name('settings.hr-document-templates.create');
     Route::get('settings/hr-document-templates/{hrDocumentTemplate}/edit', [HrDocumentTemplateUiController::class, 'edit'])
-        ->middleware('permission:hr_document_templates.update')->name('settings.hr-document-templates.edit');
+        ->middleware(['module:hr_documents', 'permission:hr_document_templates.update'])->name('settings.hr-document-templates.edit');
     // Checkpoint 36 — HR Document Template Versioning Foundation.
     Route::get('settings/hr-document-templates/{hrDocumentTemplate}/versions/create', [HrDocumentTemplateUiController::class, 'versionCreate'])
-        ->middleware('permission:hr_document_templates.update')->name('settings.hr-document-templates.versions.create');
+        ->middleware(['module:hr_documents', 'permission:hr_document_templates.update'])->name('settings.hr-document-templates.versions.create');
     Route::get('settings/hr-document-template-versions/{hrDocumentTemplateVersion}/edit', [HrDocumentTemplateUiController::class, 'versionEdit'])
-        ->middleware('permission:hr_document_templates.update')->name('settings.hr-document-template-versions.edit');
+        ->middleware(['module:hr_documents', 'permission:hr_document_templates.update'])->name('settings.hr-document-template-versions.edit');
 
     // Employee Lifecycle Foundation (Checkpoint 32) — Departments/
     // Positions/Locations Admin UI, same thin-page-route pattern. 'create'
@@ -257,11 +262,11 @@ Route::middleware(['auth', 'tenant.matches'])->group(function () {
     // Same thin-page-route pattern as Departments/Positions/Locations
     // above.
     Route::get('settings/lifecycle-task-templates', [LifecycleTaskTemplateUiController::class, 'index'])
-        ->middleware('permission:lifecycle_task_templates.view')->name('settings.lifecycle-task-templates');
+        ->middleware(['module:lifecycle', 'permission:lifecycle_task_templates.view'])->name('settings.lifecycle-task-templates');
     Route::get('settings/lifecycle-task-templates/create', [LifecycleTaskTemplateUiController::class, 'create'])
-        ->middleware('permission:lifecycle_task_templates.create')->name('settings.lifecycle-task-templates.create');
+        ->middleware(['module:lifecycle', 'permission:lifecycle_task_templates.create'])->name('settings.lifecycle-task-templates.create');
     Route::get('settings/lifecycle-task-templates/{lifecycleTaskTemplate}/edit', [LifecycleTaskTemplateUiController::class, 'edit'])
-        ->middleware('permission:lifecycle_task_templates.update')->name('settings.lifecycle-task-templates.edit');
+        ->middleware(['module:lifecycle', 'permission:lifecycle_task_templates.update'])->name('settings.lifecycle-task-templates.edit');
 
     Route::get('settings/locations', [LocationUiController::class, 'index'])
         ->middleware('permission:locations.view')->name('settings.locations');
@@ -274,11 +279,11 @@ Route::middleware(['auth', 'tenant.matches'])->group(function () {
     // pattern, fetched client-side from the existing /api/v1/leave-types
     // endpoints (Checkpoint 12).
     Route::get('settings/leave-types', [LeaveTypeUiController::class, 'index'])
-        ->middleware('permission:leave_types.view')->name('settings.leave-types');
+        ->middleware(['module:leave', 'permission:leave_types.view'])->name('settings.leave-types');
     Route::get('settings/leave-types/create', [LeaveTypeUiController::class, 'create'])
-        ->middleware('permission:leave_types.create')->name('settings.leave-types.create');
+        ->middleware(['module:leave', 'permission:leave_types.create'])->name('settings.leave-types.create');
     Route::get('settings/leave-types/{leaveType}/edit', [LeaveTypeUiController::class, 'edit'])
-        ->middleware('permission:leave_types.update')->name('settings.leave-types.edit');
+        ->middleware(['module:leave', 'permission:leave_types.update'])->name('settings.leave-types.edit');
 
     Route::get('settings/security', fn () => Inertia::render('Settings/Security'))
         ->middleware('permission:audit.view')->name('settings.security');

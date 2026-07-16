@@ -3,6 +3,8 @@
 namespace App\Http\Middleware;
 
 use App\Models\Tenant;
+use App\Models\TenantBranding;
+use App\Services\TenantModuleService;
 use Illuminate\Http\Request;
 use Inertia\Middleware;
 
@@ -53,6 +55,17 @@ class HandleInertiaRequests extends Middleware
         // in this payload.
         $tenant = app()->bound(Tenant::class) ? app(Tenant::class) : null;
 
+        // Checkpoint 47 — module/branding state only ever computed when a
+        // tenant is actually resolved (never for a Platform Super Admin
+        // on the base domain). Deliberately only the safe subset: an
+        // enabled-map keyed by module_key (no row IDs/actor IDs/
+        // timestamps), and branding's public logo URL + hex colors only
+        // (never logo_path or any other internal field) — see
+        // TenantModuleResource/TenantBrandingResource, which enforce the
+        // identical safe shape for the API responses this mirrors.
+        $modules = $tenant ? app(TenantModuleService::class)->enabledMap() : null;
+        $branding = $tenant ? TenantBranding::query()->where('tenant_id', $tenant->id)->first() : null;
+
         return [
             ...parent::share($request),
             'auth' => [
@@ -68,6 +81,12 @@ class HandleInertiaRequests extends Middleware
             'tenant' => $tenant ? [
                 'id' => $tenant->id,
                 'name' => $tenant->name,
+                'modules' => $modules,
+                'branding' => [
+                    'logo_url' => $branding?->logoUrl(),
+                    'primary_color' => $branding?->primary_color,
+                    'secondary_color' => $branding?->secondary_color,
+                ],
             ] : null,
             // Checkpoint 44 — the first page in this app that redirects
             // back to itself (or elsewhere) with a one-time success

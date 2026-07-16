@@ -64,25 +64,44 @@ interface NavLink {
     routeName: string;
     icon: keyof typeof icons;
     permission?: string;
+    /**
+     * Checkpoint 47 — a toggleable module key. Hidden when the tenant
+     * has explicitly disabled it (missing key defaults to enabled,
+     * same fail-open fallback the backend itself uses) — purely a UI
+     * convenience, never the security boundary; the page route and
+     * every API call behind it are independently module-gated too.
+     */
+    module?: string;
 }
 
 const links: NavLink[] = [
     { label: 'Dashboard', href: '/dashboard', routeName: 'dashboard', icon: 'dashboard' },
     { label: 'Employees', href: '/employees', routeName: 'employees.index', icon: 'employees', permission: 'employees.view' },
-    { label: 'Leave', href: '/leave', routeName: 'leave.index', icon: 'leave', permission: 'leave.view' },
-    { label: 'Documents', href: '/documents', routeName: 'documents.index', icon: 'documents', permission: 'documents.view' },
-    { label: 'Policies', href: '/policies', routeName: 'policies.index', icon: 'policies', permission: 'policies.view' },
-    { label: 'Onboarding/Offboarding', href: '/lifecycle', routeName: 'lifecycle.index', icon: 'lifecycle', permission: 'lifecycle.view' },
-    { label: 'Recruitment', href: '/recruitment', routeName: 'recruitment.index', icon: 'recruitment', permission: 'job_openings.view' },
+    { label: 'Leave', href: '/leave', routeName: 'leave.index', icon: 'leave', permission: 'leave.view', module: 'leave' },
+    { label: 'Documents', href: '/documents', routeName: 'documents.index', icon: 'documents', permission: 'documents.view', module: 'documents' },
+    { label: 'Policies', href: '/policies', routeName: 'policies.index', icon: 'policies', permission: 'policies.view', module: 'policies' },
+    { label: 'Onboarding/Offboarding', href: '/lifecycle', routeName: 'lifecycle.index', icon: 'lifecycle', permission: 'lifecycle.view', module: 'lifecycle' },
+    { label: 'Recruitment', href: '/recruitment', routeName: 'recruitment.index', icon: 'recruitment', permission: 'job_openings.view', module: 'recruitment' },
     { label: 'Settings', href: '/settings', routeName: 'settings.index', icon: 'settings', permission: 'tenant.settings.view' },
 ];
 
 export default function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
     const page = usePage<PageProps>();
     const permissions = page.props.auth.user?.permissions ?? [];
+    const modules = page.props.tenant?.modules ?? null;
     const currentUrl = page.url;
 
-    const visibleLinks = links.filter((link) => !link.permission || permissions.includes(link.permission));
+    const visibleLinks = links.filter((link) => {
+        if (link.permission && !permissions.includes(link.permission)) {
+            return false;
+        }
+
+        if (link.module && modules && modules[link.module] === false) {
+            return false;
+        }
+
+        return true;
+    });
 
     return (
         <nav className="flex flex-1 flex-col gap-1 px-3 py-4" aria-label="Primary">

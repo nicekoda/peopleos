@@ -110,6 +110,22 @@ const sections: Section[] = [
         comingLater: false,
     },
     {
+        key: 'modules',
+        title: 'Modules',
+        description: 'Enable or disable optional modules for your organisation.',
+        href: '/settings/modules',
+        permission: 'tenant.modules.view',
+        comingLater: false,
+    },
+    {
+        key: 'branding',
+        title: 'Branding',
+        description: 'Logo and brand colors used across the app.',
+        href: '/settings/branding',
+        permission: 'tenant.branding.view',
+        comingLater: false,
+    },
+    {
         key: 'security',
         title: 'Security & Audit',
         description: 'Review security and audit settings.',

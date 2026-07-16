@@ -43,4 +43,20 @@ class SettingsController extends Controller
     {
         return Inertia::render('Settings/Company');
     }
+
+    /**
+     * Checkpoint 47 — thin page routes, same pattern as every other
+     * module — module/branding state is fetched client-side from
+     * /api/v1/tenant/modules and /api/v1/tenant/branding, never passed
+     * through as an Inertia prop.
+     */
+    public function modules(): Response
+    {
+        return Inertia::render('Settings/Modules');
+    }
+
+    public function branding(): Response
+    {
+        return Inertia::render('Settings/Branding');
+    }
 }

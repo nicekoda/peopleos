@@ -82,6 +82,19 @@ class RecruitmentUiTest extends TestCase
         $response->assertInertia(fn ($page) => $page->component('Recruitment/JobsIndex'));
     }
 
+    // 8: disabled module blocks the page route itself, not just its API
+    public function test_disabled_recruitment_module_blocks_the_jobs_index_page(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $admin = $this->userWithPermissions($tenant, 'tenant.modules.manage');
+        $user = $this->userWithPermissions($tenant, 'job_openings.view');
+        $this->actingAs($admin)->patchJson($this->url($tenant, 'api/v1/tenant/modules/recruitment'), ['enabled' => false])->assertOk();
+
+        $response = $this->actingAs($user)->get($this->url($tenant, 'recruitment/jobs'));
+
+        $response->assertForbidden();
+    }
+
     public function test_user_without_job_openings_create_cannot_access_jobs_create_page(): void
     {
         $tenant = Tenant::factory()->create();

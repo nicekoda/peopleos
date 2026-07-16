@@ -734,8 +734,41 @@ no visual indicator distinguishing a pending-invite account from one
 with a real password** — see `docs/security.md` for the full design and
 remaining gaps.
 
+## Module Registry & Branding Foundation (Checkpoint 47)
+
+Introduces two independent, backend-defined tenant configuration
+surfaces: **module toggling** (a Tenant Admin can disable
+`recruitment`, `lifecycle`, `leave`, `documents`, `policies`, or
+`hr_documents` for their own tenant) and **branding** (a display name,
+logo, and two brand colors, shown wherever the tenant's identity
+appears in the UI). Neither is a general-purpose "app builder" — the
+module list and the branding fields are both a fixed, backend-owned
+enum/table, never free text or arbitrary keys from the frontend. See
+[`architecture.md`](docs/architecture.md#module-registry--branding-foundation-checkpoint-47)
+for the technical design and
+[`security.md`](docs/security.md#module-registry--branding-foundation-checkpoint-47)
+for the security model.
+
+**Module disablement blocks the backend, not just the UI.** A
+disabled module's routes return `403 {"reason": "module_disabled"}` —
+the same enforcement whether the request comes from this app's own
+frontend, a script, or a stray bookmark to an old URL. Disabling a
+module never deletes, archives, or otherwise touches its business
+data; re-enabling it makes everything reappear exactly as it was.
+Core modules (`employees`, `settings`, `users_access`, `audit_logs`,
+`dashboard`, `manager_hierarchy`, `password_reset`,
+`account_invites`) can never be disabled — the backend rejects an
+attempt with `422`, not silently ignoring it.
+
+**Branding is deliberately narrow for this checkpoint**: tenant
+display name, a logo (PNG/JPG/JPEG only — no SVG), and two hex
+colors. No custom CSS/HTML/JS, no custom domains, no email-template
+branding, no theme builder — see `architecture.md`'s "Future" note
+for what's deliberately deferred.
+
 ## Documentation
 
+- [`docs/platform-vision.md`](docs/platform-vision.md) — the long-term product/architecture vision (platform kernel, module layer, subscription/entitlement model, event-driven architecture, AI governance) that every checkpoint's design should be checked against. Not tied to a checkpoint; update it when the vision changes, not when a feature ships.
 - [`docs/architecture.md`](docs/architecture.md) — multi-tenancy, tenant resolution, RBAC overview, internal-vs-public IDs, frontend architecture.
 - [`docs/database.md`](docs/database.md) — schema conventions and table reference.
 - [`docs/security.md`](docs/security.md) — authentication, RBAC design, local demo credentials, frontend security model, known limitations.

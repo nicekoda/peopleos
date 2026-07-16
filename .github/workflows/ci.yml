@@ -135,6 +135,17 @@ jobs:
           DB_USERNAME: peopleos_ci
           DB_PASSWORD: peopleos_ci_password
 
+      # Checkpoint 47 — Module Registry & Branding Foundation.
+      - name: Module-gate audit
+        run: php artisan route:audit-module-gates
+        env:
+          DB_CONNECTION: pgsql
+          DB_HOST: 127.0.0.1
+          DB_PORT: 5432
+          DB_DATABASE: peopleos_ci
+          DB_USERNAME: peopleos_ci
+          DB_PASSWORD: peopleos_ci_password
+
       - name: Backend test suite
         # Runs against phpunit.xml's own in-memory SQLite override —
         # deliberately unrelated to the PostgreSQL service above. See

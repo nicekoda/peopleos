@@ -5602,6 +5602,155 @@ this notification is no exception.
 - Self-service password change for an authenticated user.
 - MFA and bulk/CSV user import remain out of scope, as before.
 
+## Module Registry & Branding Foundation (Checkpoint 47)
+
+See
+[`architecture.md`](architecture.md#module-registry--branding-foundation-checkpoint-47)
+for the technical design and
+[`docs/platform-vision.md`](platform-vision.md) for why this
+checkpoint exists — it's the first foundation of a platform-wide
+module/entitlement model, not a one-off HR toggle.
+
+### Permission model: view and manage are separate, on purpose
+
+`tenant.modules.view` and `tenant.modules.manage` are distinct
+permissions — Tenant Admin, HR Director, and HR Manager may all view
+the module list, but only Tenant Admin gets `.manage` (seeded via the
+existing "grant every non-platform permission" query for that role,
+never explicitly listed for HR Director/HR Manager). Branding follows
+the same split, but wider: `tenant.branding.view` **and**
+`tenant.branding.manage` are both granted to Tenant Admin, HR
+Director, and HR Manager — branding is lower-risk than module
+enablement (it can't change what data a route accepts requests for),
+so the same three roles that can view it can also manage it. Neither
+permission is inferred from the other — a test in
+`TenantBrandingApiTest` specifically confirms a user with only
+`.view` gets `403` on the `PATCH`/upload/remove endpoints.
+
+### Module disablement is enforced at the route layer, before permission checks
+
+`EnsureModuleEnabled` (`module:{key}`) sits in the middleware chain
+*before* `permission:{key}` (`auth → tenant.matches → module:{key} →
+permission:{key}`). This ordering is deliberate: a caller who lacks
+both the module and the permission gets the module_disabled reason,
+not a generic permission-denied message — disabled-module state is
+tenant-wide configuration, not a property of who's asking, so it's
+checked first. Disabling a module is purely additive/subtractive over
+*access*; `TenantModuleService::setEnabled()` never touches any other
+table, so re-enabling a module always restores full access to
+untouched data.
+
+### Platform Super Admin behaviour — verified, not assumed
+
+**Expected rule**: Platform Super Admin must not become a backdoor
+into tenant-scoped module routes. This was verified directly against
+the existing `EnsureTenantMatchesAuthenticatedUser` source (not
+assumed from its name), then locked down with an explicit regression
+test in `tests/Feature/Tenant/TenantModuleApiTest.php`:
+
+- **`tenant.matches` enforcement**: a platform admin visiting a
+  tenant subdomain is rejected by `tenant.matches` — which runs before
+  `module:{key}` in the middleware stack — so they never reach the
+  module gate at all on any tenant route.
+- **Module gate not used as a backdoor**: with Recruitment disabled
+  for a tenant, a platform-admin request to a Recruitment route still
+  gets `403`, but the response body never contains the
+  `module_disabled` reason — proving the block came from
+  `tenant.matches`, not from the module gate noticing the module was
+  off. If the module gate were somehow reachable, a platform admin
+  could in principle probe which modules are enabled/disabled per
+  tenant without ever authenticating as that tenant's own user; this
+  test exists specifically to rule that out.
+- No explicit "Platform Super Admin + base domain platform route"
+  positive-access assertion was added in this checkpoint, since no
+  platform-level module routes exist yet — module/branding endpoints
+  are exclusively tenant-scoped singleton routes (`tenant/modules`,
+  `tenant/branding`), consistent with every other `tenant/*` route in
+  this app.
+- No future support-access mode (an explicit, time-boxed, audited way
+  for a platform admin to legitimately act inside a tenant) is built
+  in this checkpoint — this remains a deliberate gap, not an oversight;
+  see "Future" below.
+
+### Warning-count metadata: aggregate only, never per-record
+
+`TenantModuleService::warningCounts()` returns a plain integer count
+per module (active recruitment applications, pending leave requests,
+in-progress lifecycle processes, pending HR document approvals) — no
+names, no record IDs, no applicant/employee details, and no
+unbounded/expensive queries (each is a single indexed `count()`
+against status/stage columns already used elsewhere in the app).
+Documents and Policies are deliberately skipped — no safe, cheap
+aggregate was obvious for either without either an expensive join or
+exposing something more specific than a count, so they were left out
+rather than forced; a Tenant Admin disabling either module today sees
+no warning number, same as before this feature existed.
+
+### Logo and color validation: closing real injection surfaces, not just format-checking
+
+- **No SVG.** SVG is the one common image format that can carry
+  embedded `<script>`/event-handler content — ruling it out entirely
+  removes a stored-XSS vector via a "profile picture"-style upload,
+  a well-known class of vulnerability in file-upload features that
+  accept SVG.
+- **Server-generated filename and path, never the client's.** The
+  original filename is stored only as display metadata
+  (`logo_original_filename`) — it never becomes part of the storage
+  path, closing off path-traversal-via-filename entirely. The actual
+  path is `tenant-branding/{tenant_id}/{random 40 chars}.{ext}` —
+  unguessable and tenant-scoped, so even a valid session for tenant A
+  can't be used to infer or reach tenant B's logo path.
+- **Strict hex-only colors, no CSS injection surface.** Colors are
+  validated against `^#[0-9a-fA-F]{6}$` only — no `rgb()`, no named
+  colors, no shorthand hex, and critically no free-form string ever
+  reaches a `<style>` tag or inline `style` attribute unvalidated.
+  There is no custom-CSS/HTML/JS field anywhere in this checkpoint's
+  scope; a test explicitly confirms forged `custom_css`/`custom_html`
+  fields submitted to the branding endpoint are silently ignored (no
+  such fields exist in the request's validation rules at all).
+
+### Audit events
+
+`module.enabled`/`module.disabled` (metadata: `module_key`,
+`previous_enabled`, `new_enabled`), `branding.updated` (metadata:
+`fields_changed`, `logo_changed`), `branding.logo_uploaded` (metadata:
+`original_filename`, `mime_type` — never the storage path),
+`branding.logo_removed`. None of these ever record a raw storage
+path, `tenant_modules`/`tenant_branding` row IDs, or actor
+IDs beyond the standard `actor_user_id` every audit entry already
+carries.
+
+### Current limitations
+
+- No entitlement/subscription layer yet — `tenant_modules` only
+  covers *enablement*, not whether a tenant is commercially entitled
+  to a module at all. See `docs/platform-vision.md`'s "Module
+  subscription and entitlement model" for the intended future shape;
+  this checkpoint's module keys and registry are built to support it
+  without redesign, not to implement it now.
+- No real Platform-Super-Admin support-access mode — today PSA simply
+  cannot reach tenant routes at all, full stop. A future
+  explicit/time-boxed/audited support mode is a deliberate gap, not
+  built here.
+- Warning-count metadata covers only Recruitment/Leave/Lifecycle/HR
+  Documents — Documents and Policies show no count.
+- No max-dimension enforcement beyond what Laravel's `dimensions` rule
+  checks synchronously (2000×2000px) — no async image-processing
+  pipeline, no thumbnailing, no virus/malware scanning of uploaded
+  logos.
+- No login-page or outbound-email branding — this checkpoint only
+  brands the in-app authenticated UI.
+
+### Future
+
+Per `docs/platform-vision.md`: `tenant_module_entitlements` and a real
+subscription/package-plan layer sitting in front of enablement; a
+time-boxed/audited Platform-Super-Admin support-access mode;
+configuration export/import; a tenant readiness checklist; a
+configuration lock and configuration-history UI; login/email
+branding; warning counts for Documents/Policies if a safe aggregate
+is identified later.
+
 ## Local Demo Credentials
 
 **Local development only — these are not real secrets and only work against your own local database.** Password comes from `SEED_USER_PASSWORD` in `.env` (not committed; `.env.example` has an empty placeholder).
@@ -5630,6 +5779,7 @@ data these six `uesl` logins see (Checkpoint 26's `DemoDataSeeder`).
 
 - No email verification enforcement on login (column exists, not yet checked).
 - Password reset exists as of Checkpoint 44 (the `password_reset_tokens` table, previously unused, now backs a real forgot-password flow) — see [Password Reset](#password-reset-checkpoint-44) below. An invite-email flow (built on the same token table) exists as of Checkpoint 46 — see [Invite-Email Flow for New Accounts](#invite-email-flow-for-new-accounts-checkpoint-46) below. Still no MFA or SSO.
+- A backend module registry (`recruitment`, `lifecycle`, `leave`, `documents`, `policies`, `hr_documents` toggleable per tenant) and a narrow branding surface (display name, logo, two colors) exist as of Checkpoint 47 — see [Module Registry & Branding Foundation](#module-registry--branding-foundation-checkpoint-47) below and `docs/platform-vision.md` for the long-term platform direction this checkpoint is the first foundation of. Still no entitlement/subscription layer sitting in front of enablement.
 - This app's first scheduled task exists as of Checkpoint 45 (`lifecycle:send-task-digest`, registered via `bootstrap/app.php`'s `->withSchedule()`) — see [Lifecycle Task Ordering & Reminders](#lifecycle-task-ordering--reminders-checkpoint-45) below. Production deployments must now add a `php artisan schedule:run` cron entry, which was never required before this checkpoint (see `docs/deployment.md` §6). Still no queued jobs anywhere in the app.
 - `DatabaseSeeder` uses `WithoutModelEvents`, which disables the `saving`/`creating` guards (on `User` and `Role`) during seeding. `UserSeeder`/`RoleSeeder` set `tenant_id`/`is_platform_admin`/`is_platform_role` explicitly on every row regardless, so this doesn't cause incorrect data — but it does mean a same-row consistency mistake in seed data would surface as a raw Postgres constraint error rather than the cleaner app-level exception. (The RBAC *assignment* guards — `assignRole()`, `givePermissionTo()`, `grantPermission()` — and audit logging calls are unaffected by this, since they're plain method logic, not Eloquent events.)
 - See "Current limitations" under Audit Logging above for the audit-specific gaps (no read endpoint, `givePermissionTo()`/tenant CRUD not logged yet).

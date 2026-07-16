@@ -312,4 +312,40 @@ class JobApplicationOnboardingApiTest extends TestCase
         $this->assertDatabaseHas('employee_lifecycle_tasks', ['process_id' => $processId, 'title' => 'Send welcome email']);
         $this->assertDatabaseMissing('employee_lifecycle_tasks', ['process_id' => $processId, 'title' => 'Revoke access']);
     }
+
+    // Checkpoint 47 — the handoff is gated by BOTH modules; disabling
+    // either one blocks it, per your explicit requirement that this
+    // must disappear when Lifecycle is disabled, not only when
+    // Recruitment is.
+    public function test_start_onboarding_is_blocked_when_lifecycle_module_is_disabled(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $admin = $this->userWithPermissions($tenant, 'tenant.modules.manage');
+        $user = $this->userWithPermissions($tenant, 'lifecycle.create');
+        $application = $this->convertedApplication($tenant);
+
+        $this->actingAs($admin)->patchJson($this->url($tenant, 'tenant/modules/lifecycle'), ['enabled' => false])->assertOk();
+
+        $response = $this->actingAs($user)->postJson($this->url($tenant, "job-applications/{$application->id}/start-onboarding"));
+
+        $response->assertForbidden();
+        $response->assertJsonPath('reason', 'module_disabled');
+        $this->assertNull($application->fresh()->onboarding_process_id);
+    }
+
+    public function test_start_onboarding_is_blocked_when_recruitment_module_is_disabled(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $admin = $this->userWithPermissions($tenant, 'tenant.modules.manage');
+        $user = $this->userWithPermissions($tenant, 'lifecycle.create');
+        $application = $this->convertedApplication($tenant);
+
+        $this->actingAs($admin)->patchJson($this->url($tenant, 'tenant/modules/recruitment'), ['enabled' => false])->assertOk();
+
+        $response = $this->actingAs($user)->postJson($this->url($tenant, "job-applications/{$application->id}/start-onboarding"));
+
+        $response->assertForbidden();
+        $response->assertJsonPath('reason', 'module_disabled');
+        $this->assertNull($application->fresh()->onboarding_process_id);
+    }
 }

@@ -2724,3 +2724,164 @@ the only way to get a fresh link today is a real forgot-password
 request from the login page, which works (the account exists and has a
 real, if unusable, password hash) but isn't a purpose-built "resend"
 affordance. None of these were part of this checkpoint's scope.
+
+## Module Registry & Branding Foundation (Checkpoint 47)
+
+The first checkpoint built explicitly against
+[`docs/platform-vision.md`](platform-vision.md)'s "platform kernel"
+direction — `TenantModule` is meant to be the durable shape every
+future module registers against, not a one-off enum for this
+checkpoint's six modules alone.
+
+**`App\Enums\TenantModule` is the backend module registry — a
+backed enum, never free text from the frontend.** Cases split into
+`core()` (never toggleable: `employees`, `settings`, `users_access`,
+`audit_logs`, `dashboard`, `manager_hierarchy`, `password_reset`,
+`account_invites`) and `toggleable()` (`recruitment`, `lifecycle`,
+`leave`, `documents`, `policies`, `hr_documents`). Each case carries
+`label()`, `description()`, `isToggleable()`, `routeGroupPrefixes()`
+(the URL prefixes that belong to it, for both `routes/api.php` and
+`routes/web.php`), `additionalGatedUris()` (exact-URI exceptions for
+routes that don't fit a clean prefix — see below), and
+`relatedModules()` (purely informational cross-references, e.g.
+Recruitment↔Lifecycle). The enum's case values *are* the module keys
+persisted to `tenant_modules.module_key` and returned over the API —
+per `docs/platform-vision.md`, these values are meant to stay stable
+indefinitely, since a future entitlement/subscription layer will key
+off the same strings.
+
+**A route can belong to more than one module.** The
+`start-onboarding` endpoint is reachable only when *both* Recruitment
+and Lifecycle are enabled — it's gated by two separate `module:{key}`
+middleware entries, one per module, rather than forcing a single
+"owning module" per route. `routeGroupPrefixes()`/
+`additionalGatedUris()` exist precisely so a module's registry entry
+can claim a route without requiring every route to have exactly one
+owner.
+
+**`tenant_modules`: explicit rows are the steady state, not a lazy
+cache.** One row per tenant per toggleable module
+(`unique(tenant_id, module_key)`), defaulting `enabled = true`.
+Existing tenants are backfilled by the migration itself; new tenants
+get rows via `TenantModuleService::provisionDefaults()`, called both
+from `Tenant::booted()`'s `created` hook (for any real provisioning
+flow) and explicitly from `TenantSeeder` (since `DatabaseSeeder`'s
+`WithoutModelEvents` trait suppresses the model event during seeding —
+see "Errors and fixes" precedent for `User`/`Role` guards under the
+same trait). `TenantModuleService::isEnabled()`'s "missing row ⇒
+enabled" behavior is a defensive fallback only, never the intended
+mechanism — a genuinely missing row should not normally occur once
+provisioning runs everywhere it needs to.
+
+**`EnsureModuleEnabled` (`module:{key}`) blocks the backend route
+itself, not just the UI.** Middleware order is
+`auth → tenant.matches → module:{key} → permission:{key}` — module
+gating happens *before* permission checks, so a disabled module never
+even reveals whether the caller would otherwise have had permission.
+A disabled module returns exactly
+`{"message": "This module is not enabled for your organisation.", "reason": "module_disabled"}`
+with HTTP 403 — a stable, machine-checkable reason string, not just a
+generic 403. Disabling a module **never** deletes, archives, or
+mutates its business data — `TenantModuleService::setEnabled()` only
+ever writes to the `tenant_modules` row itself.
+
+**Unknown or core module keys are rejected with 422, not a route-model-binding 404.**
+`TenantModuleController::update(string $moduleKey)` deliberately does
+not type-hint `$moduleKey` as `TenantModule` — Laravel's implicit
+enum route-model binding would 404 on a bad value, which reads to a
+caller as "route doesn't exist" rather than "this key is invalid."
+Instead the controller resolves it manually
+(`TenantModule::tryFrom()`) and asserts `isToggleable()`, returning a
+clear 422 either way.
+
+**`route:audit-module-gates` is a permanent regression guard, not a
+one-time check.** Mirrors the existing `route:audit-tenant-scoping`
+command exactly: iterates every toggleable module's
+`routeGroupPrefixes()`/`additionalGatedUris()`, asserts the matching
+route carries its `module:{key}` middleware, and fails the build if
+not. Wired into CI immediately after the tenant-scoping audit. A new
+route added under a toggleable module's prefix without its gate now
+fails CI the same way a route missing `tenant.matches` already does.
+
+**`tenant_branding` is a separate table, not columns on `tenants`.**
+`id, tenant_id (unique FK), logo_path, logo_original_filename,
+primary_color, secondary_color, created_by, updated_by, timestamps`.
+Kept separate from `tenants` because branding is optional
+per-tenant configuration with its own lifecycle (a tenant can exist
+with zero branding rows — `TenantBrandingController` uses
+`firstOrNew` to synthesize an empty one on read), whereas `tenants`
+itself is core platform identity data.
+
+**Logo storage: tenant-scoped and unguessable, never the internal
+path in API responses.** Uploaded to the `public` disk at
+`tenant-branding/{tenant_id}/{Str::random(40)}.{ext}` — the tenant's
+ULID (never a sequential integer) plus a 40-character random
+filename, so a path can't be enumerated or guessed even by another
+authenticated user of the same tenant. `TenantBranding::logoUrl()` is
+the only way the frontend ever learns about the file — it resolves
+through `Storage::disk('public')->url()`; `logo_path` itself is never
+serialized by `TenantBrandingResource`. Replacing a logo deletes the
+previous file; removing it nulls both `logo_path` and
+`logo_original_filename` and deletes the file. Validation
+(`UploadTenantLogoRequest`) accepts only PNG/JPG/JPEG (no SVG — ruled
+out entirely for the MVP, closing off the classic SVG-with-embedded-
+script upload vector), enforces a max file size and max pixel
+dimensions via Laravel's `dimensions` rule (requires GD, confirmed
+present in this environment).
+
+**Colors: strict 6-digit hex only, no free-form CSS.**
+`UpdateTenantBrandingRequest` validates `primary_color`/
+`secondary_color` against `^#[0-9a-fA-F]{6}$` — no named colors, no
+`rgb()`/`rgba()`, no shorthand 3-digit hex, and critically no path
+for injecting arbitrary CSS/HTML/JS through a "color" field. There is
+no custom-CSS, custom-HTML, or theme-builder surface anywhere in this
+checkpoint; branding is exactly display name + logo + two colors.
+
+**Shared Inertia props expose only what the frontend needs to render,
+never internal IDs or actors.** `HandleInertiaRequests` adds
+`tenant.modules` (a plain `module_key => bool` map, from
+`TenantModuleService::enabledMap()`) and `tenant.branding`
+(`logo_url`, `primary_color`, `secondary_color` only) to every
+tenant-scoped request. Neither includes `tenant_modules`/
+`tenant_branding` row IDs, `enabled_by`/`disabled_by`/`created_by`/
+`updated_by`, or the internal `logo_path`. `Sidebar.tsx` hides a
+module's nav entry when `modules[key] === false`, failing **open**
+(visible) if the key is ever absent from the map — the backend route
+gate is what actually enforces access; the sidebar is a convenience,
+never the boundary. `ApplicationShow.tsx`'s "Start Onboarding" affordance
+is hidden the same way when `tenant.modules.lifecycle === false`, so
+the recruitment-to-lifecycle handoff introduced in Checkpoint 41
+disappears from the UI exactly when the backend would reject it
+anyway.
+
+**Platform Super Admin cannot use a disabled module as a backdoor —
+verified, not assumed.** `EnsureTenantMatchesAuthenticatedUser`
+(`tenant.matches`) already rejects a platform admin on any tenant
+subdomain, and it runs *before* `module:{key}` in the middleware
+stack — a platform admin never reaches the module gate on a tenant
+route at all. `tests/Feature/Tenant/TenantModuleApiTest.php` proves
+this directly: one test asserts a platform admin is blocked outright
+from every module route, and a second (
+`test_platform_super_admin_cannot_bypass_a_disabled_module_via_tenant_routes`)
+asserts the 403 response body never contains `module_disabled` for a
+platform-admin request — proving `tenant.matches`, not the module
+gate, is what's actually stopping them. No support-access mode exists
+yet; if one is ever built, it must be explicit, time-boxed, and
+audited — not an incidental side effect of module gating.
+
+### Future
+
+Per `docs/platform-vision.md`: an entitlement layer separate from
+enablement (`tenant_module_entitlements`, package plans, trial/beta/
+expired modules) sitting in front of the enablement layer this
+checkpoint built; a real Platform-Super-Admin support-access mode
+(explicit, time-boxed, audited); safe warning-count metadata beyond
+the four modules currently covered (Documents/Policies were skipped —
+no cheap, safe aggregate count was obvious without risking an
+expensive or leaky query); a future implementation-engineer role;
+configuration export/import; a tenant readiness checklist; a
+configuration lock and configuration-history UI; login/email-page
+branding (this checkpoint only brands the in-app UI); and
+tenant-scoped caching for `enabledMap()`/branding if this becomes a
+hot path (currently a plain per-request query, consistent with this
+app's existing "no permission caching yet" posture).

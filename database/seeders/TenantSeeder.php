@@ -3,6 +3,7 @@
 namespace Database\Seeders;
 
 use App\Models\Tenant;
+use App\Services\TenantModuleService;
 use Illuminate\Database\Seeder;
 
 class TenantSeeder extends Seeder
@@ -20,11 +21,22 @@ class TenantSeeder extends Seeder
             ['name' => 'Ibom Air', 'subdomain' => 'ibom'],
         ];
 
+        // Checkpoint 47 — provisionDefaults() is called explicitly here,
+        // not left to Tenant's own `created` model-event hook: this
+        // whole seeder runs under DatabaseSeeder's WithoutModelEvents
+        // (see docs/security.md), which suppresses that hook entirely.
+        // Found by actually testing migrate:fresh --seed rather than
+        // assuming the hook alone was sufficient — it produced zero
+        // tenant_modules rows until this explicit call was added.
+        $moduleService = app(TenantModuleService::class);
+
         foreach ($tenants as $tenant) {
-            Tenant::query()->updateOrCreate(
+            $tenantModel = Tenant::query()->updateOrCreate(
                 ['subdomain' => $tenant['subdomain']],
                 ['name' => $tenant['name'], 'status' => Tenant::STATUS_ACTIVE],
             );
+
+            $moduleService->provisionDefaults($tenantModel);
         }
     }
 }

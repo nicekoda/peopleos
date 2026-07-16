@@ -46,7 +46,8 @@ const allowedNextStages: Record<ApplicationStage, ApplicationStage[]> = {
 };
 
 export default function RecruitmentApplicationShow() {
-    const { applicationId } = usePage<ShowProps>().props;
+    const { applicationId, tenant } = usePage<ShowProps>().props;
+    const lifecycleEnabled = tenant?.modules?.lifecycle !== false;
 
     const [application, setApplication] = useState<JobApplication | null>(null);
     const [error, setError] = useState<ApiError | null>(null);
@@ -388,7 +389,7 @@ export default function RecruitmentApplicationShow() {
                                     </Link>{' '}
                                     (status: {application.onboarding_process.status.replace('_', ' ')}).
                                 </p>
-                            ) : (
+                            ) : lifecycleEnabled ? (
                                 <div>
                                     <p className="mb-2 text-sm text-slate-500">
                                         No onboarding process has been started. Starting onboarding only creates a draft process — no
@@ -403,7 +404,7 @@ export default function RecruitmentApplicationShow() {
                                         </Button>
                                     </PermissionGate>
                                 </div>
-                            )}
+                            ) : null}
                         </div>
                     ) : (
                         <PermissionGate

@@ -74,6 +74,22 @@ class JobOpeningApiTest extends TestCase
         $this->actingAs($user)->getJson($this->url($tenant, "job-openings/{$job->id}"))->assertOk();
     }
 
+    // Checkpoint 47 — disabling the Recruitment module blocks its API
+    // even for a user who otherwise holds job_openings.view.
+    public function test_disabled_recruitment_module_blocks_the_api_with_module_disabled_reason(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $admin = $this->userWithPermissions($tenant, 'tenant.modules.manage');
+        $user = $this->userWithPermissions($tenant, 'job_openings.view');
+
+        $this->actingAs($admin)->patchJson($this->url($tenant, 'tenant/modules/recruitment'), ['enabled' => false])->assertOk();
+
+        $response = $this->actingAs($user)->getJson($this->url($tenant, 'job-openings'));
+
+        $response->assertForbidden();
+        $response->assertJsonPath('reason', 'module_disabled');
+    }
+
     // 6: user without create permission cannot create
     public function test_user_without_create_permission_cannot_create_job(): void
     {

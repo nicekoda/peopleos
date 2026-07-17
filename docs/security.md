@@ -5960,6 +5960,118 @@ package/entitlement limits. Additionally: a controlled, audited
 application-field-to-employee-field mapping, once Employee custom
 fields exist and a real design for that mapping is approved.
 
+## Field-Level Visibility and Sensitive Field Access (Checkpoint 50)
+
+See
+[`architecture.md`](architecture.md#field-level-visibility-and-sensitive-field-access-checkpoint-50)
+for the full technical design. This section covers the access-control
+model and its default grants from a security standpoint.
+
+### Closes a real gap: sensitivity previously only masked audit logs, never restricted access
+
+Before this checkpoint, `CustomFieldSensitivity` had no effect on who
+could read or write a field's value — only on how it appeared in the
+audit log. Any user holding `job_applications.view`/`.update` (or the
+equivalent for a future entity) could see and change a `restricted`
+field exactly as freely as a `normal` one. This checkpoint adds the
+missing access-control layer without touching the pre-existing
+masking behavior.
+
+### Fixed permissions were chosen over a configurable rules table, based on what already exists in this codebase
+
+Two existing sensitive-field mechanisms were read directly before
+deciding: `employees.view_sensitive` (nulls `personal_email`/`phone`
+in `EmployeeResource`, no write-side check) and
+`documents.view_sensitive` (excludes whole sensitive documents at the
+controller). Neither has any configurable/per-tenant-rule precedent —
+both are simple fixed booleans. `custom_fields.access_sensitive`/
+`access_confidential`/`access_restricted` follow that same pattern.
+A configurable rules engine remains a deliberately deferred future
+checkpoint (see `docs/platform-vision.md`), not because it's
+undesirable, but because no real usage evidence yet justifies its
+added complexity, and it must be built as an override layer on this
+fixed model, never a replacement for it.
+
+### Default grants — HR Director's exclusion is intentional, not an oversight
+
+| Role | `access_sensitive` | `access_confidential` | `access_restricted` |
+|---|---|---|---|
+| Tenant Admin | ✓ (blanket grant) | ✓ (blanket grant) | ✓ (blanket grant) |
+| HR Manager | ✓ | — | — |
+| HR Director | — | — | — |
+| Everyone else | — | — | — |
+
+HR Manager's `access_sensitive` grant mirrors the one existing
+precedent in the app (`employees.view_sensitive`, also HR-Manager-only
+today). **HR Director receiving none of the three tiers by default is
+a deliberate MVP decision** — HR Director otherwise mirrors many of
+HR Manager's grants, but extending a brand-new access tier to a role
+with no existing sensitive-access precedent would be a silent access
+expansion. A regression-style test
+(`test_seeded_hr_director_role_does_not_get_any_tier_permission_by_default`)
+proves this against the real seeded `RoleSeeder` output, not a
+hand-built role, so a future accidental grant would be caught.
+
+### View and edit are independently enforced — closing a gap the Employee mechanism has today
+
+`employees.view_sensitive` has only ever gated reads; there has never
+been a matching write-side check for `personal_email`/`phone`, so a
+user with employee-edit rights but no `view_sensitive` grant could
+still write those fields blind. Checkpoint 50 does not repeat this:
+`CustomFieldValueService::setValuesFor()` independently checks tier
+access before any write, returning `403`. A field a user cannot see
+is also a field they cannot write.
+
+### Enforcement is server-side only — never relies on the frontend or the Resource alone
+
+`CustomFieldValueService::getActiveValuesFor()`/`::setValuesFor()` are
+the single enforcement point for both the applicant and application
+entities (Checkpoint 48/49 alike) — there is no second code path a
+future entity could accidentally skip. `CustomFieldDefinitionResource`'s
+`can_view`/`can_edit` fields are computed metadata for the frontend to
+render correctly; they carry no authority of their own, and a client
+that ignored them and submitted a disallowed field key directly is
+still rejected by the service (proven by
+`test_direct_field_key_submission_cannot_bypass_tier_access`).
+
+### Audit masking is unchanged, deliberately
+
+A sensitive/confidential/restricted value is masked in the audit log
+regardless of the *writer's* own tier access — the reasoning is that
+an audit log is often read by a different, potentially
+less-privileged, person later (an auditor, a different admin), so
+masking must depend on the field's classification alone, never on who
+happened to write it.
+
+### No new audit events for read-denials
+
+No `custom_field.value_denied` or `field_visibility_rule.*` audit
+event was added. Every existing permission-denied path in this app
+(including parent-entity `403`s) already goes unaudited; introducing
+one here would be a new, noisy pattern with no existing convention and
+no configurable-rules feature yet to attach it to.
+
+### Current limitations
+
+Scoped to custom fields only — no equivalent tier-permission system
+exists yet for system/native fields (e.g. `Employee::$personal_email`
+still uses the older `employees.view_sensitive` mechanism unchanged).
+No tenant configurability — the tiers and their required permissions
+are fixed platform-wide. No implied hierarchy is both a limitation and
+a deliberate safety choice: granting `access_restricted` to a role
+does not also grant `access_sensitive`/`access_confidential` — each
+must be granted explicitly.
+
+### Future
+
+A configurable, tenant-defined visibility-rules layer — see
+`docs/platform-vision.md` for the conditions that should be met
+before it's built, and the checkpoint sequence it's expected to follow
+(Employee custom fields, then Custom Forms, then configurable rules,
+unless Employee custom fields reveal complex needs earlier). A future
+system-field (not just custom-field) visibility feature could reuse
+the same `hasTierAccess()` primitive introduced here.
+
 ## Local Demo Credentials
 
 **Local development only — these are not real secrets and only work against your own local database.** Password comes from `SEED_USER_PASSWORD` in `.env` (not committed; `.env.example` has an empty placeholder).
@@ -5989,7 +6101,7 @@ data these six `uesl` logins see (Checkpoint 26's `DemoDataSeeder`).
 - No email verification enforcement on login (column exists, not yet checked).
 - Password reset exists as of Checkpoint 44 (the `password_reset_tokens` table, previously unused, now backs a real forgot-password flow) — see [Password Reset](#password-reset-checkpoint-44) below. An invite-email flow (built on the same token table) exists as of Checkpoint 46 — see [Invite-Email Flow for New Accounts](#invite-email-flow-for-new-accounts-checkpoint-46) below. Still no MFA or SSO.
 - A backend module registry (`recruitment`, `lifecycle`, `leave`, `documents`, `policies`, `hr_documents` toggleable per tenant) and a narrow branding surface (display name, logo, two colors) exist as of Checkpoint 47 — see [Module Registry & Branding Foundation](#module-registry--branding-foundation-checkpoint-47) below and `docs/platform-vision.md` for the long-term platform direction this checkpoint is the first foundation of. Still no entitlement/subscription layer sitting in front of enablement.
-- A tenant-scoped custom fields engine (EAV-leaning hybrid: `custom_field_definitions`/`custom_field_options`/`custom_field_validation_rules`/`custom_field_values`) exists as of Checkpoint 48 (`recruitment_applicant`) and Checkpoint 49 (`job_application`, i.e. `App\Models\RecruitmentApplication`) — see [Custom Fields Foundation](#custom-fields-foundation-checkpoint-48) and [Custom Fields for Job Applications](#custom-fields-for-job-applications-checkpoint-49) below. No schema or core-service change was needed to add the second entity. Sensitivity classification affects audit masking only, not read access, yet. `lifecycle_processes`/`leave_requests`/`employees` are a documented future roadmap, not built yet — `employees` deliberately last, once field-level visibility exists.
+- A tenant-scoped custom fields engine (EAV-leaning hybrid: `custom_field_definitions`/`custom_field_options`/`custom_field_validation_rules`/`custom_field_values`) exists as of Checkpoint 48 (`recruitment_applicant`) and Checkpoint 49 (`job_application`, i.e. `App\Models\RecruitmentApplication`) — see [Custom Fields Foundation](#custom-fields-foundation-checkpoint-48) and [Custom Fields for Job Applications](#custom-fields-for-job-applications-checkpoint-49) below. No schema or core-service change was needed to add the second entity. As of Checkpoint 50, sensitivity classification also gates read/write access via fixed platform permissions (`custom_fields.access_sensitive`/`access_confidential`/`access_restricted`), not just audit masking — see [Field-Level Visibility and Sensitive Field Access](#field-level-visibility-and-sensitive-field-access-checkpoint-50) below; a tenant-configurable rules layer on top of this fixed model is still a documented future roadmap, not built yet. `lifecycle_processes`/`leave_requests`/`employees` are a documented future roadmap, not built yet — `employees` deliberately last.
 - This app's first scheduled task exists as of Checkpoint 45 (`lifecycle:send-task-digest`, registered via `bootstrap/app.php`'s `->withSchedule()`) — see [Lifecycle Task Ordering & Reminders](#lifecycle-task-ordering--reminders-checkpoint-45) below. Production deployments must now add a `php artisan schedule:run` cron entry, which was never required before this checkpoint (see `docs/deployment.md` §6). Still no queued jobs anywhere in the app.
 - `DatabaseSeeder` uses `WithoutModelEvents`, which disables the `saving`/`creating` guards (on `User` and `Role`) during seeding. `UserSeeder`/`RoleSeeder` set `tenant_id`/`is_platform_admin`/`is_platform_role` explicitly on every row regardless, so this doesn't cause incorrect data — but it does mean a same-row consistency mistake in seed data would surface as a raw Postgres constraint error rather than the cleaner app-level exception. (The RBAC *assignment* guards — `assignRole()`, `givePermissionTo()`, `grantPermission()` — and audit logging calls are unaffected by this, since they're plain method logic, not Eloquent events.)
 - See "Current limitations" under Audit Logging above for the audit-specific gaps (no read endpoint, `givePermissionTo()`/tenant CRUD not logged yet).

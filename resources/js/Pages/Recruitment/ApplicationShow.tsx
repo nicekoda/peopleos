@@ -16,7 +16,6 @@ import { Position } from '@/types/position';
 import { Location } from '@/types/location';
 import { CustomFieldDefinitionState } from '@/types/customField';
 import { PageProps } from '@/types';
-import { useCan } from '@/hooks/useCan';
 
 interface ShowProps extends PageProps {
     applicationId: string;
@@ -58,6 +57,15 @@ const allowedNextStages: Record<ApplicationStage, ApplicationStage[]> = {
  * field_key can validly exist on both entities. No stage/status gate
  * exists on that endpoint today, so editability here follows whatever
  * the parent endpoint already allows, never a separate bypass path.
+ *
+ * Checkpoint 50 — a field the caller cannot view at all
+ * (`can_view: false`) is filtered out entirely, never rendered even as
+ * a locked placeholder — matching the backend's own "omit the key"
+ * behavior for the same reason. A field the caller can view but not
+ * edit (`can_view: true, can_edit: false`) renders read-only. This is
+ * UX only — the frontend never receives a value it can't view in the
+ * first place; the backend (CustomFieldValueService) is what actually
+ * enforces this.
  */
 function CustomFieldsCard({
     title,
@@ -65,7 +73,6 @@ function CustomFieldsCard({
     payloadKey,
     applicationId,
     values,
-    canEdit,
     onSaved,
 }: {
     title: string;
@@ -73,7 +80,6 @@ function CustomFieldsCard({
     payloadKey: 'custom_field_values' | 'application_custom_field_values';
     applicationId: string;
     values: Record<string, unknown> | undefined;
-    canEdit: boolean;
     onSaved: () => void;
 }) {
     const [defs, setDefs] = useState<CustomFieldDefinitionState[] | null>(null);
@@ -83,7 +89,7 @@ function CustomFieldsCard({
 
     useEffect(() => {
         api.get<{ data: CustomFieldDefinitionState[] }>(`/custom-fields/${entityTypeUrl}`)
-            .then((response) => setDefs(response.data.data.filter((field) => field.status === 'active')))
+            .then((response) => setDefs(response.data.data.filter((field) => field.status === 'active' && field.can_view)))
             .catch(() => {
                 // Non-fatal — the rest of the page still works if this
                 // fails (e.g. the viewer lacks custom_fields.view); the
@@ -104,7 +110,10 @@ function CustomFieldsCard({
         setErrors({});
 
         const payload: Record<string, unknown> = {};
-        (defs ?? []).forEach((field) => {
+        // Only ever submit fields the caller can actually edit — never
+        // resubmit a read-only field's displayed value, even though the
+        // backend would reject it anyway (403) if we did.
+        (defs ?? []).filter((field) => field.can_edit).forEach((field) => {
             const raw = draft[field.field_key] ?? '';
             if (field.field_type === 'multi_select') {
                 payload[field.field_key] = raw === '' ? [] : raw.split(',').map((v) => v.trim()).filter(Boolean);
@@ -137,7 +146,7 @@ function CustomFieldsCard({
                         <label className="block text-sm font-medium text-slate-700">
                             {field.label} {field.is_required && <span className="text-red-500">*</span>}
                         </label>
-                        {canEdit ? (
+                        {field.can_edit ? (
                             field.field_type === 'single_select' ? (
                                 <select
                                     className="mt-1 block w-full rounded-md border-0 px-3 py-2 text-sm shadow-sm ring-1 ring-inset ring-slate-300"
@@ -172,7 +181,7 @@ function CustomFieldsCard({
                         <ErrorMessage message={errors[`${payloadKey}.${field.field_key}`]?.[0]} />
                     </div>
                 ))}
-                {canEdit && (
+                {defs.some((field) => field.can_edit) && (
                     <div className="flex justify-end">
                         <Button type="button" onClick={submit} disabled={saving}>
                             {saving ? 'Saving…' : `Save ${title.toLowerCase()}`}
@@ -213,11 +222,6 @@ export default function RecruitmentApplicationShow() {
     const [converting, setConverting] = useState(false);
     const [startingOnboarding, setStartingOnboarding] = useState(false);
     const [onboardingError, setOnboardingError] = useState<string | null>(null);
-
-    // Checkpoint 48/49 — applicant-level and application-level custom
-    // fields both render via CustomFieldsCard below (see its own
-    // docblock); this page only needs the shared permission check.
-    const canUpdateApplication = useCan('job_applications.update');
 
     const load = useCallback(() => {
         setError(null);
@@ -448,7 +452,6 @@ export default function RecruitmentApplicationShow() {
                     payloadKey="custom_field_values"
                     applicationId={applicationId}
                     values={application.applicant?.custom_field_values}
-                    canEdit={canUpdateApplication}
                     onSaved={load}
                 />
 
@@ -458,7 +461,6 @@ export default function RecruitmentApplicationShow() {
                     payloadKey="application_custom_field_values"
                     applicationId={applicationId}
                     values={application.custom_field_values}
-                    canEdit={canUpdateApplication}
                     onSaved={load}
                 />
 

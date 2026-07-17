@@ -278,7 +278,10 @@ class CustomFieldJobApplicationValueApiTest extends TestCase
     public function test_sensitive_application_field_value_is_masked_in_audit_log(): void
     {
         $tenant = Tenant::factory()->create();
-        $user = $this->userWithPermissions($tenant, 'job_applications.view', 'job_applications.update');
+        // Checkpoint 50 — writing a `confidential` field now also
+        // requires custom_fields.access_confidential; masking itself is
+        // orthogonal to that and is what this test actually verifies.
+        $user = $this->userWithPermissions($tenant, 'job_applications.view', 'job_applications.update', 'custom_fields.access_confidential');
         $this->textField($tenant, $user, ['field_key' => 'internal_risk_notes', 'sensitivity' => 'confidential']);
         $application = $this->applicationFor($tenant);
 

@@ -182,6 +182,14 @@ class RoleSeeder extends Seeder
             // Checkpoint 48 — view only, not manage (Tenant-Admin-only),
             // per your explicit approved mapping.
             'custom_fields.view',
+            // Checkpoint 50 — Field-Level Visibility & Sensitive Field
+            // Access. Mirrors the one existing sensitive-field precedent
+            // in this app (employees.view_sensitive, HR Manager only) —
+            // NOT extended to HR Director here, a deliberate, conservative
+            // MVP decision (your explicit approved choice), not an
+            // omission. .access_confidential/.access_restricted remain
+            // Tenant-Admin-only.
+            'custom_fields.access_sensitive',
         ]);
 
         // Checkpoint 34 — HR Director previously had no permissions

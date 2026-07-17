@@ -1723,6 +1723,45 @@ values land in their own distinct place in the response —
 proving the disambiguation holds under the adversarial case the
 design was specifically built to handle, not just the happy path.
 
+## Adding an access gate breaks its own predecessor's tests on purpose — fix the fixture, not the assertion (Checkpoint 50)
+
+Adding the new sensitivity-tier permission check to
+`CustomFieldValueService` immediately broke two pre-existing
+Checkpoint 48/49 tests —
+`test_sensitive_field_value_is_masked_in_audit_log` and its Checkpoint
+49 mirror — both went from `200` to `403`, because their test users
+wrote to `sensitive`/`confidential` fields without holding the new
+`custom_fields.access_sensitive`/`access_confidential` permission.
+This was the *correct* new behavior, not a regression: those two
+tests were written to prove audit-masking, a concern orthogonal to
+field-level access, and predate field-level access existing at all.
+The fix was to add the newly-required permission to each test's
+`userWithPermissions()` call — not to relax the new `403`, and not to
+delete the masking assertion. The distinction that matters here: when
+a new access gate breaks an old test, check what the old test is
+actually proving before "fixing" it either way — the fixture needed
+updating to reflect the new precondition, the assertion (masking still
+holds) did not need to change at all.
+
+## Proving a default-permission decision against the real seeder, not a hand-built role (Checkpoint 50)
+
+Most tests in this suite build a throwaway `Role` via
+`Role::factory()->create()` and attach only the exact permissions a
+given test needs — fast, and sufficient for proving the *mechanism*
+works. But "HR Director does not receive
+`custom_fields.access_sensitive`/`access_confidential`/`access_restricted`
+by default" is a claim about `RoleSeeder`'s actual seeded output, not
+about the mechanism — a hand-built role named "HR Director" with no
+permissions attached would pass regardless of what `RoleSeeder` really
+grants, silently defeating the test's purpose. `CustomFieldVisibilityApiTest`'s
+three seeded-role tests instead run
+`$this->seed(TenantSeeder::class)`/`PermissionSeeder::class`/`RoleSeeder::class`
+directly and fetch the real `uesl` tenant's `HR Director`/`HR Manager`/
+`Tenant Admin` roles by name, so a future accidental change to
+`RoleSeeder`'s grant list (e.g. someone later adding a tier permission
+to HR Director without updating this decision) fails a test, rather
+than passing silently.
+
 ## Known limitations
 
 - No test coverage reporting configured yet.

@@ -415,12 +415,13 @@ this was a gap in the audit's own coverage, not a real access-control
 hole (the live smoke test in Checkpoint 47 already proved the
 middleware itself works).
 
-## Custom Fields (Checkpoint 48, extended Checkpoint 49)
+## Custom Fields (Checkpoint 48, extended Checkpoint 49, field-level access Checkpoint 50)
 
 Backend-owned field definitions per entity, plus their values exposed
 through the owning entity's own endpoints — no standalone values API.
-See `docs/architecture.md#custom-fields-foundation-checkpoint-48` and
-`docs/architecture.md#custom-fields-for-job-applications-checkpoint-49`
+See `docs/architecture.md#custom-fields-foundation-checkpoint-48`,
+`docs/architecture.md#custom-fields-for-job-applications-checkpoint-49`,
+and `docs/architecture.md#field-level-visibility-and-sensitive-field-access-checkpoint-50`
 for the full design. Supported entities: `recruitment_applicant`
 (the candidate's identity) and `job_application` (the pipeline
 record, `App\Models\RecruitmentApplication`) — the same `{entityType}`
@@ -450,6 +451,8 @@ route serves both, just with a different value.
       "sensitivity": "normal",
       "sort_order": 0,
       "status": "active",
+      "can_view": true,
+      "can_edit": true,
       "options": [
         { "option_key": "citizen", "label": "Citizen", "sort_order": 0, "status": "active" }
       ],
@@ -460,6 +463,47 @@ route serves both, just with a different value.
 ```
 
 Never returned: `tenant_id`, `created_by`, `updated_by`.
+
+**`can_view`/`can_edit` (Checkpoint 50)** are computed fresh for the
+requesting user on every request, never stored — `can_view` combines
+the entity's own view permission (e.g. `job_applications.view`) with
+the field's sensitivity-tier permission (see below); `can_edit` does
+the same with the update permission. Both are UX metadata only, to
+drive frontend rendering (hide the field, or show it read-only) — the
+actual security boundary is enforced server-side in
+`CustomFieldValueService`, independent of these flags.
+
+### Field-level access (Checkpoint 50)
+
+Each field's `sensitivity` (`normal`/`sensitive`/`confidential`/
+`restricted`) maps to a fixed, platform-defined permission — no
+per-tenant configurable rules exist yet:
+
+| Sensitivity | Required permission |
+|---|---|
+| `normal` | none — visible to anyone who can already view/edit the parent entity |
+| `sensitive` | `custom_fields.access_sensitive` |
+| `confidential` | `custom_fields.access_confidential` |
+| `restricted` | `custom_fields.access_restricted` |
+
+There is **no implied hierarchy** — holding `access_restricted` does
+not grant `access_sensitive` or `access_confidential`; each tier is
+checked independently. A value whose tier permission the requester
+lacks is silently **omitted** from the `custom_field_values`/
+`application_custom_field_values` read shape (same mechanism used for
+a disabled field) — never a `403` on the parent read, and never a
+placeholder/masked value. Writing to a field the requester lacks tier
+access for returns `403` (not `422`) before any value validation
+runs; there is no payload shape that bypasses this — the check is
+keyed to the field's own `sensitivity`, not to how the client names
+or nests the request. This enforcement lives in
+`CustomFieldValueService`, not only in the API Resource or the
+frontend.
+
+Audit-log masking (Checkpoint 48) is **unchanged** by this checkpoint
+— a `sensitive`/`confidential`/`restricted` value is masked in the
+audit log regardless of the acting user's own tier access, since a
+different, less-privileged user may read that audit log later.
 
 ### Values — exposed through the owning entity, not a separate endpoint
 

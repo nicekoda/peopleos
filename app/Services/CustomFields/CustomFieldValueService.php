@@ -30,9 +30,15 @@ class CustomFieldValueService
      * now-disabled field are preserved in the database but simply
      * excluded from this read path.
      *
+     * Checkpoint 50 — a field the viewer lacks tier access to is
+     * omitted from the map the same way a disabled field already is
+     * (never a null-but-present key, never the raw value) — this is
+     * the one enforcement point every current and future entity's read
+     * path shares, so no controller/Resource needs its own check.
+     *
      * @return array<string, mixed>
      */
-    public function getActiveValuesFor(string $tenantId, CustomFieldEntity $entityType, string $entityId): array
+    public function getActiveValuesFor(string $tenantId, CustomFieldEntity $entityType, string $entityId, User $viewer): array
     {
         $definitions = $this->activeDefinitions($tenantId, $entityType);
 
@@ -47,6 +53,10 @@ class CustomFieldValueService
         $result = [];
 
         foreach ($definitions as $definition) {
+            if (! $this->hasTierAccess($definition, $viewer)) {
+                continue;
+            }
+
             $row = $values->get($definition->id);
             $result[$definition->field_key] = $row === null ? null : $row->{$definition->field_type->storageColumn()};
         }
@@ -74,6 +84,15 @@ class CustomFieldValueService
                 throw ValidationException::withMessages([
                     "custom_field_values.{$fieldKey}" => ["'{$fieldKey}' is not an active custom field for this entity."],
                 ]);
+            }
+
+            // Checkpoint 50 — an authorization failure, not a validation
+            // one: 403, not 422. Submitting a field_key the caller lacks
+            // tier access to is rejected outright, never silently
+            // dropped — a user must not be able to write a value to a
+            // field they could never even see.
+            if (! $this->hasTierAccess($definition, $actor)) {
+                abort(403, "You do not have permission to edit '{$fieldKey}'.");
             }
 
             $result = CustomFieldValueValidator::validate($definition, $rawValue, enforceActiveOptions: true);
@@ -123,6 +142,25 @@ class CustomFieldValueService
         }
 
         return $changes;
+    }
+
+    /**
+     * Checkpoint 50 — the shared field-level access primitive, used
+     * identically for read (getActiveValuesFor) and write
+     * (setValuesFor). Deliberately generic (just "does this user hold
+     * this permission key"), so a future system-field visibility
+     * feature can reuse it without depending on anything custom-field-
+     * specific — only CustomFieldSensitivity::requiredAccessPermission()
+     * would need a system-field equivalent, not this check itself.
+     * Purely additive on top of whatever parent-entity permission
+     * already gated the caller reaching this service at all — never a
+     * replacement for it.
+     */
+    private function hasTierAccess(CustomFieldDefinition $definition, User $user): bool
+    {
+        $permission = $definition->sensitivity->requiredAccessPermission();
+
+        return $permission === null || $user->hasPermission($permission);
     }
 
     /**

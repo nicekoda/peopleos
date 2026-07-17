@@ -3176,3 +3176,145 @@ generically across all entity types at once; a controlled, audited
 application-field-to-employee-field mapping once Employee custom
 fields exist; configuration export/import; and package/entitlement
 limits.
+
+## Field-Level Visibility and Sensitive Field Access (Checkpoint 50)
+
+Before this checkpoint, `CustomFieldSensitivity` only affected audit
+masking (Checkpoint 48) — any user who could view/edit the parent
+entity could see and change every field's value regardless of its
+tier. This checkpoint adds a real access-control layer on top of the
+existing one, ahead of adding custom fields to more sensitive
+entities (`employees`, `leave_requests`, `lifecycle_processes`, and
+eventually compensation/disciplinary/health-and-safety data).
+
+**Layering principle**: a field is visible/editable only when *all*
+of the following hold — the tenant owns the record (`BelongsToTenant`,
+unchanged), the module is enabled (`EnsureModuleEnabled`, unchanged),
+the user holds the parent entity's own permission (`job_applications.view`/
+`.update`, unchanged), **and** the user holds the field's sensitivity-tier
+permission (new). Each layer is independent; none can be skipped by
+satisfying another.
+
+**Fixed permissions, not a configurable rules table — a researched
+decision, not a guess.** Before designing this, the two existing
+sensitive-field mechanisms in the app were read directly:
+`employees.view_sensitive` (gates `personal_email`/`phone` by nulling
+them inside `EmployeeResource` — no controller-level check) and
+`documents.view_sensitive` (gates whole sensitive documents via
+controller-level exclusion — no resource-level check). Both are
+simple, fixed, hand-rolled boolean permissions; neither has any
+configurable-rules precedent. This checkpoint follows that same
+pattern rather than introducing the first per-tenant configurable
+access-rules engine in the app — a configurable model is a documented
+future direction (see `docs/platform-vision.md`), gated on real usage
+evidence across more entities first.
+
+**Three new permissions, no implied hierarchy**:
+
+| Permission | Tier gated |
+|---|---|
+| `custom_fields.access_sensitive` | `sensitivity: sensitive` |
+| `custom_fields.access_confidential` | `sensitivity: confidential` |
+| `custom_fields.access_restricted` | `sensitivity: restricted` |
+
+`normal` fields require none of these — only the existing parent-entity
+permission, unchanged from Checkpoint 48/49. Holding a higher tier's
+permission does not imply a lower tier's (and vice versa) — each is
+checked independently via `CustomFieldSensitivity::requiredAccessPermission()`,
+the single source of truth for the tier-to-permission mapping, shared
+by both the enforcement service and the definitions resource.
+
+**Default grants are deliberately conservative.** Tenant Admin holds
+all three automatically via its existing blanket non-platform-permission
+grant. HR Manager receives `custom_fields.access_sensitive` only,
+mirroring the one existing precedent (`employees.view_sensitive`) —
+not `access_confidential`/`access_restricted`. **HR Director receives
+none of the three by default**, even though HR Director otherwise
+mirrors many of HR Manager's grants — this is an intentional MVP
+scope decision, not an omission: granting a new access tier by default
+to a role that holds neither existing sensitive-access precedent today
+would be a silent access expansion, not a neutral default. If a future
+checkpoint decides HR Director should hold one or more tiers, that
+must be an explicit, separately-approved grant.
+
+**View vs. edit are genuinely separate, closing a gap the Employee
+mechanism has today.** `employees.view_sensitive` only ever gated
+*reading* `personal_email`/`phone` — there has never been a separate
+write-side check, so a user who could edit an employee could always
+write those fields even without view access. Checkpoint 50 does not
+repeat that gap: `CustomFieldValueService::setValuesFor()` checks tier
+access on write independently of whatever the read path allows,
+returning `403` before any value validation runs, so a field
+completely invisible to a user is also completely unwritable to them.
+
+**Enforcement lives in the service layer, not the Resource or the
+frontend** (decision 8 — explicit requirement, not just convenience):
+- `CustomFieldValueService::getActiveValuesFor(..., User $viewer)` —
+  signature gained a required `$viewer` param; a field whose tier
+  permission the viewer lacks is `continue`'d past in the same loop
+  that already skips disabled fields, so it is silently omitted from
+  the result map. No error, no placeholder — indistinguishable from a
+  disabled field from the read side.
+- `CustomFieldValueService::setValuesFor()` — checks tier access
+  immediately after the existing "is this `field_key` known" check
+  and before `CustomFieldValueValidator::validate()` runs, calling
+  `abort(403, ...)` if the actor lacks the required permission. There
+  is no alternate payload shape that bypasses this: the check is keyed
+  to the definition's own `sensitivity`, not to how the request names
+  or nests the field.
+
+**`CustomFieldDefinitionResource` gained computed `can_view`/`can_edit`
+fields**, combining the entity's own view/update permission
+(`CustomFieldEntity::valueViewPermission()`/`valueUpdatePermission()`)
+with the field's tier permission — both must pass. These are computed
+fresh per request against `$request->user()`, never stored or cached.
+They exist purely so the frontend can decide what to render (hidden /
+read-only / editable) — the backend enforcement above is what
+actually matters; a client that ignored these flags and submitted a
+disallowed field key would still be rejected by the service.
+
+**`CustomFieldsCard` (in `ApplicationShow.tsx`) now gates per-field
+on `can_view`/`can_edit`** instead of a single outer `canEdit` prop:
+a field with `can_view: false` is not rendered at all; one with
+`can_view: true, can_edit: false` renders read-only; both `true`
+renders editable. The save button only appears if at least one
+visible field is editable. The now-unused `canUpdateApplication`
+variable and `useCan` import were removed rather than left dead.
+
+**Audit masking (Checkpoint 48) is explicitly unchanged.** A
+`sensitive`/`confidential`/`restricted` value is masked in the audit
+log regardless of the *acting* user's own tier access — an audit log
+may later be read by a different, less-privileged auditor, so masking
+must not depend on who happened to write the value.
+
+**No read-denial audit events were added.** Every existing
+permission-denied path in this app (parent-entity `403`s included)
+already goes unaudited; adding `custom_field.value_denied` or a
+`field_visibility_rule.*` event now would be a noisy new pattern with
+no existing precedent and no configurable-rules feature yet to attach
+it to.
+
+**`custom_fields.manage` and tier creation — deliberately not
+over-built.** Today only Tenant Admin holds `custom_fields.manage`,
+and Tenant Admin holds every tier permission automatically, so it can
+already create/manage a field at any tier. No additional guard was
+added for "a role with `.manage` but not every tier permission" — that
+scenario does not exist yet. Documented here as a future rule, should
+it ever arise: a non-Tenant-Admin role granted `custom_fields.manage`
+should not be able to create or manage a field at a sensitivity tier
+it cannot itself access, unless explicitly approved when that grant is
+introduced.
+
+### Future
+
+A configurable, tenant-defined visibility-rules layer (role/permission-based,
+`can_view`/`can_edit`/`can_export`/`can_report`/`can_use_in_workflow`/
+`can_use_in_ai`, audited rule changes, safe defaults, always falling
+back to these platform sensitivity permissions) is intentionally
+deferred — see `docs/platform-vision.md` for the conditions that
+should be met before building it, and why it must be an *override*
+layer on top of this fixed model, never a replacement for it or a way
+to bypass parent-entity access. A future system-field (not just
+custom-field) visibility feature could reuse the same
+`hasTierAccess()` primitive this checkpoint introduced, since it was
+deliberately written generically rather than custom-field-specific.

@@ -39,11 +39,14 @@ class JobApplicationResource extends JsonResource
                 'source' => $this->applicant->source,
                 // Checkpoint 48 — active custom fields only (field_key =>
                 // value); a disabled field's preserved value is never
-                // returned here (decision 12).
+                // returned here (decision 12). Checkpoint 50 — a field
+                // the viewer lacks tier access to is omitted the same
+                // way, never a null-but-present key or the raw value.
                 'custom_field_values' => app(CustomFieldValueService::class)->getActiveValuesFor(
                     $this->applicant->tenant_id,
                     CustomFieldEntity::RecruitmentApplicant,
                     $this->applicant->id,
+                    $request->user(),
                 ),
             ]),
             'stage' => $this->stage->value,
@@ -58,6 +61,7 @@ class JobApplicationResource extends JsonResource
                 $this->tenant_id,
                 CustomFieldEntity::JobApplication,
                 $this->id,
+                $request->user(),
             ),
             'resume_document_id' => $this->resume_document_id,
             'cover_letter' => $this->cover_letter,

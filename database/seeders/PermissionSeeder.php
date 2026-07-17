@@ -101,7 +101,22 @@ class PermissionSeeder extends Seeder
             // Manager. Values themselves are gated by the owning
             // entity's own permission (job_applications.view/.update),
             // never a second value-permission axis.
-            'custom_fields' => ['view', 'manage'],
+            // Checkpoint 50 — Field-Level Visibility & Sensitive Field
+            // Access. .access_sensitive/.access_confidential/
+            // .access_restricted are additive, on top of whatever parent
+            // entity permission already gates the read/write action —
+            // never a replacement for it. Deliberately no implied
+            // hierarchy: holding .access_restricted does not grant
+            // .access_confidential/.access_sensitive. Only
+            // .access_sensitive is granted to any non-Tenant-Admin role
+            // by default (HR Manager — see RoleSeeder), mirroring the
+            // one existing precedent for sensitive-field access in this
+            // app (employees.view_sensitive) rather than inventing a
+            // broader grant. HR Director deliberately does not receive
+            // any of the three by default in this checkpoint — an
+            // intentional, conservative MVP decision, not an omission
+            // (see docs/security.md).
+            'custom_fields' => ['view', 'manage', 'access_sensitive', 'access_confidential', 'access_restricted'],
         ];
 
         foreach ($tenantPermissions as $category => $actions) {

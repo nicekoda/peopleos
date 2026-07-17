@@ -802,6 +802,35 @@ onboarding handoff both leave application custom fields exactly where
 they are — never copied elsewhere, since Employee custom fields don't
 exist yet. See `docs/architecture.md` for the full design.
 
+## Field-Level Visibility and Sensitive Field Access (Checkpoint 50)
+
+Custom-field sensitivity previously only affected audit-log masking —
+anyone who could view/edit the parent entity could see every field's
+value regardless of its `sensitivity`. This checkpoint closes that
+gap with a **fixed, platform-defined permission model** (not a
+tenant-configurable rules table — deliberately deferred until real
+usage across more sensitive entities justifies it): three new
+permissions, `custom_fields.access_sensitive`/`access_confidential`/
+`access_restricted`, one per non-`normal` tier, with **no implied
+hierarchy** between them. By default only Tenant Admin (via its
+existing blanket grant) and HR Manager (for `access_sensitive` only,
+mirroring the one existing precedent — `employees.view_sensitive`)
+hold any tier permission; **HR Director deliberately receives none of
+the three by default**, an intentional MVP scope decision, not an
+oversight. Enforcement lives in `CustomFieldValueService`, not in the
+API Resource or the frontend alone: an inaccessible field's value is
+silently omitted from a read (never a 403 on the parent request,
+never a placeholder), and writing to one is rejected with `403`
+before any value validation runs. `CustomFieldDefinitionResource` now
+also exposes computed `can_view`/`can_edit` flags per requester, which
+the frontend uses purely for UX (hide vs. read-only vs. editable) —
+the backend remains the actual security boundary. Audit-log masking
+from Checkpoint 48 is unchanged: a sensitive/confidential/restricted
+value is still masked in the audit log regardless of the acting
+user's own tier access. See `docs/architecture.md` for the full
+design, including why a configurable rules engine is a later
+checkpoint, not this one.
+
 ## Documentation
 
 - [`docs/platform-vision.md`](docs/platform-vision.md) — the long-term product/architecture vision (platform kernel, module layer, subscription/entitlement model, event-driven architecture, AI governance) that every checkpoint's design should be checked against. Not tied to a checkpoint; update it when the vision changes, not when a feature ships.

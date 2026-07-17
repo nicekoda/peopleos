@@ -37,6 +37,12 @@ export interface CustomFieldDefinitionState {
     sensitivity: CustomFieldSensitivity;
     sort_order: number;
     status: CustomFieldStatus;
+    // Checkpoint 50 — computed fresh per request against the current
+    // caller (parent entity permission + sensitivity-tier permission
+    // combined); never a stored value. Backend remains the security
+    // boundary — these only drive what the frontend renders.
+    can_view: boolean;
+    can_edit: boolean;
     options: CustomFieldOptionState[];
     validation_rules: CustomFieldValidationRuleState[];
 }

@@ -540,6 +540,77 @@ checkpoint's success doesn't change that; if anything it confirms the
 engine is ready to reach `employees` once that separate prerequisite
 work is done, not before.
 
+**Checkpoint 50 — Field-Level Visibility and Sensitive Field Access —
+completed.** Closes the gap Checkpoint 48 explicitly flagged and
+deferred ("sensitivity classification exists now but only gates audit
+masking, not read access") — the prerequisite the roadmap above named
+before reaching `employees`. Delivered:
+
+- **Fixed platform permissions, not a configurable rules table** —
+  `custom_fields.access_sensitive`/`access_confidential`/`access_restricted`,
+  one per non-`normal` tier, no implied hierarchy. Chosen after directly
+  reading the app's two existing sensitive-field mechanisms
+  (`employees.view_sensitive`, `documents.view_sensitive`) and finding
+  both are simple fixed booleans with no configurable precedent —
+  this checkpoint follows that established pattern rather than
+  introducing the first configurable per-tenant access-rules engine
+  in the app.
+- **Deliberately conservative default grants.** Tenant Admin holds all
+  three via its existing blanket grant. HR Manager gets
+  `access_sensitive` only, mirroring the one real precedent
+  (`employees.view_sensitive`). **HR Director gets none of the three
+  by default** — an explicit, documented MVP scope decision (not an
+  oversight) to avoid a silent access expansion to a role with no
+  existing sensitive-access precedent; proven against the real seeded
+  `RoleSeeder` output by a dedicated regression test, not assumed.
+- **View/edit enforced independently**, closing a gap the pre-existing
+  Employee mechanism still has (it only ever gated reads, never
+  writes) — `CustomFieldValueService::setValuesFor()` now checks tier
+  access before every write, `403` before any value validation runs.
+- **Enforcement centralized in the service layer** —
+  `CustomFieldValueService::getActiveValuesFor()`/`::setValuesFor()` —
+  not only in `CustomFieldDefinitionResource`'s new computed
+  `can_view`/`can_edit` metadata fields and not only in the frontend;
+  a client bypassing the frontend entirely is still blocked.
+- **Audit masking (Checkpoint 48) explicitly unchanged** — masks by
+  sensitivity regardless of the acting user's own tier access, since a
+  different, less-privileged user may read the audit log later.
+- Built the enforcement primitive (`hasTierAccess()`) generically
+  enough that a future system-field (not just custom-field)
+  visibility feature could reuse it directly.
+- All 19 new tests passed on the first run; all 72 custom-field tests
+  (Checkpoint 48/49/50 combined) passed, with 2 pre-existing
+  Checkpoint 48/49 tests updated to hold the newly-required tier
+  permission (see `docs/testing.md` for why that was the correct fix,
+  not a relaxation).
+
+**Standing recommendation for what comes after Checkpoint 50 — not an
+action item for this checkpoint, a record for future planning.** A
+configurable, tenant-defined visibility-rules layer should **not** be
+built yet. It should only be introduced once all of the following
+hold: (1) this fixed sensitivity-permission model has shipped and been
+tested (done, as of this checkpoint); (2) custom fields are working
+across multiple entities (`recruitment_applicant` + `job_application`,
+done); (3) custom fields have been added to at least one
+high-sensitivity entity, preferably Employees; (4) real use cases
+demonstrate the fixed defaults are actually insufficient; (5) PeopleOS
+is preparing for reports/exports/AI/workflow/implementation-engineer
+tooling that needs finer-grained control than fixed tiers offer.
+Recommended checkpoint sequence: **Checkpoint 50 (this one) →
+Checkpoint 51 (Employee Custom Fields) → Checkpoint 52 (Custom Forms
+Foundation) → Checkpoint 53 (Configurable Field Visibility Rules)** —
+with the alternative that if Employee custom fields reveal complex
+visibility needs early, configurable rules could move up to Checkpoint
+52, ahead of Custom Forms. When it is eventually built, a configurable
+rules layer must be a strict **override** on top of this fixed model
+— never a replacement for it, and never a way to bypass parent-entity
+access — and should eventually support: role-based and
+permission-based rules, `can_view`/`can_edit`/`can_export`/
+`can_report`/`can_use_in_workflow`/`can_use_in_ai` flags, tenant
+isolation, audit logs for rule changes themselves, safe defaults, and
+a defined fallback to these platform sensitivity permissions when no
+rule applies.
+
 ## Final product promise
 
 > One secure platform connecting people, workflows, services, assets,

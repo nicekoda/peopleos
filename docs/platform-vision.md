@@ -479,6 +479,19 @@ discipline as Checkpoint 47:
   been silently checking `routes/web.php` pages only since it never
   accounted for `routes/api.php`'s `api/v1` prefix. See
   `docs/architecture.md`/`docs/testing.md` for the full story.
+- **Found and fixed, live, after the checkpoint's own automated tests
+  and CI had already passed**: `CustomFieldDefinitionService::create()`/
+  `update()` weren't transactional — a validation failure partway
+  through (bad default value, bad option key) still left a real,
+  active, orphaned definition row behind. Fixed with
+  `DB::transaction()` around both methods (commit `9865ecc`). The
+  general lesson for every future checkpoint that adds a
+  configuration-writing service under this platform model: any
+  multi-step write to a definition/registry table must be transactional,
+  because a partial write there doesn't just corrupt one record — it
+  becomes a silently-persisted piece of tenant configuration that
+  looks intentional and gets reused by everything built on top of it.
+  See `docs/testing.md` for the full writeup.
 
 Next: `job_applications` (near-zero engine work), then
 `lifecycle_processes`/`leave_requests`, `employees` last — followed by

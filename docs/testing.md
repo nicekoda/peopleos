@@ -1645,6 +1645,50 @@ silently-skipped API routes would fail it — the same kind of "prove
 the mechanism, not just the outcome" fix `docs/testing.md` already
 applied to the Platform-Super-Admin test in Checkpoint 47.
 
+## A live smoke test found an orphaned-row bug the automated suite missed (Checkpoint 48)
+
+`CustomFieldDefinitionApiTest`'s 36 automated tests all passed, CI was
+green, and the checkpoint was accepted — but the *live* smoke test
+(creating fields against the real running app, not fixtures) surfaced
+a real bug none of those tests happened to exercise:
+`CustomFieldDefinitionService::create()`/`update()` inserted or
+mutated the `custom_field_definitions` row **before** running
+option/default-value validation, with no `DB::transaction()` wrapping
+either method. Submitting a field with an invalid default value (or
+an invalid option key) correctly returned `422` — but the definition
+row had already been written and stayed in the database, fully
+`active`, indistinguishable from a real field except that the request
+that "created" it had failed. Confirmed directly via `php artisan
+tinker`: two such orphaned rows (`contact_backup_email`,
+`shirt_size`) existed after their creation requests were rejected.
+
+**Why the automated suite didn't catch this.** Every existing test
+asserted the HTTP response (`assertStatus(422)`) but none asserted the
+*absence* of a database row after a rejected request — the same class
+of gap `docs/testing.md` already flags elsewhere ("a failed request
+genuinely leaves zero trace" — see Checkpoint 40's conversion test):
+a 422 response and a 422-response-plus-silent-orphaned-row look
+identical from the caller's point of view, so only a test (or a human
+directly inspecting the database) that checks the row's existence
+independently of the HTTP status can catch it.
+
+**The general lesson for configurable-platform work**: any service
+that writes a "configuration" row (a custom field definition, a
+workflow rule, a form definition, anything a future checkpoint adds
+under `docs/platform-vision.md`'s module-registration-contract model)
+and then performs additional validation afterward *must* wrap the
+whole sequence in a transaction — configuration rows are exactly the
+kind of state that silently persists and gets reused/queried by other
+features later, so a partially-failed create is worse here than for
+an ordinary business record: it can look like a real, intentional
+tenant configuration choice indefinitely. Fixed by wrapping both
+`create()` and `update()` in `DB::transaction()`, with audit events
+(`custom_field.created`/`.updated`) now fired only after a successful
+commit. A new regression test
+(`test_failed_creation_leaves_no_orphaned_definition_row`) asserts
+`assertDatabaseMissing()` after both failure modes — checking the
+database state directly, not just the response code.
+
 ## Known limitations
 
 - No test coverage reporting configured yet.

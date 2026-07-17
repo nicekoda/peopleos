@@ -3063,6 +3063,22 @@ went from 45 to a real 134, still 0 missing. A new test
 (`AuditModuleRouteGatesCommandTest::test_api_routes_are_actually_checked_not_silently_skipped`)
 asserts this count stays meaningfully non-zero going forward.
 
+**A second bug found live, after the checkpoint's own tests had
+already passed and CI was green: definition create/update wasn't
+transactional.** `CustomFieldDefinitionService::create()`/`update()`
+inserted or mutated the `custom_field_definitions` row before running
+option/default-value validation, with neither method wrapped in
+`DB::transaction()`. A request that failed validation (an invalid
+default value, an invalid option key) correctly returned `422` — but
+the definition row had already been written and remained fully
+`active` in the database, indistinguishable from a real field.
+Confirmed live via `php artisan tinker` during the Checkpoint 48
+smoke test (commit `9865ecc`). Fixed by wrapping the entire body of
+both methods in `DB::transaction()`, with `custom_field.created`/
+`.updated` audit events now fired only after a successful commit —
+see `docs/testing.md` for the full writeup and the general lesson for
+configuration-writing services elsewhere in this app.
+
 ### Future
 
 Per `docs/platform-vision.md`: field-level visibility/read permissions

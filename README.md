@@ -766,6 +766,25 @@ colors. No custom CSS/HTML/JS, no custom domains, no email-template
 branding, no theme builder — see `architecture.md`'s "Future" note
 for what's deliberately deferred.
 
+## Custom Fields Foundation (Checkpoint 48)
+
+The first reusable, platform-level custom-fields engine — tenant
+admins can define fields for **Recruitment Applicants only** (an
+EAV-leaning hybrid: `custom_field_definitions`, `custom_field_options`,
+`custom_field_validation_rules`, `custom_field_values`, never a JSONB
+blob), starting with the lowest-blast-radius entity rather than
+`employees` (the most sensitive table in the app). Field keys and
+option keys are immutable once created; only labels/descriptions/
+options/validation rules can change. Field values are exposed only
+through the owning entity's own endpoints (`job-applications`'s
+existing `custom_field_values` payload) — no standalone values API. A
+fixed backend-owned validation-rule catalog only (`min_length`,
+`max_length`, `min_value`, `max_value`, `date_before`, `date_after`,
+`email_format`, `url_format`) — never tenant-supplied regex, code, or
+raw SQL. See `docs/architecture.md` for the full design, including a
+pre-existing `route:audit-module-gates` matching bug found and fixed
+while wiring this checkpoint's routes.
+
 ## Documentation
 
 - [`docs/platform-vision.md`](docs/platform-vision.md) — the long-term product/architecture vision (platform kernel, module layer, subscription/entitlement model, event-driven architecture, AI governance) that every checkpoint's design should be checked against. Not tied to a checkpoint; update it when the vision changes, not when a feature ships.

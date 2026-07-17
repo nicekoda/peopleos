@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\Api\V1\AuditLogController;
+use App\Http\Controllers\Api\V1\CustomFieldDefinitionController;
 use App\Http\Controllers\Api\V1\DashboardController;
 use App\Http\Controllers\Api\V1\DepartmentController;
 use App\Http\Controllers\Api\V1\DocumentCategoryController;
@@ -359,4 +360,18 @@ Route::middleware(['auth', 'tenant.matches'])->prefix('api/v1')->group(function 
     // requirement that this handoff must disappear when Lifecycle is
     // disabled, not just when Recruitment is.
     Route::post('job-applications/{jobApplication}/start-onboarding', [JobApplicationController::class, 'startOnboarding'])->middleware(['module:recruitment', 'module:lifecycle', 'permission:lifecycle.create']);
+
+    // Checkpoint 48 — Custom Fields Foundation. {entityType} is a plain
+    // string, resolved/validated inside the controller (422 on unknown,
+    // never a 404) — same posture as {moduleKey} above. Gated by
+    // module:recruitment since the only entity today (recruitment_applicant)
+    // belongs to that module; this becomes entity-type-aware once a
+    // second, differently-gated entity is added (see docs/architecture.md).
+    // custom_fields.manage controls definitions only — reading/writing
+    // an entity's own values stays gated by that entity's own permission
+    // (job_applications.view/.update above), never a second value
+    // permission axis.
+    Route::get('custom-fields/{entityType}', [CustomFieldDefinitionController::class, 'index'])->middleware(['module:recruitment', 'permission:custom_fields.view']);
+    Route::post('custom-fields/{entityType}', [CustomFieldDefinitionController::class, 'store'])->middleware(['module:recruitment', 'permission:custom_fields.manage']);
+    Route::patch('custom-fields/{customFieldDefinition}', [CustomFieldDefinitionController::class, 'update'])->middleware(['module:recruitment', 'permission:custom_fields.manage']);
 });

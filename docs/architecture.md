@@ -2885,3 +2885,197 @@ branding (this checkpoint only brands the in-app UI); and
 tenant-scoped caching for `enabledMap()`/branding if this becomes a
 hot path (currently a plain per-request query, consistent with this
 app's existing "no permission caching yet" posture).
+
+## Custom Fields Foundation (Checkpoint 48)
+
+The first checkpoint against
+[`docs/platform-vision.md`](platform-vision.md)'s "build every major
+capability once, then let modules reuse it" principle applied outside
+the module-registry itself — the goal is a value-storage shape every
+future workflow-condition, custom-report, dashboard, and AI-filter
+engine can query the same way, regardless of which entity a field
+belongs to.
+
+**Why `recruitment_applicant` is the sole MVP entity, and why
+`employees` is deferred.** `employees` is the most sensitive,
+highest-blast-radius table in the app (compensation/medical/
+disciplinary data is already deliberately deferred elsewhere) — it is
+the worst place to debut a brand-new, unproven storage/validation/
+audit engine. `RecruitmentApplicant` (`app/Models/RecruitmentApplicant.php`)
+is a plain, no-workflow, no-compensation record, the newest module
+(Checkpoint 39), already tightly permissioned, with zero
+manager-hierarchy visibility rules to interact with — the lowest
+blast radius available while still being a genuinely useful target.
+Roadmap: `job_applications` next (near-zero engine work — a new
+`CustomFieldEntity` case plus a permission mapping), then
+`lifecycle_processes`/`leave_requests`, `employees` last, deliberately,
+once the engine has field experience elsewhere.
+
+**Storage: an EAV-leaning hybrid, not JSONB on the parent entity, and
+not one JSON blob per entity.** Four tables:
+`custom_field_definitions` (one row per field, relational — entity
+type, key, label, type, required, default, sensitivity, sort order,
+status), `custom_field_options` and `custom_field_validation_rules`
+(children of a definition), and `custom_field_values` (one row per
+`(tenant, entity_type, entity_id, definition)`, with typed nullable
+columns — `value_text`/`value_number`/`value_date`/`value_boolean`,
+plus `value_json` used *only* for `multi_select`'s selected option
+keys, the one deliberate JSON usage in an otherwise fully relational
+design). Rejected: JSONB directly on `recruitment_applicants` (no
+generic cross-entity query mechanism for future reports/conditions,
+harder per-field audit diffing, no structural guarantee against key
+drift) and a single JSONB blob per entity in a shared table (better
+than per-entity JSONB, but still not a clean per-field audit
+diff, and still requires JSON-path queries for cross-entity filtering
+instead of one indexed join). The one-row-per-field EAV shape is what
+lets a future generic report/workflow-condition/AI-filter engine be
+built once and reused by every entity — the actual test of whether
+this design honors the "build once" principle is whether adding entity
+#2 (`job_applications`) ever requires touching this storage engine at
+all.
+
+**`CustomFieldEntity` is the backend registry — a backed enum, never
+free text**, mirroring `TenantModule`'s exact pattern. One case today
+(`RecruitmentApplicant`), with `modelClass()`, `valueViewPermission()`/
+`valueUpdatePermission()` (see permission model below), and
+`reservedFieldKeys()`. `CustomFieldDefinitionController` resolves
+`{entityType}` via `tryFrom()`, 422 on unknown — never a
+route-model-binding 404, same non-defensive-enum-route-param
+technique as `TenantModuleController`.
+
+**Field keys are immutable; labels are not.** `field_key` is
+`fillable` only inside `CustomFieldDefinitionService::create()` —
+`UpdateCustomFieldDefinitionRequest` omits it from its rules entirely
+(not merely ignored), so a resent value can't even look like it was
+considered. This matters because field keys will later be referenced
+by forms, workflow conditions, approval rules, reports, dashboards, AI
+filters, API integrations, and configuration export/import — a rename
+feature, if ever built, needs its own separate, audited design once
+something is actually referencing keys by then.
+
+**`field_type` can only change while the field has no stored values.**
+`CustomFieldDefinitionService::update()` checks
+`$definition->values()->exists()` before allowing a type change,
+returning 422 otherwise — a type change on a field with data could
+corrupt interpretation of existing values, and a safe migration path
+(re-validating/converting existing values) is explicitly deferred as
+its own future design, not built here.
+
+**Reserved keys and format enforcement live in the service, not just
+the FormRequest.** `CustomFieldDefinitionService`'s
+`FIELD_KEY_PATTERN` (`^[a-z][a-z0-9_]{0,59}$`) and
+`CustomFieldEntity::reservedFieldKeys()` (per-entity real columns —
+`first_name`/`email`/`status`/`stage`/etc. — plus a shared dangerous-name
+set — `password`/`token`/`role`/`is_platform_admin`/etc.) are both
+checked before a definition is ever created, alongside an explicit
+`assertFieldKeyUnique()` pre-check that turns what would otherwise be
+a raw unique-constraint violation into a clean 422 (the database's
+`unique(tenant_id, entity_type, field_key)` index is still the real
+guarantee — this is a friendlier first check, not a replacement).
+
+**A hard cap: `MAX_FIELDS_PER_TENANT_ENTITY = 50`.** Prevents
+unbounded field sprawl from degrading the entity's own list/show
+endpoints and any future forms/reports — a flat constant for MVP,
+explicitly designed to become package/entitlement-dependent later
+(see `docs/platform-vision.md`) without changing where the check
+lives.
+
+**Option keys are immutable once created; disabling one preserves
+history.** `CustomFieldDefinitionService::syncOptions()` is an
+upsert-by-`option_key` — a request payload entry with a matching
+existing key updates label/sort_order/status in place, a new key
+creates a row; no option is ever hard-deleted. A disabled option's
+prior stored values stay exactly as they are and continue to display
+on read (`CustomFieldValueValidator::validate()`'s
+`enforceActiveOptions` parameter is only `true` on the write path,
+never the read path), but a new write can no longer select it —
+`CustomFieldValueService::getActiveValuesFor()` returns whatever is
+stored regardless of the option's current status, while
+`setValuesFor()` re-validates against currently-active options only.
+
+**Required fields are enforced on new writes only, never
+retroactively.** `is_required` is checked by
+`CustomFieldValueValidator::validate()` at the moment a value is
+submitted — a field made required after applicants already exist
+never invalidates their pre-existing (absent) values; nothing
+re-validates existing rows in the background. Concretely: submitting
+a `custom_field_values` payload that includes a required field with an
+empty value is rejected, but omitting that field entirely from an
+unrelated update (e.g. only changing `cover_letter`) is unaffected —
+sparse/partial-update semantics throughout, matching the codebase's
+existing `sometimes`-validation conventions rather than forcing every
+edit to resupply the entire field set.
+
+**Sensitivity classification affects audit masking only — not read
+access — in this checkpoint.** `CustomFieldSensitivity` (`normal` |
+`sensitive` | `confidential` | `restricted`) exists on every
+definition now so a future field-level-visibility checkpoint can add
+a read-time permission filter without a schema change, but MVP does
+not build that filter — anyone who can already view the parent entity
+sees all of its active custom field values regardless of
+classification. Documented explicitly to avoid a false security
+assumption (see `docs/security.md`).
+
+**Classification-aware audit masking, not name-pattern masking.**
+`AuditValueSanitizer` (Checkpoint 24) masks by *field name substring*
+— it can't know that a tenant-defined field like `visa_status` is
+sensitive, since the name is arbitrary. `CustomFieldAuditEvents::valueUpdated()`
+(`app/Services/CustomFields/CustomFieldAuditEvents.php`) checks the
+definition's own `sensitivity->requiresAuditMasking()` and substitutes
+`***MASKED***` for old/new values before ever calling `AuditLogger`,
+for every classification except `normal` — the one place this
+checkpoint had to build a second masking mechanism because the
+existing one structurally couldn't cover it.
+
+**Values are gated by the owning entity's own permission — no second
+value-permission axis.** `custom_fields.view`/`.manage` control
+*definitions* only (create/update/enable-disable a field, add/remove
+options) — reading or writing a `RecruitmentApplicant`'s values
+piggybacks entirely on `job_applications.view`/`.update`
+(`CustomFieldEntity::valueViewPermission()`/`valueUpdatePermission()`),
+the same permissions that already gate the parent `JobApplicationController`.
+No new top-level values API exists — `custom_field_values` is just
+one more field on the existing `PATCH /api/v1/job-applications/{id}`
+request and `GET .../{id}` response, avoiding a second, independently-
+permissioned surface that could become a bypass.
+
+**Every value write re-verifies tenant/entity ownership independently
+of the controller** — defense in depth, not a replacement.
+`CustomFieldValueService::setValuesFor()`/`getActiveValuesFor()` both
+filter `activeDefinitions()` by the caller's own `tenant_id` first;
+a field_key belonging to a different tenant's definition is
+indistinguishable from an unknown key (422), never a silent
+cross-tenant read/write.
+
+**A latent bug found and fixed while wiring this checkpoint's routes:
+`route:audit-module-gates` had been checking web.php pages only.**
+`routes/api.php` wraps every route in `Route::prefix('api/v1')`, so an
+API route's registered URI is `api/v1/job-openings`, not
+`job-openings` — `AuditModuleRouteGates::belongsToModule()`'s prefix
+matching never accounted for this, so since Checkpoint 47 the command
+had been silently skipping essentially every `api/v1/*` route (the
+actual `module:{key}` middleware was still correctly applied at
+registration time in `routes/api.php` throughout — proven by the live
+smoke test in Checkpoint 47 — this was purely a gap in the audit
+command's own coverage, not a real access-control hole). Fixed by
+stripping a leading `api/v1/` before matching; the checked-route count
+went from 45 to a real 134, still 0 missing. A new test
+(`AuditModuleRouteGatesCommandTest::test_api_routes_are_actually_checked_not_silently_skipped`)
+asserts this count stays meaningfully non-zero going forward.
+
+### Future
+
+Per `docs/platform-vision.md`: field-level visibility/read permissions
+keyed on `sensitivity` (a real permission filter, not just audit
+masking); a form/page designer and custom-forms builder consuming
+these definitions; workflow conditions, approval rules, custom
+reports, dashboards, and AI-assistant filters querying
+`custom_field_values` generically across entities; configuration
+export/import for definitions/options/rules (already structurally
+ready — plain relational rows, stable `field_key`/`option_key`
+identifiers, no raw internal IDs as the external contract); and a
+future package/entitlement layer controlling field counts, which
+entities support custom fields, and advanced field types — the
+current 50-field cap and single-entity MVP are deliberately simple
+placeholders for that later control, not the intended permanent
+shape.

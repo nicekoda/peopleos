@@ -129,7 +129,12 @@ enum TenantModule: string
     public function routeGroupPrefixes(): array
     {
         return match ($this) {
-            self::Recruitment => ['job-openings', 'job-applications', 'recruitment'],
+            // Checkpoint 48 — custom-fields is gated by module:recruitment
+            // only because the sole CustomFieldEntity case today
+            // (recruitment_applicant) belongs to this module; this must
+            // become entity-type-aware once a second, differently-gated
+            // entity is added (see docs/architecture.md).
+            self::Recruitment => ['job-openings', 'job-applications', 'recruitment', 'custom-fields', 'settings/custom-fields'],
             self::Lifecycle => ['lifecycle-processes', 'lifecycle-tasks', 'lifecycle', 'settings/lifecycle-task-templates'],
             self::Leave => ['leave-types', 'leave-requests', 'leave-balances', 'leave', 'settings/leave-types'],
             self::Documents => ['employees/{employee}/documents', 'document-categories', 'documents', 'settings/document-categories'],

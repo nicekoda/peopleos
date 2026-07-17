@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api\V1;
 
 use App\Enums\ApplicationStage;
 use App\Enums\ApplicationStatus;
+use App\Enums\CustomFieldEntity;
 use App\Enums\EmployeeStatus;
 use App\Enums\LifecycleProcessStatus;
 use App\Enums\LifecycleProcessType;
@@ -23,6 +24,7 @@ use App\Models\RecruitmentApplication;
 use App\Models\RecruitmentApplicationNote;
 use App\Models\Tenant;
 use App\Services\Audit\AuditLogger;
+use App\Services\CustomFields\CustomFieldValueService;
 use App\Services\LifecycleTaskTemplateApplier;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -157,6 +159,20 @@ class JobApplicationController extends Controller
                 description: 'Application cover letter updated.',
                 ipAddress: $request->ip(),
                 userAgent: $request->userAgent(),
+            );
+        }
+
+        // Checkpoint 48 — piggybacks on this existing, already tenant/
+        // permission-checked endpoint rather than a new top-level values
+        // API (decision 17). Values are only ever validated/written
+        // against the applicant's own active custom field definitions.
+        if (array_key_exists('custom_field_values', $validated)) {
+            app(CustomFieldValueService::class)->setValuesFor(
+                tenantId: $jobApplication->tenant_id,
+                entityType: CustomFieldEntity::RecruitmentApplicant,
+                entityId: $jobApplication->recruitment_applicant_id,
+                rawValues: $validated['custom_field_values'],
+                actor: $request->user(),
             );
         }
 

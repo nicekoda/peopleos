@@ -449,6 +449,41 @@ Engine, Dashboard Builder, Form/Page Designer, Implementation Engineer
 Tools, Configuration Export/Import. **Do not build these before
 Checkpoint 47 is complete and explicitly approved.**
 
+**Checkpoint 48 — Custom Fields Foundation — completed.** Delivered
+the "custom field targets" capability the Module Registration Contract
+above anticipates, scoped to a single entity (`recruitment_applicant`
+— the lowest-blast-radius target, not `employees`) to prove the
+storage/validation/audit engine before expanding it. Applied the same
+discipline as Checkpoint 47:
+
+- `field_key`/`option_key` are stable and immutable once created —
+  the same "module keys must be stable" principle applied to field
+  identifiers, since forms/workflow conditions/reports/AI filters will
+  eventually reference them by key.
+- No billing/subscription/entitlement enforcement built — a flat
+  50-fields-per-tenant-per-entity cap stands in for a future
+  package-dependent limit (see "Module subscription and entitlement
+  model" above), without redesigning the definition table when that
+  limit becomes real.
+- Storage (relational definitions + one-row-per-field values, never a
+  JSONB blob) is the deliberate "build once, reuse everywhere"
+  choice — a future generic workflow-condition/report/dashboard/
+  AI-filter engine can query `custom_field_values` the same way
+  regardless of which entity or tenant it belongs to, without this
+  checkpoint's storage shape changing.
+- Sensitivity classification exists now but only gates audit masking,
+  not read access — explicitly documented as a future Field-Level
+  Visibility foundation, not built prematurely.
+- Found and fixed a real pre-existing gap in `route:audit-module-gates`
+  (Checkpoint 47) while wiring this checkpoint's own routes — it had
+  been silently checking `routes/web.php` pages only since it never
+  accounted for `routes/api.php`'s `api/v1` prefix. See
+  `docs/architecture.md`/`docs/testing.md` for the full story.
+
+Next: `job_applications` (near-zero engine work), then
+`lifecycle_processes`/`leave_requests`, `employees` last — followed by
+Field-Level Visibility, then Custom Forms, per the roadmap above.
+
 ## Final product promise
 
 > One secure platform connecting people, workflows, services, assets,

@@ -32,6 +32,12 @@ class UpdateJobApplicationRequest extends FormRequest
             'phone' => ['nullable', 'string', 'max:50'],
             'source' => ['nullable', 'string', 'max:255'],
             'cover_letter' => ['nullable', 'string', 'max:5000'],
+            // Checkpoint 48 — the applicant's custom field values, keyed
+            // by field_key. Per-key type/rule/option validation is
+            // dynamic per tenant and happens in
+            // CustomFieldValueService/CustomFieldValueValidator, not
+            // here — this only enforces the outer shape.
+            'custom_field_values' => ['sometimes', 'array'],
         ];
     }
 }

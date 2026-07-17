@@ -179,6 +179,9 @@ class RoleSeeder extends Seeder
             // manage modules (Tenant-Admin-only), per your explicit
             // approved mapping.
             'tenant.modules.view', 'tenant.branding.view', 'tenant.branding.manage',
+            // Checkpoint 48 — view only, not manage (Tenant-Admin-only),
+            // per your explicit approved mapping.
+            'custom_fields.view',
         ]);
 
         // Checkpoint 34 — HR Director previously had no permissions
@@ -216,6 +219,9 @@ class RoleSeeder extends Seeder
             // Checkpoint 47 — identical grant as HR Manager, per your
             // explicit approved mapping.
             'tenant.modules.view', 'tenant.branding.view', 'tenant.branding.manage',
+            // Checkpoint 48 — identical grant as HR Manager, per your
+            // explicit approved mapping.
+            'custom_fields.view',
         ]);
 
         $this->grantByKeys($roles['Employee'], [

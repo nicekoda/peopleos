@@ -402,6 +402,102 @@ route:audit-module-gates` (mirroring the pre-existing `route:audit-
 tenant-scoping`) fails CI if any route under a toggleable module's
 prefix is missing this gate.
 
+**Checkpoint 48 note**: this command's prefix matching had a real gap
+— `routes/api.php` wraps every route in `Route::prefix('api/v1')`, so
+an API route's registered URI is `api/v1/job-openings`, not
+`job-openings`, and the matching logic never accounted for that
+prefix. Since Checkpoint 47 the command had been silently checking
+`routes/web.php` pages only (45 routes) — every `api/v1/*` route was
+skipped, not verified. Fixed by stripping a leading `api/v1/` before
+comparing; the real checked-route count is 134, still 0 missing. The
+actual `module:{key}` middleware was never missing from any route —
+this was a gap in the audit's own coverage, not a real access-control
+hole (the live smoke test in Checkpoint 47 already proved the
+middleware itself works).
+
+## Custom Fields (Checkpoint 48)
+
+Backend-owned field definitions per entity, plus their values exposed
+through the owning entity's own endpoints — no standalone values API.
+See `docs/architecture.md#custom-fields-foundation-checkpoint-48` for
+the full design. MVP entity: `recruitment_applicant` only.
+
+| Method | Path | Permission | Notes |
+|---|---|---|---|
+| `GET` | `/api/v1/custom-fields/{entityType}` | `custom_fields.view` | `422` if `entityType` is unknown. Returns every definition (active and inactive) for that entity, with its options/validation rules |
+| `POST` | `/api/v1/custom-fields/{entityType}` | `custom_fields.manage` | Creates a definition. `field_key` immutable after creation; `422` on bad format, reserved key, duplicate key, or the 50-fields-per-entity cap |
+| `PATCH` | `/api/v1/custom-fields/{customFieldDefinition}` | `custom_fields.manage` | Updates label/description/type/required/default/sensitivity/sort_order/status/options/validation_rules. `field_key` is never accepted. `field_type` change is `422` if the field already has stored values |
+
+### Response shape
+
+```json
+// GET /api/v1/custom-fields/recruitment_applicant
+{
+  "data": [
+    {
+      "id": "01h...",
+      "entity_type": "recruitment_applicant",
+      "field_key": "visa_status",
+      "label": "Visa Status",
+      "description": null,
+      "field_type": "single_select",
+      "is_required": false,
+      "default_value": null,
+      "sensitivity": "normal",
+      "sort_order": 0,
+      "status": "active",
+      "options": [
+        { "option_key": "citizen", "label": "Citizen", "sort_order": 0, "status": "active" }
+      ],
+      "validation_rules": []
+    }
+  ]
+}
+```
+
+Never returned: `tenant_id`, `created_by`, `updated_by`.
+
+### Values — exposed through the owning entity, not a separate endpoint
+
+`RecruitmentApplicant` values are read/written through the existing
+recruitment endpoints, gated by the same permissions that already
+control the applicant's own data — no `custom_fields.*` permission is
+involved in reading or writing values:
+
+```json
+// PATCH /api/v1/job-applications/{jobApplication} — permission: job_applications.update
+{
+  "custom_field_values": {
+    "visa_status": "citizen",
+    "skills": ["php", "react"]
+  }
+}
+```
+
+```json
+// GET /api/v1/job-applications/{jobApplication} — permission: job_applications.view
+{
+  "data": {
+    "applicant": {
+      "id": "01h...",
+      "first_name": "...",
+      "custom_field_values": {
+        "visa_status": "citizen",
+        "skills": ["php", "react"]
+      }
+    }
+  }
+}
+```
+
+Only currently-active fields are ever returned or writable — a
+disabled field's previously-stored value is preserved in the database
+but omitted from both the read and write surface until re-enabled.
+An unknown `field_key` in `custom_field_values`, a value that fails
+its field's validation rules, a missing required value, or a
+select/multi-select value naming an inactive or nonexistent option
+key all return `422`.
+
 ## Audit Logs
 
 Read-only (Checkpoint 24) — no create/update/delete route exists

@@ -1616,6 +1616,35 @@ explicitly (`->response()->setStatusCode(200)`) rather than adjusting
 the tests to expect `201` — the tests were catching a real
 API-consistency issue, not a false positive.
 
+## A regression-guard command that silently checked far less than it claimed (Checkpoint 48)
+
+`route:audit-module-gates`'s test
+(`AuditModuleRouteGatesCommandTest::test_every_toggleable_module_route_carries_its_module_gate`)
+only ever asserted `assertExitCode(0)` — which the command happily
+returned even while its own internal route-matching logic was
+silently skipping nearly every route it was supposed to check.
+Discovered while wiring Checkpoint 48's new `custom-fields` API
+routes: the "Total toggleable-module routes checked" count only grew
+by 1 despite registering 4 new routes, which led to tracing
+`AuditModuleRouteGates::belongsToModule()` and finding that
+`routes/api.php`'s `Route::prefix('api/v1')` wrapper means every API
+route's `uri()` is `api/v1/job-openings`, not `job-openings` — so
+`TenantModule::routeGroupPrefixes()`'s bare prefixes had never
+matched a single `api/v1/*` route since Checkpoint 47. The real
+checked-route count was 45 (web.php pages only); after stripping the
+`api/v1/` prefix before comparing, it's 134, still 0 missing. The
+lesson generalizes: an `assertExitCode(0)` test on a *counting*
+command proves the count-so-far was internally consistent, not that
+the count reflects everything it should — a command that
+undercounts and a command that's actually correct both return
+`SUCCESS` with 0 failures. The new
+`test_api_routes_are_actually_checked_not_silently_skipped` test
+(added to the same file) independently reproduces the matching logic
+and asserts the checked count clears a floor high enough that
+silently-skipped API routes would fail it — the same kind of "prove
+the mechanism, not just the outcome" fix `docs/testing.md` already
+applied to the Platform-Super-Admin test in Checkpoint 47.
+
 ## Known limitations
 
 - No test coverage reporting configured yet.

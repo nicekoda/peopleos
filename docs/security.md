@@ -5751,6 +5751,139 @@ configuration lock and configuration-history UI; login/email
 branding; warning counts for Documents/Policies if a safe aggregate
 is identified later.
 
+## Custom Fields Foundation (Checkpoint 48)
+
+See
+[`architecture.md`](architecture.md#custom-fields-foundation-checkpoint-48)
+for the technical design and `docs/platform-vision.md` for why this
+is the first foundation of reusable, platform-level custom fields
+rather than a one-off recruitment feature.
+
+### Sensitivity classification is not yet an access control — documented explicitly to avoid a false assumption
+
+`CustomFieldSensitivity` (`normal`/`sensitive`/`confidential`/
+`restricted`) exists on every field definition **now**, but in this
+checkpoint it affects **audit masking only**. It does **not** filter
+who can read a field's value — anyone who already holds
+`job_applications.view` sees every active custom field's value
+regardless of its classification. This is deliberate scope, not an
+oversight: a real field-level read permission is a materially bigger
+feature (it needs to interact with every existing entity permission,
+not just gate a new resource) and is explicitly deferred to a future
+checkpoint. Anyone reasoning about this feature's security posture
+should not assume `restricted` means "hidden" — today it only means
+"masked in the audit log."
+
+### Classification-aware audit masking — a second masking mechanism, deliberately
+
+`AuditValueSanitizer` (Checkpoint 24) and `AuditLogger`'s own
+name-pattern masking both work by matching a *key name* against a
+fixed list of sensitive-sounding substrings (`password`, `salary`,
+`bank`, ...). A tenant-defined custom field's `field_key` is arbitrary
+— `visa_status`, `medical_notes`, `salary_expectation` are all
+equally plausible tenant-chosen strings, and none of them are
+guaranteed to match the existing pattern lists. Relying on
+name-pattern masking alone would mean a tenant marking a field
+`sensitive` provides no actual audit protection unless its name
+happened to also match a hardcoded substring. `CustomFieldAuditEvents::valueUpdated()`
+therefore checks the *definition's own classification* directly and
+substitutes `***MASKED***` for both old and new values before ever
+calling `AuditLogger`, for every classification except `normal` — a
+data-driven check, not a name-based heuristic. A test
+(`CustomFieldValueApiTest::test_sensitive_field_value_is_masked_in_audit_log`)
+proves a `sensitive`-classified value never appears anywhere in its
+own audit entry, including inside `metadata`.
+
+### Values are gated by the parent entity's own permission — verified against the real permission keys, not assumed
+
+Per your explicit instruction to verify rather than invent a new
+permission axis: `RecruitmentApplicant` values are read/written
+exclusively through `JobApplicationController`'s existing
+`job_applications.view`/`job_applications.update` permissions
+(confirmed directly against `routes/api.php` and `PermissionSeeder`
+before wiring this), never a new `custom_field_values.*` key.
+`custom_fields.view`/`.manage` exist as a separate category entirely
+for *definitions* — creating/editing/disabling a field, not touching
+any entity's data. `custom_fields.manage` is Tenant-Admin-only in
+this checkpoint (field definitions affect data structure and every
+future form/workflow/report/AI filter built on them — a tenant-wide
+configuration concern, deliberately conservative); `.view` is also
+granted to HR Director/HR Manager, mirroring the view/manage split
+already established for `tenant.modules.*` in Checkpoint 47.
+
+### No new top-level values API — deliberately, to avoid a bypass surface
+
+Custom field values for `RecruitmentApplicant` are exposed only as a
+`custom_field_values` field on the existing
+`PATCH /api/v1/job-applications/{id}` request and
+`GET /api/v1/job-applications/{id}` response — there is no
+`GET/POST /api/v1/custom-field-values` or similar standalone
+endpoint. Every value operation independently re-verifies tenant
+ownership of both the parent entity and the field definition,
+`entity_type` match, and that the field is currently active before
+accepting a write (`CustomFieldValueService`) — defense in depth
+beyond the controller's own tenant/permission checks, not a
+replacement for them. A cross-tenant field key is indistinguishable
+from an unknown one from the caller's point of view (422 either way)
+— never a silent cross-tenant read or write, proven directly in
+`CustomFieldValueApiTest::test_service_rejects_a_value_write_against_another_tenants_definition`.
+
+### Field key / option key stability is a security-adjacent property, not just a UX one
+
+`field_key` and `option_key` are both immutable once created —
+enforced by omission (the update FormRequest simply has no rule for
+`field_key` at all) rather than a soft "ignored if present" check, so
+there's no code path where a resent value could ever look like it was
+considered and silently dropped. This matters beyond naming
+hygiene: once a form, workflow condition, report, or AI filter starts
+referencing a `field_key`, an uncontrolled rename would silently
+break or misdirect that reference — a future rename feature must be
+its own separate, audited action once real references exist, not
+retrofitted onto this checkpoint's update endpoint.
+
+### Reserved keys and format enforcement close a real collision/injection surface
+
+A tenant cannot create a custom field whose key collides with a real
+system column (`first_name`, `email`, `status`, `stage`, ...) or a
+generically dangerous name (`password`, `token`, `role`,
+`is_platform_admin`, ...) — enforced in
+`CustomFieldDefinitionService::assertNotReserved()` against
+`CustomFieldEntity::reservedFieldKeys()`. Combined with the strict
+`^[a-z][a-z0-9_]{0,59}$` key format (lowercase snake_case only — no
+spaces, hyphens, uppercase, HTML, or SQL-like strings), this removes
+an entire class of confusion/collision risk if a `field_key` is ever
+used as a literal identifier in a future generated form, report
+column, or API integration — the key can never look like, or be
+confused with, a real system field or a code/markup fragment.
+
+### Current limitations
+
+- No field-level read permission — see "Sensitivity classification"
+  above.
+- No safe migration path for changing a field's type once it has
+  values — the only option today is creating a new field.
+- No field-key rename — see "Field key / option key stability" above.
+- Only `recruitment_applicant` supports custom fields in this
+  checkpoint; `job_applications`/`lifecycle_processes`/
+  `leave_requests`/`employees` are a documented future roadmap, not
+  built yet.
+- A flat 50-field-per-tenant-per-entity cap, not yet
+  package/entitlement-aware.
+- No configuration export/import for definitions yet, though the
+  schema (stable `field_key`/`option_key`, no raw internal IDs as the
+  external contract) is deliberately export/import-ready.
+
+### Future
+
+Per `docs/platform-vision.md`: field-level visibility/read
+permissions keyed on `sensitivity`; a form/page designer; workflow
+conditions, approval rules, custom reports, dashboards, and
+AI-assistant filters querying `custom_field_values` generically; a
+controlled, audited field-key rename feature once real references
+exist; configuration export/import; and a package/entitlement layer
+controlling field counts, supported entities, and advanced field
+types.
+
 ## Local Demo Credentials
 
 **Local development only — these are not real secrets and only work against your own local database.** Password comes from `SEED_USER_PASSWORD` in `.env` (not committed; `.env.example` has an empty placeholder).
@@ -5780,6 +5913,7 @@ data these six `uesl` logins see (Checkpoint 26's `DemoDataSeeder`).
 - No email verification enforcement on login (column exists, not yet checked).
 - Password reset exists as of Checkpoint 44 (the `password_reset_tokens` table, previously unused, now backs a real forgot-password flow) — see [Password Reset](#password-reset-checkpoint-44) below. An invite-email flow (built on the same token table) exists as of Checkpoint 46 — see [Invite-Email Flow for New Accounts](#invite-email-flow-for-new-accounts-checkpoint-46) below. Still no MFA or SSO.
 - A backend module registry (`recruitment`, `lifecycle`, `leave`, `documents`, `policies`, `hr_documents` toggleable per tenant) and a narrow branding surface (display name, logo, two colors) exist as of Checkpoint 47 — see [Module Registry & Branding Foundation](#module-registry--branding-foundation-checkpoint-47) below and `docs/platform-vision.md` for the long-term platform direction this checkpoint is the first foundation of. Still no entitlement/subscription layer sitting in front of enablement.
+- A tenant-scoped custom fields engine (EAV-leaning hybrid: `custom_field_definitions`/`custom_field_options`/`custom_field_validation_rules`/`custom_field_values`) exists as of Checkpoint 48, for `recruitment_applicant` only — see [Custom Fields Foundation](#custom-fields-foundation-checkpoint-48) below. Sensitivity classification affects audit masking only, not read access, yet. `job_applications`/`lifecycle_processes`/`leave_requests`/`employees` are a documented future roadmap, not built yet.
 - This app's first scheduled task exists as of Checkpoint 45 (`lifecycle:send-task-digest`, registered via `bootstrap/app.php`'s `->withSchedule()`) — see [Lifecycle Task Ordering & Reminders](#lifecycle-task-ordering--reminders-checkpoint-45) below. Production deployments must now add a `php artisan schedule:run` cron entry, which was never required before this checkpoint (see `docs/deployment.md` §6). Still no queued jobs anywhere in the app.
 - `DatabaseSeeder` uses `WithoutModelEvents`, which disables the `saving`/`creating` guards (on `User` and `Role`) during seeding. `UserSeeder`/`RoleSeeder` set `tenant_id`/`is_platform_admin`/`is_platform_role` explicitly on every row regardless, so this doesn't cause incorrect data — but it does mean a same-row consistency mistake in seed data would surface as a raw Postgres constraint error rather than the cleaner app-level exception. (The RBAC *assignment* guards — `assignRole()`, `givePermissionTo()`, `grantPermission()` — and audit logging calls are unaffected by this, since they're plain method logic, not Eloquent events.)
 - See "Current limitations" under Audit Logging above for the audit-specific gaps (no read endpoint, `givePermissionTo()`/tenant CRUD not logged yet).

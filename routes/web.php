@@ -179,6 +179,10 @@ Route::middleware(['auth', 'tenant.matches'])->group(function () {
         ->middleware('permission:tenant.modules.view')->name('settings.modules');
     Route::get('settings/branding', [SettingsController::class, 'branding'])
         ->middleware('permission:tenant.branding.view')->name('settings.branding');
+    // Checkpoint 48 — Custom Fields Foundation. Also gated by module:recruitment
+    // (the sole CustomFieldEntity case today) — see TenantModule::routeGroupPrefixes().
+    Route::get('settings/custom-fields', [SettingsController::class, 'customFields'])
+        ->middleware(['module:recruitment', 'permission:custom_fields.view'])->name('settings.custom-fields');
 
     // Safe "coming later" placeholders — same pattern originally used
     // for Documents/Policies in Checkpoint 16, each gated by the

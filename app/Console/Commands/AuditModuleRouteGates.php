@@ -64,11 +64,24 @@ class AuditModuleRouteGates extends Command
     }
 
     /**
+     * routes/api.php wraps every route in Route::prefix('api/v1'), so
+     * $route->uri() for an API route is e.g. 'api/v1/job-openings', not
+     * 'job-openings' — while routes/web.php has no such prefix.
+     * TenantModule::routeGroupPrefixes()'s bare prefixes are meant to
+     * match both (its own docblock: "in both routes/api.php and
+     * routes/web.php"), so the leading 'api/v1/' is stripped before
+     * comparing. Found and fixed in Checkpoint 48: before this, every
+     * api.php route silently never matched any prefix here — this
+     * command had been checking web.php pages only since Checkpoint 47,
+     * not the API routes it was actually built to guard.
+     *
      * @param  list<string>  $prefixes
      * @param  list<string>  $exactUris
      */
     private function belongsToModule(string $uri, array $prefixes, array $exactUris): bool
     {
+        $uri = str_starts_with($uri, 'api/v1/') ? substr($uri, strlen('api/v1/')) : $uri;
+
         if (in_array($uri, $exactUris, true)) {
             return true;
         }

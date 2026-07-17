@@ -2,6 +2,8 @@
 
 namespace App\Http\Resources;
 
+use App\Enums\CustomFieldEntity;
+use App\Services\CustomFields\CustomFieldValueService;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 
@@ -35,6 +37,14 @@ class JobApplicationResource extends JsonResource
                 'email' => $this->applicant->email,
                 'phone' => $this->applicant->phone,
                 'source' => $this->applicant->source,
+                // Checkpoint 48 — active custom fields only (field_key =>
+                // value); a disabled field's preserved value is never
+                // returned here (decision 12).
+                'custom_field_values' => app(CustomFieldValueService::class)->getActiveValuesFor(
+                    $this->applicant->tenant_id,
+                    CustomFieldEntity::RecruitmentApplicant,
+                    $this->applicant->id,
+                ),
             ]),
             'stage' => $this->stage->value,
             'status' => $this->status->value,

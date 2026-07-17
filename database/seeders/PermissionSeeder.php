@@ -93,6 +93,15 @@ class PermissionSeeder extends Seeder
             // alone (not also employees.create) is your explicit
             // approved choice.
             'job_applications' => ['view', 'create', 'update', 'delete', 'update_stage', 'add_note', 'mark_ready_for_conversion', 'convert_to_employee'],
+            // Checkpoint 48 — Custom Fields Foundation. .manage is
+            // Tenant-Admin-only (your explicit approved decision — field
+            // definitions affect data structure, future forms/workflows/
+            // reports/AI filters, a tenant-wide configuration concern).
+            // .view may additionally be granted to HR Director/HR
+            // Manager. Values themselves are gated by the owning
+            // entity's own permission (job_applications.view/.update),
+            // never a second value-permission axis.
+            'custom_fields' => ['view', 'manage'],
         ];
 
         foreach ($tenantPermissions as $category => $actions) {

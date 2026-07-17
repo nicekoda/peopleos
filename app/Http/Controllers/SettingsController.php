@@ -59,4 +59,13 @@ class SettingsController extends Controller
     {
         return Inertia::render('Settings/Branding');
     }
+
+    /**
+     * Checkpoint 48 — same thin-page pattern; field/option data is
+     * fetched client-side from /api/v1/custom-fields/{entityType}.
+     */
+    public function customFields(): Response
+    {
+        return Inertia::render('Settings/CustomFields');
+    }
 }

@@ -52,6 +52,8 @@ export interface JobApplication {
         email: string;
         phone: string | null;
         source: string | null;
+        // Checkpoint 48 — active custom fields only, field_key => value.
+        custom_field_values?: Record<string, unknown>;
     } | null;
     stage: ApplicationStage;
     status: ApplicationStatus;

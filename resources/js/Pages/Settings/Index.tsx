@@ -126,6 +126,14 @@ const sections: Section[] = [
         comingLater: false,
     },
     {
+        key: 'custom_fields',
+        title: 'Custom Fields',
+        description: 'Manage tenant-defined fields for recruitment applicants.',
+        href: '/settings/custom-fields',
+        permission: 'custom_fields.view',
+        comingLater: false,
+    },
+    {
         key: 'security',
         title: 'Security & Audit',
         description: 'Review security and audit settings.',

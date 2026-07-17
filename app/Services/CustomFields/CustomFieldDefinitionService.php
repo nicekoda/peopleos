@@ -12,6 +12,7 @@ use App\Models\CustomFieldOption;
 use App\Models\CustomFieldValidationRule;
 use App\Models\Tenant;
 use App\Models\User;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 
 /**
@@ -63,29 +64,40 @@ class CustomFieldDefinitionService
         $this->assertUnderMaxFields($tenant, $entityType);
         $this->assertFieldKeyUnique($tenant, $entityType, $fieldKey);
 
-        $definition = CustomFieldDefinition::query()->create([
-            'tenant_id' => $tenant->id,
-            'entity_type' => $entityType->value,
-            'field_key' => $fieldKey,
-            'label' => $data['label'],
-            'description' => $data['description'] ?? null,
-            'field_type' => $fieldType->value,
-            'is_required' => $data['is_required'] ?? false,
-            'sensitivity' => $data['sensitivity'] ?? CustomFieldSensitivity::Normal->value,
-            'sort_order' => $data['sort_order'] ?? 0,
-            'status' => CustomFieldDefinitionStatus::Active->value,
-            'created_by' => $actor->id,
-            'updated_by' => $actor->id,
-        ]);
+        // The whole definition (row, options, validation rules, default
+        // value) must succeed or fail together — a validation failure
+        // partway through (e.g. an invalid option key, or a default
+        // value that fails validation) must never leave a half-created,
+        // unusable definition row behind. Found live: creating a field
+        // with a bad default value returned 422, but the definition row
+        // itself had already been inserted before that check ran.
+        $definition = DB::transaction(function () use ($tenant, $entityType, $data, $fieldKey, $fieldType, $options, $validationRules, $actor) {
+            $definition = CustomFieldDefinition::query()->create([
+                'tenant_id' => $tenant->id,
+                'entity_type' => $entityType->value,
+                'field_key' => $fieldKey,
+                'label' => $data['label'],
+                'description' => $data['description'] ?? null,
+                'field_type' => $fieldType->value,
+                'is_required' => $data['is_required'] ?? false,
+                'sensitivity' => $data['sensitivity'] ?? CustomFieldSensitivity::Normal->value,
+                'sort_order' => $data['sort_order'] ?? 0,
+                'status' => CustomFieldDefinitionStatus::Active->value,
+                'created_by' => $actor->id,
+                'updated_by' => $actor->id,
+            ]);
 
-        $this->syncValidationRules($definition, $fieldType, $validationRules);
-        $this->syncOptions($definition, $options, $actor);
+            $this->syncValidationRules($definition, $fieldType, $validationRules);
+            $this->syncOptions($definition, $options, $actor);
 
-        if (array_key_exists('default_value', $data) && $data['default_value'] !== null && $data['default_value'] !== '') {
-            $definition->refresh();
-            $definition->load(['options', 'validationRules']);
-            $this->applyDefaultValue($definition, $data['default_value']);
-        }
+            if (array_key_exists('default_value', $data) && $data['default_value'] !== null && $data['default_value'] !== '') {
+                $definition->refresh();
+                $definition->load(['options', 'validationRules']);
+                $this->applyDefaultValue($definition, $data['default_value']);
+            }
+
+            return $definition;
+        });
 
         CustomFieldAuditEvents::created($definition, $actor);
 
@@ -111,49 +123,57 @@ class CustomFieldDefinitionService
         $before = $definition->only(['label', 'description', 'field_type', 'is_required', 'sensitivity', 'sort_order', 'status']);
         $previousStatus = $definition->status;
 
-        if (array_key_exists('field_type', $data)) {
-            $newType = CustomFieldType::from($data['field_type']);
+        // Same "all or nothing" reasoning as create(): a validation
+        // failure partway through (e.g. an invalid option, or a default
+        // value that no longer fits after a field_type change) must
+        // never leave the definition half-updated — label/status
+        // changes committed while options/default-value changes silently
+        // failed.
+        DB::transaction(function () use ($definition, $data, $options, $validationRules, $actor) {
+            if (array_key_exists('field_type', $data)) {
+                $newType = CustomFieldType::from($data['field_type']);
 
-            if ($newType !== $definition->field_type && $definition->values()->exists()) {
-                throw ValidationException::withMessages([
-                    'field_type' => ['This field already has stored values — its type cannot be changed. Create a new field instead.'],
-                ]);
+                if ($newType !== $definition->field_type && $definition->values()->exists()) {
+                    throw ValidationException::withMessages([
+                        'field_type' => ['This field already has stored values — its type cannot be changed. Create a new field instead.'],
+                    ]);
+                }
+
+                $definition->field_type = $newType->value;
             }
 
-            $definition->field_type = $newType->value;
-        }
+            $definition->fill(array_intersect_key($data, array_flip([
+                'label', 'description', 'is_required', 'sensitivity', 'sort_order', 'status',
+            ])));
+            $definition->updated_by = $actor->id;
+            $definition->save();
 
-        $definition->fill(array_intersect_key($data, array_flip([
-            'label', 'description', 'is_required', 'sensitivity', 'sort_order', 'status',
-        ])));
-        $definition->updated_by = $actor->id;
-        $definition->save();
+            if ($validationRules !== null) {
+                $this->syncValidationRules($definition, $definition->field_type, $validationRules);
+            }
+
+            if ($options !== null) {
+                $this->syncOptions($definition, $options, $actor);
+            }
+
+            if (array_key_exists('default_value', $data)) {
+                $definition->refresh();
+                $definition->load(['options', 'validationRules']);
+
+                if ($data['default_value'] === null || $data['default_value'] === '') {
+                    $definition->default_value = null;
+                    $definition->save();
+                } else {
+                    $this->applyDefaultValue($definition, $data['default_value']);
+                }
+            }
+        });
 
         $after = $definition->only(['label', 'description', 'field_type', 'is_required', 'sensitivity', 'sort_order', 'status']);
         CustomFieldAuditEvents::updated($definition, $before, $after, $actor);
 
         if ($definition->status !== $previousStatus) {
             CustomFieldAuditEvents::statusChanged($definition, $definition->status === CustomFieldDefinitionStatus::Active, $actor);
-        }
-
-        if ($validationRules !== null) {
-            $this->syncValidationRules($definition, $definition->field_type, $validationRules);
-        }
-
-        if ($options !== null) {
-            $this->syncOptions($definition, $options, $actor);
-        }
-
-        if (array_key_exists('default_value', $data)) {
-            $definition->refresh();
-            $definition->load(['options', 'validationRules']);
-
-            if ($data['default_value'] === null || $data['default_value'] === '') {
-                $definition->default_value = null;
-                $definition->save();
-            } else {
-                $this->applyDefaultValue($definition, $data['default_value']);
-            }
         }
 
         return $definition->fresh(['options', 'validationRules']);

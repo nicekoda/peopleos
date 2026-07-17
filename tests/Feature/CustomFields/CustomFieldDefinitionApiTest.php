@@ -199,6 +199,35 @@ class CustomFieldDefinitionApiTest extends TestCase
         ])->assertStatus(422);
     }
 
+    /**
+     * Regression test — found live during the Checkpoint 48 smoke test:
+     * the definition row was inserted before options/default-value
+     * validation ran, with no transaction wrapping the whole create(),
+     * so a 422 for a bad default value (or a bad option key) still left
+     * a real, active, unusable-from-the-request's-perspective definition
+     * row behind. Fixed by wrapping the entire create() body in
+     * DB::transaction().
+     */
+    public function test_failed_creation_leaves_no_orphaned_definition_row(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $user = $this->userWithPermissions($tenant, 'custom_fields.view', 'custom_fields.manage');
+
+        $this->actingAs($user)->postJson($this->url($tenant, 'custom-fields/recruitment_applicant'), [
+            'field_key' => 'orphan_check_email', 'label' => 'Orphan Check', 'field_type' => 'email',
+            'default_value' => 'not-an-email',
+        ])->assertStatus(422);
+
+        $this->assertDatabaseMissing('custom_field_definitions', ['field_key' => 'orphan_check_email']);
+
+        $this->actingAs($user)->postJson($this->url($tenant, 'custom-fields/recruitment_applicant'), [
+            'field_key' => 'orphan_check_select', 'label' => 'Orphan Check Select', 'field_type' => 'single_select',
+            'options' => [['option_key' => 'Bad Key!', 'label' => 'Bad']],
+        ])->assertStatus(422);
+
+        $this->assertDatabaseMissing('custom_field_definitions', ['field_key' => 'orphan_check_select']);
+    }
+
     public function test_select_field_requires_at_least_one_option(): void
     {
         $tenant = Tenant::factory()->create();

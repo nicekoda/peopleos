@@ -48,6 +48,17 @@ class JobApplicationResource extends JsonResource
             ]),
             'stage' => $this->stage->value,
             'status' => $this->status->value,
+            // Checkpoint 49 — this application's own active custom
+            // field values (App\Models\RecruitmentApplication),
+            // deliberately top-level and distinct from
+            // applicant.custom_field_values above, which belongs to
+            // the applicant (RecruitmentApplicant) instead — the two
+            // are different entities with independently-defined fields.
+            'custom_field_values' => app(CustomFieldValueService::class)->getActiveValuesFor(
+                $this->tenant_id,
+                CustomFieldEntity::JobApplication,
+                $this->id,
+            ),
             'resume_document_id' => $this->resume_document_id,
             'cover_letter' => $this->cover_letter,
             'ready_for_conversion' => $this->ready_for_conversion,

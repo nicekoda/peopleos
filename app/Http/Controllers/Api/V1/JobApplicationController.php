@@ -176,6 +176,26 @@ class JobApplicationController extends Controller
             );
         }
 
+        // Checkpoint 49 — the application's own custom field values, a
+        // deliberately separate payload key from custom_field_values
+        // above (never merged into one object — see
+        // UpdateJobApplicationRequest's own docblock). No stage/status
+        // gate exists on this endpoint today, so custom field values
+        // are editable under exactly the same (currently unrestricted)
+        // conditions as first_name/cover_letter/etc. above — if a future
+        // checkpoint adds one, custom fields inherit it for free since
+        // they go through this same update() action, never a separate
+        // bypass path.
+        if (array_key_exists('application_custom_field_values', $validated)) {
+            app(CustomFieldValueService::class)->setValuesFor(
+                tenantId: $jobApplication->tenant_id,
+                entityType: CustomFieldEntity::JobApplication,
+                entityId: $jobApplication->id,
+                rawValues: $validated['application_custom_field_values'],
+                actor: $request->user(),
+            );
+        }
+
         return new JobApplicationResource($jobApplication->fresh(['job', 'applicant']));
     }
 

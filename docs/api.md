@@ -415,12 +415,16 @@ this was a gap in the audit's own coverage, not a real access-control
 hole (the live smoke test in Checkpoint 47 already proved the
 middleware itself works).
 
-## Custom Fields (Checkpoint 48)
+## Custom Fields (Checkpoint 48, extended Checkpoint 49)
 
 Backend-owned field definitions per entity, plus their values exposed
 through the owning entity's own endpoints — no standalone values API.
-See `docs/architecture.md#custom-fields-foundation-checkpoint-48` for
-the full design. MVP entity: `recruitment_applicant` only.
+See `docs/architecture.md#custom-fields-foundation-checkpoint-48` and
+`docs/architecture.md#custom-fields-for-job-applications-checkpoint-49`
+for the full design. Supported entities: `recruitment_applicant`
+(the candidate's identity) and `job_application` (the pipeline
+record, `App\Models\RecruitmentApplication`) — the same `{entityType}`
+route serves both, just with a different value.
 
 | Method | Path | Permission | Notes |
 |---|---|---|---|
@@ -459,10 +463,14 @@ Never returned: `tenant_id`, `created_by`, `updated_by`.
 
 ### Values — exposed through the owning entity, not a separate endpoint
 
-`RecruitmentApplicant` values are read/written through the existing
-recruitment endpoints, gated by the same permissions that already
-control the applicant's own data — no `custom_fields.*` permission is
-involved in reading or writing values:
+Both entities' values are read/written through the existing
+`job-applications` endpoints, gated by the same permissions that
+already control that data — no `custom_fields.*` permission is
+involved in reading or writing values. **Two deliberately separate
+payload keys**, never merged into one object — a field key like
+`notes` can validly exist on both entities independently, and a
+shared object would have no way to disambiguate which entity a
+submitted key belongs to:
 
 ```json
 // PATCH /api/v1/job-applications/{jobApplication} — permission: job_applications.update
@@ -470,14 +478,25 @@ involved in reading or writing values:
   "custom_field_values": {
     "visa_status": "citizen",
     "skills": ["php", "react"]
+  },
+  "application_custom_field_values": {
+    "priority_tier": "high"
   }
 }
 ```
+
+`custom_field_values` targets the applicant (`recruitment_applicant`);
+`application_custom_field_values` targets the application itself
+(`job_application`, Checkpoint 49). Either key may be omitted
+independently — a request can update just one entity's fields.
 
 ```json
 // GET /api/v1/job-applications/{jobApplication} — permission: job_applications.view
 {
   "data": {
+    "custom_field_values": {
+      "priority_tier": "high"
+    },
     "applicant": {
       "id": "01h...",
       "first_name": "...",
@@ -490,13 +509,27 @@ involved in reading or writing values:
 }
 ```
 
+The **top-level** `custom_field_values` belongs to the job
+application; `applicant.custom_field_values` belongs to the
+applicant — the nesting is the only thing that disambiguates them on
+read, mirroring the two payload keys on write.
+
 Only currently-active fields are ever returned or writable — a
 disabled field's previously-stored value is preserved in the database
 but omitted from both the read and write surface until re-enabled.
-An unknown `field_key` in `custom_field_values`, a value that fails
+An unknown `field_key` in either payload key (including a
+`recruitment_applicant` field submitted via
+`application_custom_field_values`, or vice versa), a value that fails
 its field's validation rules, a missing required value, or a
 select/multi-select value naming an inactive or nonexistent option
 key all return `422`.
+
+**No stage/status gate on this endpoint.** `PATCH /job-applications/{id}`
+does not restrict editing based on the application's `stage` or
+`status` today — an application at `hired`, `rejected`, `withdrawn`,
+or `archived` can still have its fields (including both custom-field
+payload keys) updated. Custom field values inherit this exactly,
+since they're written through the same action.
 
 ## Audit Logs
 

@@ -47,6 +47,143 @@ const allowedNextStages: Record<ApplicationStage, ApplicationStage[]> = {
     withdrawn: ['withdrawn'],
 };
 
+/**
+ * Checkpoint 48/49 — shared editor for both custom-field entities this
+ * page touches: the applicant's own fields (recruitment_applicant,
+ * payload key custom_field_values) and the application's own fields
+ * (job_application, payload key application_custom_field_values,
+ * Checkpoint 49). Both piggyback on the same PATCH
+ * /job-applications/{id} endpoint under two deliberately separate
+ * payload keys — never merged into one object, since the same
+ * field_key can validly exist on both entities. No stage/status gate
+ * exists on that endpoint today, so editability here follows whatever
+ * the parent endpoint already allows, never a separate bypass path.
+ */
+function CustomFieldsCard({
+    title,
+    entityTypeUrl,
+    payloadKey,
+    applicationId,
+    values,
+    canEdit,
+    onSaved,
+}: {
+    title: string;
+    entityTypeUrl: string;
+    payloadKey: 'custom_field_values' | 'application_custom_field_values';
+    applicationId: string;
+    values: Record<string, unknown> | undefined;
+    canEdit: boolean;
+    onSaved: () => void;
+}) {
+    const [defs, setDefs] = useState<CustomFieldDefinitionState[] | null>(null);
+    const [draft, setDraft] = useState<Record<string, string>>({});
+    const [saving, setSaving] = useState(false);
+    const [errors, setErrors] = useState<Record<string, string[]>>({});
+
+    useEffect(() => {
+        api.get<{ data: CustomFieldDefinitionState[] }>(`/custom-fields/${entityTypeUrl}`)
+            .then((response) => setDefs(response.data.data.filter((field) => field.status === 'active')))
+            .catch(() => {
+                // Non-fatal — the rest of the page still works if this
+                // fails (e.g. the viewer lacks custom_fields.view); the
+                // card simply doesn't render.
+            });
+    }, [entityTypeUrl]);
+
+    useEffect(() => {
+        const nextDraft: Record<string, string> = {};
+        Object.entries(values ?? {}).forEach(([key, value]) => {
+            nextDraft[key] = Array.isArray(value) ? value.join(',') : value === null || value === undefined ? '' : String(value);
+        });
+        setDraft(nextDraft);
+    }, [values]);
+
+    const submit = () => {
+        setSaving(true);
+        setErrors({});
+
+        const payload: Record<string, unknown> = {};
+        (defs ?? []).forEach((field) => {
+            const raw = draft[field.field_key] ?? '';
+            if (field.field_type === 'multi_select') {
+                payload[field.field_key] = raw === '' ? [] : raw.split(',').map((v) => v.trim()).filter(Boolean);
+            } else if (field.field_type === 'boolean') {
+                payload[field.field_key] = raw === 'true';
+            } else {
+                payload[field.field_key] = raw === '' ? null : raw;
+            }
+        });
+
+        api.patch(`/job-applications/${applicationId}`, { [payloadKey]: payload })
+            .then(() => onSaved())
+            .catch((err) => {
+                const apiError = toApiError(err);
+                if (redirectIfUnauthenticated(apiError)) return;
+                setErrors(apiError.errors ?? {});
+            })
+            .finally(() => setSaving(false));
+    };
+
+    if (defs === null || defs.length === 0) {
+        return null;
+    }
+
+    return (
+        <Card title={title}>
+            <div className="space-y-3">
+                {defs.map((field) => (
+                    <div key={field.field_key}>
+                        <label className="block text-sm font-medium text-slate-700">
+                            {field.label} {field.is_required && <span className="text-red-500">*</span>}
+                        </label>
+                        {canEdit ? (
+                            field.field_type === 'single_select' ? (
+                                <select
+                                    className="mt-1 block w-full rounded-md border-0 px-3 py-2 text-sm shadow-sm ring-1 ring-inset ring-slate-300"
+                                    value={draft[field.field_key] ?? ''}
+                                    onChange={(e) => setDraft({ ...draft, [field.field_key]: e.target.value })}
+                                >
+                                    <option value="">— None —</option>
+                                    {field.options.filter((o) => o.status === 'active').map((option) => (
+                                        <option key={option.option_key} value={option.option_key}>
+                                            {option.label}
+                                        </option>
+                                    ))}
+                                </select>
+                            ) : field.field_type === 'boolean' ? (
+                                <input
+                                    type="checkbox"
+                                    className="mt-1 block h-4 w-4"
+                                    checked={draft[field.field_key] === 'true'}
+                                    onChange={(e) => setDraft({ ...draft, [field.field_key]: e.target.checked ? 'true' : 'false' })}
+                                />
+                            ) : (
+                                <input
+                                    type={field.field_type === 'number' ? 'number' : field.field_type === 'date' ? 'date' : field.field_type === 'email' ? 'email' : field.field_type === 'url' ? 'url' : 'text'}
+                                    className="mt-1 block w-full rounded-md border-0 px-3 py-2 text-sm shadow-sm ring-1 ring-inset ring-slate-300"
+                                    value={draft[field.field_key] ?? ''}
+                                    onChange={(e) => setDraft({ ...draft, [field.field_key]: e.target.value })}
+                                />
+                            )
+                        ) : (
+                            <p className="mt-1 text-sm text-slate-900">{draft[field.field_key] || '—'}</p>
+                        )}
+                        <ErrorMessage message={errors[`${payloadKey}.${field.field_key}`]?.[0]} />
+                    </div>
+                ))}
+                {canEdit && (
+                    <div className="flex justify-end">
+                        <Button type="button" onClick={submit} disabled={saving}>
+                            {saving ? 'Saving…' : `Save ${title.toLowerCase()}`}
+                        </Button>
+                    </div>
+                )}
+            </div>
+        </Card>
+    );
+}
+
 export default function RecruitmentApplicationShow() {
     const { applicationId, tenant } = usePage<ShowProps>().props;
     const lifecycleEnabled = tenant?.modules?.lifecycle !== false;
@@ -77,14 +214,10 @@ export default function RecruitmentApplicationShow() {
     const [startingOnboarding, setStartingOnboarding] = useState(false);
     const [onboardingError, setOnboardingError] = useState<string | null>(null);
 
-    // Checkpoint 48 — active custom fields for the applicant. Fetched
-    // once (definitions rarely change mid-session); values themselves
-    // come from the application payload's applicant.custom_field_values.
+    // Checkpoint 48/49 — applicant-level and application-level custom
+    // fields both render via CustomFieldsCard below (see its own
+    // docblock); this page only needs the shared permission check.
     const canUpdateApplication = useCan('job_applications.update');
-    const [customFieldDefs, setCustomFieldDefs] = useState<CustomFieldDefinitionState[] | null>(null);
-    const [customFieldDraft, setCustomFieldDraft] = useState<Record<string, string>>({});
-    const [savingCustomFields, setSavingCustomFields] = useState(false);
-    const [customFieldErrors, setCustomFieldErrors] = useState<Record<string, string[]>>({});
 
     const load = useCallback(() => {
         setError(null);
@@ -101,13 +234,6 @@ export default function RecruitmentApplicationShow() {
                     position_id: prev.position_id || data.job?.position_id || '',
                     location_id: prev.location_id || data.job?.location_id || '',
                 }));
-
-                const values = data.applicant?.custom_field_values ?? {};
-                const draft: Record<string, string> = {};
-                Object.entries(values).forEach(([key, value]) => {
-                    draft[key] = Array.isArray(value) ? value.join(',') : value === null || value === undefined ? '' : String(value);
-                });
-                setCustomFieldDraft(draft);
             })
             .catch((err) => {
                 const apiError = toApiError(err);
@@ -138,42 +264,6 @@ export default function RecruitmentApplicationShow() {
                 // dropdowns just render empty besides "— None —".
             });
     }, []);
-
-    useEffect(() => {
-        api.get<{ data: CustomFieldDefinitionState[] }>('/custom-fields/recruitment_applicant')
-            .then((response) => setCustomFieldDefs(response.data.data.filter((field) => field.status === 'active')))
-            .catch(() => {
-                // Non-fatal — the applicant's own details/pipeline still
-                // work if this fails (e.g. the viewer lacks
-                // custom_fields.view); the card simply doesn't render.
-            });
-    }, []);
-
-    const submitCustomFields = () => {
-        setSavingCustomFields(true);
-        setCustomFieldErrors({});
-
-        const payload: Record<string, unknown> = {};
-        (customFieldDefs ?? []).forEach((field) => {
-            const raw = customFieldDraft[field.field_key] ?? '';
-            if (field.field_type === 'multi_select') {
-                payload[field.field_key] = raw === '' ? [] : raw.split(',').map((v) => v.trim()).filter(Boolean);
-            } else if (field.field_type === 'boolean') {
-                payload[field.field_key] = raw === 'true';
-            } else {
-                payload[field.field_key] = raw === '' ? null : raw;
-            }
-        });
-
-        api.patch(`/job-applications/${applicationId}`, { custom_field_values: payload })
-            .then(() => load())
-            .catch((err) => {
-                const apiError = toApiError(err);
-                if (redirectIfUnauthenticated(apiError)) return;
-                setCustomFieldErrors(apiError.errors ?? {});
-            })
-            .finally(() => setSavingCustomFields(false));
-    };
 
     const setConversionField = <K extends keyof ConversionFormPayload>(key: K, value: ConversionFormPayload[K]) => {
         setConversionForm((prev) => ({ ...prev, [key]: value }));
@@ -352,59 +442,25 @@ export default function RecruitmentApplicationShow() {
                     )}
                 </Card>
 
-                {customFieldDefs !== null && customFieldDefs.length > 0 && (
-                    <Card title="Custom fields">
-                        <div className="space-y-3">
-                            {customFieldDefs.map((field) => (
-                                <div key={field.field_key}>
-                                    <label className="block text-sm font-medium text-slate-700">
-                                        {field.label} {field.is_required && <span className="text-red-500">*</span>}
-                                    </label>
-                                    {canUpdateApplication ? (
-                                        field.field_type === 'single_select' ? (
-                                            <select
-                                                className="mt-1 block w-full rounded-md border-0 px-3 py-2 text-sm shadow-sm ring-1 ring-inset ring-slate-300"
-                                                value={customFieldDraft[field.field_key] ?? ''}
-                                                onChange={(e) => setCustomFieldDraft({ ...customFieldDraft, [field.field_key]: e.target.value })}
-                                            >
-                                                <option value="">— None —</option>
-                                                {field.options.filter((o) => o.status === 'active').map((option) => (
-                                                    <option key={option.option_key} value={option.option_key}>
-                                                        {option.label}
-                                                    </option>
-                                                ))}
-                                            </select>
-                                        ) : field.field_type === 'boolean' ? (
-                                            <input
-                                                type="checkbox"
-                                                className="mt-1 block h-4 w-4"
-                                                checked={customFieldDraft[field.field_key] === 'true'}
-                                                onChange={(e) => setCustomFieldDraft({ ...customFieldDraft, [field.field_key]: e.target.checked ? 'true' : 'false' })}
-                                            />
-                                        ) : (
-                                            <input
-                                                type={field.field_type === 'number' ? 'number' : field.field_type === 'date' ? 'date' : field.field_type === 'email' ? 'email' : field.field_type === 'url' ? 'url' : 'text'}
-                                                className="mt-1 block w-full rounded-md border-0 px-3 py-2 text-sm shadow-sm ring-1 ring-inset ring-slate-300"
-                                                value={customFieldDraft[field.field_key] ?? ''}
-                                                onChange={(e) => setCustomFieldDraft({ ...customFieldDraft, [field.field_key]: e.target.value })}
-                                            />
-                                        )
-                                    ) : (
-                                        <p className="mt-1 text-sm text-slate-900">{customFieldDraft[field.field_key] || '—'}</p>
-                                    )}
-                                    <ErrorMessage message={customFieldErrors[`custom_field_values.${field.field_key}`]?.[0]} />
-                                </div>
-                            ))}
-                            {canUpdateApplication && (
-                                <div className="flex justify-end">
-                                    <Button type="button" onClick={submitCustomFields} disabled={savingCustomFields}>
-                                        {savingCustomFields ? 'Saving…' : 'Save custom fields'}
-                                    </Button>
-                                </div>
-                            )}
-                        </div>
-                    </Card>
-                )}
+                <CustomFieldsCard
+                    title="Custom fields"
+                    entityTypeUrl="recruitment_applicant"
+                    payloadKey="custom_field_values"
+                    applicationId={applicationId}
+                    values={application.applicant?.custom_field_values}
+                    canEdit={canUpdateApplication}
+                    onSaved={load}
+                />
+
+                <CustomFieldsCard
+                    title="Application custom fields"
+                    entityTypeUrl="job_application"
+                    payloadKey="application_custom_field_values"
+                    applicationId={applicationId}
+                    values={application.custom_field_values}
+                    canEdit={canUpdateApplication}
+                    onSaved={load}
+                />
 
                 <Card title="Pipeline">
                     <PermissionGate

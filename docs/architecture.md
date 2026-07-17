@@ -3095,3 +3095,84 @@ entities support custom fields, and advanced field types — the
 current 50-field cap and single-entity MVP are deliberately simple
 placeholders for that later control, not the intended permanent
 shape.
+
+## Custom Fields for Job Applications (Checkpoint 49)
+
+The proof point for whether Checkpoint 48's engine actually honors
+`docs/platform-vision.md`'s "build once, reuse everywhere" principle:
+adding a second entity required **zero** changes to any migration,
+`CustomFieldDefinitionService`, `CustomFieldValueService`,
+`CustomFieldValueValidator`, or `CustomFieldAuditEvents` — only a new
+`CustomFieldEntity::JobApplication` case and this entity's own
+controller/resource/frontend wiring, exactly mirroring
+`RecruitmentApplicant`'s.
+
+**`job_application` maps to `App\Models\RecruitmentApplication`, not
+a second look at `RecruitmentApplicant`.** These are two different
+models: `RecruitmentApplicant` is the candidate's identity
+(first_name/email/phone/source, Checkpoint 48's target);
+`RecruitmentApplication` is the pipeline record itself (stage,
+status, cover_letter, ready_for_conversion,
+converted_employee_id/converted_at/converted_by,
+onboarding_process_id). The `job_applications.*` permission category
+and `job-applications` routes have always governed
+`RecruitmentApplication` — this checkpoint's entity target follows
+that existing naming, not a new one.
+
+**Two deliberately separate payload keys — never one merged object.**
+`PATCH /api/v1/job-applications/{id}` now accepts both
+`custom_field_values` (unchanged from Checkpoint 48 — the applicant's
+own fields) and `application_custom_field_values` (new — the
+application's own fields). Field keys are unique only per
+`(tenant, entity_type)`, not per tenant overall, so a tenant can
+validly define a `notes` field on both entities — a single shared
+payload object would have no way to say which entity a given key
+belongs to. Read side mirrors this: `JobApplicationResource` exposes
+`applicant.custom_field_values` (applicant-level) and a top-level
+`custom_field_values` (application-level) as two distinct maps.
+
+**No stage/status gate on this endpoint — confirmed by reading the
+code, not assumed — and this checkpoint does not add one.**
+`JobApplicationController::update()` has never restricted editing by
+`stage`/`status`; it allows changing `first_name`/`cover_letter`/etc.
+on a `hired`/`rejected`/`withdrawn`/`archived` application today.
+Custom field values inherit whatever the parent endpoint already
+does, since they're written through the exact same `update()` action
+— if a future checkpoint adds a stage/status gate there, custom
+fields inherit it automatically, with no separate bypass path to
+maintain.
+
+**Custom field values are never copied elsewhere.** Application
+custom fields stay on the `RecruitmentApplication` row.
+`convertToEmployee()` and `startOnboarding()` were not modified —
+neither reads nor writes `custom_field_values` today, so conversion
+never copies application fields onto the new `Employee`, and
+onboarding never copies them onto the new `LifecycleProcess`. A
+future mapping from application fields to employee fields (once
+Employee custom fields exist) needs its own separate, approved
+design.
+
+**Settings UI: simple tabs, not a dropdown.** `Settings/CustomFields.tsx`
+gained an `entityType` state and two tabs ("Recruitment Applicants" /
+"Job Applications") — a dropdown would be over-engineering for
+exactly two supported entities. Switching tabs discards any
+in-progress create/edit form state, since it belonged to the
+previous tab's entity.
+
+**`ApplicationShow.tsx`'s duplicated custom-field-editing logic was
+extracted into one shared `CustomFieldsCard` component**, parameterized
+by entity URL segment, payload key, and the values to render — used
+twice on the same page (once per entity) rather than duplicating the
+~80 lines of state/fetch/submit logic a second time.
+
+### Future
+
+Per `docs/platform-vision.md`: `lifecycle_processes`/`leave_requests`
+next, `employees` last (once field-level visibility and sensitive
+access design are stronger — unaffected by this checkpoint); a real
+field-level read permission; a form/page designer; workflow
+conditions/reports/dashboards/AI filters querying `custom_field_values`
+generically across all entity types at once; a controlled, audited
+application-field-to-employee-field mapping once Employee custom
+fields exist; configuration export/import; and package/entitlement
+limits.

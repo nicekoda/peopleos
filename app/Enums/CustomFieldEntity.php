@@ -3,6 +3,7 @@
 namespace App\Enums;
 
 use App\Models\RecruitmentApplicant;
+use App\Models\RecruitmentApplication;
 
 /**
  * Checkpoint 48 — the backend-defined allowlist of entities that support
@@ -11,18 +12,24 @@ use App\Models\RecruitmentApplicant;
  * `CustomFieldDefinitionController` resolves this via `tryFrom()` and
  * returns 422 on an unknown value, never a route-model-binding 404.
  *
- * MVP ships exactly one case (RecruitmentApplicant) per the approved
- * checkpoint scope — Employees is deliberately deferred until the engine
- * has real field experience elsewhere (see docs/architecture.md).
+ * Checkpoint 49 added `JobApplication` (App\Models\RecruitmentApplication
+ * — the pipeline/stage record, distinct from RecruitmentApplicant, the
+ * candidate's identity) as entity #2, adding no changes to any
+ * migration, model cast, or custom-field service — proof the engine
+ * generalizes across entities without a storage redesign. Employees is
+ * still deliberately deferred until the engine has more field
+ * experience and field-level visibility exists (see docs/architecture.md).
  */
 enum CustomFieldEntity: string
 {
     case RecruitmentApplicant = 'recruitment_applicant';
+    case JobApplication = 'job_application';
 
     public function label(): string
     {
         return match ($this) {
             self::RecruitmentApplicant => 'Recruitment Applicant',
+            self::JobApplication => 'Job Application',
         };
     }
 
@@ -33,6 +40,7 @@ enum CustomFieldEntity: string
     {
         return match ($this) {
             self::RecruitmentApplicant => RecruitmentApplicant::class,
+            self::JobApplication => RecruitmentApplication::class,
         };
     }
 
@@ -45,7 +53,7 @@ enum CustomFieldEntity: string
     public function valueViewPermission(): string
     {
         return match ($this) {
-            self::RecruitmentApplicant => 'job_applications.view',
+            self::RecruitmentApplicant, self::JobApplication => 'job_applications.view',
         };
     }
 
@@ -56,7 +64,7 @@ enum CustomFieldEntity: string
     public function valueUpdatePermission(): string
     {
         return match ($this) {
-            self::RecruitmentApplicant => 'job_applications.update',
+            self::RecruitmentApplicant, self::JobApplication => 'job_applications.update',
         };
     }
 
@@ -80,12 +88,18 @@ enum CustomFieldEntity: string
             // own columns; status/stage belong to the sibling
             // RecruitmentApplication row but are reserved here too since
             // both are conceptually "this applicant's pipeline state" from
-            // a tenant admin's point of view, and job_applications (the
-            // next entity in the roadmap) will need them reserved anyway.
+            // a tenant admin's point of view.
             self::RecruitmentApplicant => [
                 'id', 'tenant_id', 'first_name', 'last_name', 'email', 'phone', 'source',
                 'created_at', 'updated_at', 'created_by', 'updated_by', 'deleted_at',
                 'status', 'stage',
+            ],
+            // RecruitmentApplication's own real columns (Checkpoint 49).
+            self::JobApplication => [
+                'id', 'tenant_id', 'recruitment_job_id', 'recruitment_applicant_id',
+                'stage', 'status', 'resume_document_id', 'cover_letter', 'ready_for_conversion',
+                'converted_employee_id', 'converted_at', 'converted_by', 'onboarding_process_id',
+                'created_at', 'updated_at', 'created_by', 'updated_by', 'deleted_at',
             ],
         };
 

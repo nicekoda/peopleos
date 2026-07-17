@@ -5884,6 +5884,82 @@ exist; configuration export/import; and a package/entitlement layer
 controlling field counts, supported entities, and advanced field
 types.
 
+## Custom Fields for Job Applications (Checkpoint 49)
+
+See
+[`architecture.md`](architecture.md#custom-fields-for-job-applications-checkpoint-49)
+for the technical design. This section covers what changed (and
+didn't) from a security standpoint by adding a second entity.
+
+### No new security surface — the second entity reuses every existing control
+
+`custom_fields.view`/`.manage` still gate definitions only, unchanged.
+Values are still gated entirely by the owning entity's own
+permission — `job_applications.view`/`.update`, the same permissions
+already governing `RecruitmentApplication` itself (not a new
+permission, since this entity was already `RecruitmentApplication`
+under a different name in the permission catalog). No new
+value-permission axis was created. Tenant isolation, classification-
+aware audit masking, and the `DB::transaction()` safety fixed in
+Checkpoint 48 all apply identically — they live in the shared
+services, which this checkpoint did not touch.
+
+### Two independent payload keys — checked to confirm no cross-entity leak is possible
+
+`custom_field_values` (applicant) and `application_custom_field_values`
+(application) are validated completely independently —
+`CustomFieldValueService::setValuesFor()` is called twice, once per
+entity, each call only ever resolving field keys against that
+specific entity's own tenant-scoped active definitions. A field key
+belonging to the wrong entity is rejected as "not an active custom
+field for this entity" — the identical 422 an unknown key would get,
+both directions (a `recruitment_applicant` field is rejected via
+`application_custom_field_values`, and vice versa) — proven directly
+in `CustomFieldJobApplicationValueApiTest`.
+
+### Stage/status: an explicit finding, not a new decision
+
+`JobApplicationController::update()` was directly re-read (not
+assumed) before this checkpoint: it has never gated editing by
+`stage`/`status`. An application at `hired`/`rejected`/`withdrawn`,
+or with `status: archived`, can still have its `cover_letter` or
+`first_name` edited today. Custom field values — both entities' —
+inherit this exact same (currently unrestricted) behavior, since they
+write through the same `update()` action. This is stated here
+explicitly so it's never mistaken for a considered security boundary
+this checkpoint added or relied on — it's an existing, pre-checkpoint
+characteristic of the endpoint.
+
+### Conversion and onboarding: verified, not assumed, to leave custom fields untouched
+
+`JobApplicationController::convertToEmployee()` and
+`::startOnboarding()` were read in full before this checkpoint — neither
+references `custom_field_values` anywhere. A direct test
+(`test_conversion_does_not_copy_application_custom_fields_to_employee`)
+asserts no `custom_field_values` row is ever created against the new
+`Employee`'s ID after a conversion that had application-level custom
+field values set beforehand — proving the non-copy behavior, not just
+assuming it from the absence of code that would do the copying.
+
+### Current limitations
+
+Same as Checkpoint 48's, now applying to both entities: no
+field-level read permission (sensitivity still masks audit logs
+only); no safe field-type migration path; no field-key rename; the
+same flat 50-field cap per `(tenant, entity_type)`. `employees` is
+still deliberately deferred until field-level visibility and
+sensitive-access design are stronger — this checkpoint does not
+change that timeline.
+
+### Future
+
+Same as Checkpoint 48's Future list, now shared across both entities:
+field-level visibility, a form/page designer, workflow/report/
+dashboard/AI-filter integration, configuration export/import, and
+package/entitlement limits. Additionally: a controlled, audited
+application-field-to-employee-field mapping, once Employee custom
+fields exist and a real design for that mapping is approved.
+
 ## Local Demo Credentials
 
 **Local development only — these are not real secrets and only work against your own local database.** Password comes from `SEED_USER_PASSWORD` in `.env` (not committed; `.env.example` has an empty placeholder).
@@ -5913,7 +5989,7 @@ data these six `uesl` logins see (Checkpoint 26's `DemoDataSeeder`).
 - No email verification enforcement on login (column exists, not yet checked).
 - Password reset exists as of Checkpoint 44 (the `password_reset_tokens` table, previously unused, now backs a real forgot-password flow) — see [Password Reset](#password-reset-checkpoint-44) below. An invite-email flow (built on the same token table) exists as of Checkpoint 46 — see [Invite-Email Flow for New Accounts](#invite-email-flow-for-new-accounts-checkpoint-46) below. Still no MFA or SSO.
 - A backend module registry (`recruitment`, `lifecycle`, `leave`, `documents`, `policies`, `hr_documents` toggleable per tenant) and a narrow branding surface (display name, logo, two colors) exist as of Checkpoint 47 — see [Module Registry & Branding Foundation](#module-registry--branding-foundation-checkpoint-47) below and `docs/platform-vision.md` for the long-term platform direction this checkpoint is the first foundation of. Still no entitlement/subscription layer sitting in front of enablement.
-- A tenant-scoped custom fields engine (EAV-leaning hybrid: `custom_field_definitions`/`custom_field_options`/`custom_field_validation_rules`/`custom_field_values`) exists as of Checkpoint 48, for `recruitment_applicant` only — see [Custom Fields Foundation](#custom-fields-foundation-checkpoint-48) below. Sensitivity classification affects audit masking only, not read access, yet. `job_applications`/`lifecycle_processes`/`leave_requests`/`employees` are a documented future roadmap, not built yet.
+- A tenant-scoped custom fields engine (EAV-leaning hybrid: `custom_field_definitions`/`custom_field_options`/`custom_field_validation_rules`/`custom_field_values`) exists as of Checkpoint 48 (`recruitment_applicant`) and Checkpoint 49 (`job_application`, i.e. `App\Models\RecruitmentApplication`) — see [Custom Fields Foundation](#custom-fields-foundation-checkpoint-48) and [Custom Fields for Job Applications](#custom-fields-for-job-applications-checkpoint-49) below. No schema or core-service change was needed to add the second entity. Sensitivity classification affects audit masking only, not read access, yet. `lifecycle_processes`/`leave_requests`/`employees` are a documented future roadmap, not built yet — `employees` deliberately last, once field-level visibility exists.
 - This app's first scheduled task exists as of Checkpoint 45 (`lifecycle:send-task-digest`, registered via `bootstrap/app.php`'s `->withSchedule()`) — see [Lifecycle Task Ordering & Reminders](#lifecycle-task-ordering--reminders-checkpoint-45) below. Production deployments must now add a `php artisan schedule:run` cron entry, which was never required before this checkpoint (see `docs/deployment.md` §6). Still no queued jobs anywhere in the app.
 - `DatabaseSeeder` uses `WithoutModelEvents`, which disables the `saving`/`creating` guards (on `User` and `Role`) during seeding. `UserSeeder`/`RoleSeeder` set `tenant_id`/`is_platform_admin`/`is_platform_role` explicitly on every row regardless, so this doesn't cause incorrect data — but it does mean a same-row consistency mistake in seed data would surface as a raw Postgres constraint error rather than the cleaner app-level exception. (The RBAC *assignment* guards — `assignRole()`, `givePermissionTo()`, `grantPermission()` — and audit logging calls are unaffected by this, since they're plain method logic, not Eloquent events.)
 - See "Current limitations" under Audit Logging above for the audit-specific gaps (no read endpoint, `givePermissionTo()`/tenant CRUD not logged yet).

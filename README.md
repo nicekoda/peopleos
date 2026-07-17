@@ -785,6 +785,23 @@ raw SQL. See `docs/architecture.md` for the full design, including a
 pre-existing `route:audit-module-gates` matching bug found and fixed
 while wiring this checkpoint's routes.
 
+## Custom Fields for Job Applications (Checkpoint 49)
+
+The reusability proof for Checkpoint 48's engine: **Job Applications**
+(`App\Models\RecruitmentApplication` — the pipeline record, distinct
+from the applicant's own identity) is now the second supported
+custom-field entity, added with zero changes to any migration or the
+shared `CustomFieldDefinitionService`/`CustomFieldValueService`/
+`CustomFieldValueValidator`/`CustomFieldAuditEvents` — only a new
+`CustomFieldEntity` case and this entity's own controller/resource/
+frontend wiring. Values use a second, deliberately separate payload
+key (`application_custom_field_values`, alongside Checkpoint 48's
+`custom_field_values`) so the same field key can exist independently
+on both entities without collision. Conversion to Employee and the
+onboarding handoff both leave application custom fields exactly where
+they are — never copied elsewhere, since Employee custom fields don't
+exist yet. See `docs/architecture.md` for the full design.
+
 ## Documentation
 
 - [`docs/platform-vision.md`](docs/platform-vision.md) — the long-term product/architecture vision (platform kernel, module layer, subscription/entitlement model, event-driven architecture, AI governance) that every checkpoint's design should be checked against. Not tied to a checkpoint; update it when the vision changes, not when a feature ships.

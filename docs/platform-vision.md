@@ -497,6 +497,49 @@ Next: `job_applications` (near-zero engine work), then
 `lifecycle_processes`/`leave_requests`, `employees` last — followed by
 Field-Level Visibility, then Custom Forms, per the roadmap above.
 
+**Checkpoint 49 — Custom Fields for Job Applications — completed,
+and the reusability claim above is now verified, not just asserted.**
+Added `job_application` (`App\Models\RecruitmentApplication`, the
+pipeline record — distinct from `RecruitmentApplicant`, the
+applicant's identity, which Checkpoint 48 targeted) as entity #2, with:
+
+- **No schema change.** No new migration; `custom_field_definitions`/
+  `custom_field_options`/`custom_field_validation_rules`/
+  `custom_field_values` were untouched.
+- **No change to any shared service.** `CustomFieldDefinitionService`,
+  `CustomFieldValueService`, `CustomFieldValueValidator`, and
+  `CustomFieldAuditEvents` were not modified at all — only a new
+  `CustomFieldEntity::JobApplication` case, plus this entity's own
+  controller/resource/frontend wiring (mirroring
+  `RecruitmentApplicant`'s exactly).
+- **One real design decision, not a mechanical extension**: two
+  independent payload keys (`custom_field_values` for the applicant,
+  `application_custom_field_values` for the application) rather than
+  one merged object, since a field key can validly exist on both
+  entities independently — the read shape mirrors this
+  (`applicant.custom_field_values` vs. a top-level
+  `custom_field_values`).
+- **No new bypass path.** `JobApplicationController::update()` has no
+  stage/status edit gate today — confirmed by reading the code, not
+  assumed — and custom fields inherit that exact (currently
+  unrestricted) behavior, since they write through the same action. If
+  a future checkpoint adds a stage/status gate there, custom fields
+  inherit it automatically.
+- **Custom fields never copied elsewhere.** Confirmed directly (a real
+  test, not just an absence of copying code) that candidate-to-employee
+  conversion and the onboarding handoff both leave application custom
+  fields exactly where they are — `employees` still has no custom-field
+  support, so there is nothing to map to yet; that mapping needs its
+  own separate, approved design once Employee custom fields exist.
+- All 16 new tests passed on the first run; all 157 existing
+  recruitment + custom-field tests passed unchanged.
+
+`employees` remains deliberately deferred until field-level
+visibility and sensitive-access design are stronger — this
+checkpoint's success doesn't change that; if anything it confirms the
+engine is ready to reach `employees` once that separate prerequisite
+work is done, not before.
+
 ## Final product promise
 
 > One secure platform connecting people, workflows, services, assets,

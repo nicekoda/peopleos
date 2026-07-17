@@ -1689,6 +1689,40 @@ commit. A new regression test
 `assertDatabaseMissing()` after both failure modes — checking the
 database state directly, not just the response code.
 
+## The reusability test: adding a second custom-field entity, and what it did (and didn't) touch (Checkpoint 49)
+
+Checkpoint 48's plan explicitly framed adding `job_application` as
+entity #2 as a test of the engine's design, not just a feature
+addition — "if adding entity #2 requires touching the value-storage
+engine at all, the design has failed its own goal." Worth recording
+what actually happened: `CustomFieldEntity` gained one new case;
+`RecruitmentApplication` gained one relation method; `UpdateJobApplicationRequest`
+gained one new validation rule; `JobApplicationController::update()`
+gained one new `CustomFieldValueService::setValuesFor()` call;
+`JobApplicationResource` gained one new `getActiveValuesFor()` call.
+No migration, no change to `CustomFieldDefinitionService`,
+`CustomFieldValueService`, `CustomFieldValueValidator`, or
+`CustomFieldAuditEvents`. All 16 new tests
+(`CustomFieldJobApplicationValueApiTest`) passed on the first run, and
+all 157 existing recruitment + custom-field tests passed unchanged —
+a genuine, not merely claimed, reusability proof.
+
+## Ambiguous payload keys deserve their own test, not just documentation (Checkpoint 49)
+
+Since a field key like `notes` can validly exist on both
+`recruitment_applicant` and `job_application` independently, the real
+risk wasn't "does the feature work" but "can one entity's write ever
+be silently applied to, or read from, the other." Three tests target
+this directly rather than trusting the two-separate-payload-keys
+design by inspection alone:
+`test_recruitment_applicant_field_rejected_via_application_payload_key`
+and its mirror both assert a definite `422` (never a silent
+misapplication), and `test_same_field_key_on_both_entities_does_not_collide`
+sets the *same* key on both entities in one request and asserts both
+values land in their own distinct place in the response —
+proving the disambiguation holds under the adversarial case the
+design was specifically built to handle, not just the happy path.
+
 ## Known limitations
 
 - No test coverage reporting configured yet.

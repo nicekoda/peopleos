@@ -4,6 +4,7 @@ namespace App\Models;
 
 use App\Enums\ApplicationStage;
 use App\Enums\ApplicationStatus;
+use App\Enums\CustomFieldEntity;
 use App\Models\Concerns\BelongsToTenant;
 use Illuminate\Database\Eloquent\Concerns\HasUlids;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -98,5 +99,17 @@ class RecruitmentApplication extends Model
     public function onboardingProcess(): BelongsTo
     {
         return $this->belongsTo(LifecycleProcess::class, 'onboarding_process_id');
+    }
+
+    /**
+     * Checkpoint 49 — custom field values for this application itself
+     * (distinct from the applicant's own, on RecruitmentApplicant). Same
+     * manual entity_type/entity_id scoping as RecruitmentApplicant's own
+     * relation — see CustomFieldValue's docblock.
+     */
+    public function customFieldValues(): HasMany
+    {
+        return $this->hasMany(CustomFieldValue::class, 'entity_id')
+            ->where('entity_type', CustomFieldEntity::JobApplication->value);
     }
 }

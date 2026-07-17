@@ -57,6 +57,10 @@ export interface JobApplication {
     } | null;
     stage: ApplicationStage;
     status: ApplicationStatus;
+    // Checkpoint 49 — this application's own active custom fields,
+    // field_key => value. Distinct from applicant.custom_field_values
+    // above, which belongs to the applicant, not the application.
+    custom_field_values?: Record<string, unknown>;
     resume_document_id: string | null;
     cover_letter: string | null;
     ready_for_conversion: boolean;

@@ -16,9 +16,14 @@ import {
     CUSTOM_FIELD_TYPES,
 } from '@/types/customField';
 
-// Checkpoint 48 MVP ships exactly one entity — see docs/architecture.md
-// for the roadmap (job_applications next, employees last).
-const ENTITY_TYPE = 'recruitment_applicant';
+// Checkpoint 49 added Job Application as entity #2 — simple tabs, not a
+// dropdown, since only two entities are supported (decision 5). See
+// docs/architecture.md for the roadmap (lifecycle_processes/leave_requests
+// next, employees last).
+const ENTITY_TABS: { value: string; label: string }[] = [
+    { value: 'recruitment_applicant', label: 'Recruitment Applicants' },
+    { value: 'job_application', label: 'Job Applications' },
+];
 
 interface FieldFormState {
     field_key: string;
@@ -78,6 +83,7 @@ function PreviewInput({ fieldType, defaultValue, options }: { fieldType: string;
 export default function SettingsCustomFields() {
     const canManage = useCan('custom_fields.manage');
 
+    const [entityType, setEntityType] = useState(ENTITY_TABS[0].value);
     const [fields, setFields] = useState<CustomFieldDefinitionState[] | null>(null);
     const [error, setError] = useState<ApiError | null>(null);
     const [showCreate, setShowCreate] = useState(false);
@@ -90,7 +96,7 @@ export default function SettingsCustomFields() {
 
     const load = useCallback(() => {
         setError(null);
-        api.get<{ data: CustomFieldDefinitionState[] }>(`/custom-fields/${ENTITY_TYPE}`)
+        api.get<{ data: CustomFieldDefinitionState[] }>(`/custom-fields/${entityType}`)
             .then((response) => setFields(response.data.data))
             .catch((err) => {
                 const apiError = toApiError(err);
@@ -98,9 +104,16 @@ export default function SettingsCustomFields() {
                     setError(apiError);
                 }
             });
-    }, []);
+    }, [entityType]);
 
     useEffect(() => {
+        // Switching tabs discards any in-progress create/edit state —
+        // it belongs to the previous entity's fields, not this one.
+        setShowCreate(false);
+        setCreateForm(emptyForm);
+        setCreateErrors({});
+        setEditingId(null);
+        setFields(null);
         load();
     }, [load]);
 
@@ -111,7 +124,7 @@ export default function SettingsCustomFields() {
         setSaving(true);
         setCreateErrors({});
 
-        api.post(`/custom-fields/${ENTITY_TYPE}`, {
+        api.post(`/custom-fields/${entityType}`, {
             field_key: createForm.field_key,
             label: createForm.label,
             description: createForm.description || null,
@@ -216,13 +229,32 @@ export default function SettingsCustomFields() {
 
             <PageHeader
                 title="Custom Fields"
-                description="Tenant-defined fields for recruitment applicants. Disabling a field preserves its existing values — it just stops appearing on the application form."
+                description="Tenant-defined fields for recruitment. Disabling a field preserves its existing values — it just stops appearing on the entity's own form."
                 actions={
                     <Link href="/settings" className="text-sm font-medium text-indigo-600 hover:text-indigo-500">
                         Back to Settings
                     </Link>
                 }
             />
+
+            <div className="mb-6 border-b border-slate-200">
+                <nav className="-mb-px flex gap-6">
+                    {ENTITY_TABS.map((tab) => (
+                        <button
+                            key={tab.value}
+                            type="button"
+                            onClick={() => setEntityType(tab.value)}
+                            className={`border-b-2 px-1 py-3 text-sm font-medium ${
+                                entityType === tab.value
+                                    ? 'border-indigo-600 text-indigo-600'
+                                    : 'border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-700'
+                            }`}
+                        >
+                            {tab.label}
+                        </button>
+                    ))}
+                </nav>
+            </div>
 
             {error && <div className="mb-4 rounded-md bg-red-50 px-4 py-3 text-sm text-red-700">{error.message}</div>}
 

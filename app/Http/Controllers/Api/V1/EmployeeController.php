@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api\V1;
 
+use App\Enums\CustomFieldEntity;
 use App\Enums\EmployeeStatus;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Employee\StoreEmployeeRequest;
@@ -10,6 +11,7 @@ use App\Http\Resources\EmployeeResource;
 use App\Models\Employee;
 use App\Models\Tenant;
 use App\Services\Audit\AuditLogger;
+use App\Services\CustomFields\CustomFieldValueService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
@@ -73,8 +75,11 @@ class EmployeeController extends Controller
         $this->ensureBelongsToCurrentTenant($employee);
 
         $originalValues = $employee->getOriginal();
+        $validated = $request->validated();
 
-        $employee->fill($request->validated());
+        // custom_field_values isn't in Employee::$fillable, so fill()
+        // silently ignores it here — handled separately below.
+        $employee->fill($validated);
         $employee->updated_by = $request->user()->id;
         $employee->save();
 
@@ -94,6 +99,23 @@ class EmployeeController extends Controller
                 newValues: $changes,
                 ipAddress: $request->ip(),
                 userAgent: $request->userAgent(),
+            );
+        }
+
+        // Checkpoint 51 — piggybacks on this existing, already tenant/
+        // permission-checked endpoint rather than a new top-level values
+        // API, same "reuse the owning entity's own endpoint" pattern
+        // Checkpoints 48/49 already established. No stage/status-style
+        // gate exists on this endpoint, so custom field values are
+        // editable under exactly the same conditions as every other
+        // field above.
+        if (array_key_exists('custom_field_values', $validated)) {
+            app(CustomFieldValueService::class)->setValuesFor(
+                tenantId: $employee->tenant_id,
+                entityType: CustomFieldEntity::Employee,
+                entityId: $employee->id,
+                rawValues: $validated['custom_field_values'],
+                actor: $request->user(),
             );
         }
 

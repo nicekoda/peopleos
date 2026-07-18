@@ -831,6 +831,47 @@ user's own tier access. See `docs/architecture.md` for the full
 design, including why a configurable rules engine is a later
 checkpoint, not this one.
 
+## Employee Custom Fields (Checkpoint 51)
+
+**Employee** (`App\Models\Employee`) is now the third supported
+custom-field entity — the same zero-schema, zero-service-change proof
+as Checkpoint 49, now against the platform's most sensitive core
+table, with the Checkpoint 50 field-level visibility model already in
+place from day one (no field-level access gap ever existed for
+Employee custom fields). Values are read/written through the existing
+`employees` endpoints (`employees.view`/`employees.update`), gated by
+the same three sensitivity-tier permissions
+(`custom_fields.access_sensitive`/`access_confidential`/`access_restricted`)
+as the other two entities — Employee introduces no new permission
+concept. Reserved keys were derived from the real `employees` table
+schema (not assumed), including its relation names
+(`department`/`location`/`position`/`manager`) alongside the real
+columns, so a tenant can never shadow either a real column or the
+nested objects `EmployeeResource` already returns.
+
+A real bug was found and fixed while wiring this checkpoint: the
+`custom-fields/{entityType}` routes were hardcoded to require the
+Recruitment module, correct only while every supported entity
+belonged to Recruitment. Since Employees is a core, never-toggleable
+module, this would have incorrectly blocked Employee custom fields
+for any tenant with Recruitment disabled. Fixed with
+`CustomFieldEntity::requiredModule(): ?TenantModule`, checked at
+runtime in `CustomFieldDefinitionController` instead of a static route
+middleware — `null` for Employee, `TenantModule::Recruitment` for the
+other two, and the pattern every future entity (`lifecycle_processes`,
+`leave_requests`) will use for its own module requirement.
+
+`employees.view_sensitive` (the existing system-field mechanism
+gating `personal_email`/`phone`) and the new
+`custom_fields.access_sensitive/confidential/restricted` permissions
+are deliberately kept separate — they gate different things (fixed
+system columns vs. tenant-defined custom fields) and never interact.
+`employees.view_sensitive`'s own pre-existing write-side gap (no
+separate permission gates *writing* `personal_email`/`phone` today) is
+real but out of scope here — logged as a future security-hardening
+candidate, not fixed as part of this checkpoint. See
+`docs/architecture.md` for the full design.
+
 ## Documentation
 
 - [`docs/platform-vision.md`](docs/platform-vision.md) — the long-term product/architecture vision (platform kernel, module layer, subscription/entitlement model, event-driven architecture, AI governance) that every checkpoint's design should be checked against. Not tied to a checkpoint; update it when the vision changes, not when a feature ships.

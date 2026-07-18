@@ -1,11 +1,12 @@
 import { Head, Link, usePage } from '@inertiajs/react';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import AppLayout from '@/Layouts/AppLayout';
 import PageHeader from '@/Components/PageHeader';
 import Card from '@/Components/Card';
 import Badge from '@/Components/Badge';
 import LoadingState from '@/Components/LoadingState';
 import PermissionGate from '@/Components/PermissionGate';
+import CustomFieldsCard from '@/Components/CustomFieldsCard';
 import { useCan } from '@/hooks/useCan';
 import { api, toApiError, redirectIfUnauthenticated, ApiError } from '@/lib/api';
 import { Employee } from '@/types/employee';
@@ -60,7 +61,7 @@ export default function EmployeesShow() {
     const [employee, setEmployee] = useState<Employee | null>(null);
     const [error, setError] = useState<ApiError | null>(null);
 
-    useEffect(() => {
+    const load = useCallback(() => {
         api.get<{ data: Employee }>(`/employees/${employeeId}`)
             .then((response) => setEmployee(response.data.data))
             .catch((err) => {
@@ -70,6 +71,10 @@ export default function EmployeesShow() {
                 }
             });
     }, [employeeId]);
+
+    useEffect(() => {
+        load();
+    }, [load]);
 
     if (error) {
         return (
@@ -187,6 +192,17 @@ export default function EmployeesShow() {
                         <SensitiveField label="Phone" value={employee.phone} canView={canViewSensitive} />
                     </dl>
                 </Card>
+
+                <div className="sm:col-span-2">
+                    <CustomFieldsCard
+                        title="Custom fields"
+                        entityTypeUrl="employee"
+                        endpointUrl={`/employees/${employee.id}`}
+                        payloadKey="custom_field_values"
+                        values={employee.custom_field_values}
+                        onSaved={load}
+                    />
+                </div>
 
                 <Card title="User account" className="sm:col-span-2">
                     {employee.linked_user ? (

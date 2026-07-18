@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Enums\CustomFieldEntity;
 use App\Enums\EmployeeStatus;
 use App\Enums\EmploymentType;
 use App\Models\Concerns\BelongsToTenant;
@@ -104,6 +105,16 @@ class Employee extends Model
     public function documents(): HasMany
     {
         return $this->hasMany(EmployeeDocument::class);
+    }
+
+    /**
+     * Checkpoint 51 — entity #3 for the custom-fields engine, mirroring
+     * RecruitmentApplicant's own relation exactly.
+     */
+    public function customFieldValues(): HasMany
+    {
+        return $this->hasMany(CustomFieldValue::class, 'entity_id')
+            ->where('entity_type', CustomFieldEntity::Employee->value);
     }
 
     public function policyAcknowledgements(): HasMany

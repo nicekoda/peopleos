@@ -2,6 +2,8 @@
 
 namespace App\Http\Resources;
 
+use App\Enums\CustomFieldEntity;
+use App\Services\CustomFields\CustomFieldValueService;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 
@@ -11,7 +13,9 @@ class EmployeeResource extends JsonResource
      * personal_email and phone are treated as sensitive — visible only
      * with employees.view_sensitive, on top of the employees.view already
      * required to reach this resource at all. work_email is business
-     * contact info, not gated.
+     * contact info, not gated. This is a fixed system-field mechanism,
+     * deliberately separate from custom_field_values below (Checkpoint
+     * 51) — the two never interact; see docs/architecture.md.
      *
      * @return array<string, mixed>
      */
@@ -71,6 +75,17 @@ class EmployeeResource extends JsonResource
             'confirmation_date' => $this->confirmation_date?->toDateString(),
             'created_at' => $this->created_at?->toIso8601String(),
             'updated_at' => $this->updated_at?->toIso8601String(),
+            // Checkpoint 51 — this employee's own active custom field
+            // values (field_key => value); a disabled field or one the
+            // viewer lacks tier access to is omitted, never a null-but-
+            // present key or the raw value — same mechanism already
+            // proven for recruitment_applicant/job_application.
+            'custom_field_values' => app(CustomFieldValueService::class)->getActiveValuesFor(
+                $this->tenant_id,
+                CustomFieldEntity::Employee,
+                $this->id,
+                $request->user(),
+            ),
         ];
     }
 }

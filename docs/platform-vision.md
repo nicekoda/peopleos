@@ -611,6 +611,62 @@ isolation, audit logs for rule changes themselves, safe defaults, and
 a defined fallback to these platform sensitivity permissions when no
 rule applies.
 
+**Checkpoint 51 — Employee Custom Fields Foundation — completed.**
+Delivered exactly the entity the Checkpoint 50 recommendation above
+named as next: `Employee` (`App\Models\Employee`) as entity #3 for the
+custom-fields engine, proving the reusability claim a second time
+(after Checkpoint 49's `job_application`) against the platform's most
+sensitive core table, with the field-level visibility model already
+in place from the start rather than retrofitted:
+
+- **No schema/service change** — identical proof to Checkpoint 49:
+  one new `CustomFieldEntity` case, one new model relation, one new
+  validation rule, one new service call each in the controller and
+  resource. `CustomFieldDefinitionService`, `CustomFieldValueService`,
+  `CustomFieldValueValidator`, `CustomFieldAuditEvents` untouched.
+- **A real, previously-undetected bug found and fixed**: the
+  `custom-fields/*` routes' `module:recruitment` gate was hardcoded,
+  correct only because every entity that existed until now belonged
+  to Recruitment. Since Employees is core (never toggleable), this
+  would have blocked Employee custom fields for any tenant with
+  Recruitment disabled. Fixed with
+  `CustomFieldEntity::requiredModule(): ?TenantModule`, checked at
+  runtime instead of a route-level literal — the exact "entity-type-aware"
+  fix Checkpoint 48's own code comments had already flagged as a future
+  requirement. Every future entity belonging to a different toggleable
+  module declares its own requirement through this same method.
+- **`employees.view_sensitive` and `custom_fields.access_*` kept
+  deliberately separate** — confirmed by direct inspection that
+  merging them would conflate two structurally different mechanisms
+  (a fixed system-column gate vs. a tenant-defined-field tier gate).
+  Not merged, not changed. `employees.view_sensitive`'s own pre-existing
+  write-side gap was found (again, by direct inspection, not
+  assumption) but deliberately left unfixed — logged as a named future
+  candidate ("Employee System Sensitive Field Write Protection") since
+  redesigning existing Employee system-field permissions is a
+  different problem from adding Employee custom fields.
+- **Reserved keys corrected against the real schema** — an earlier
+  draft list included several column names that don't exist in the
+  actual `employees` table (`job_title`, `hire_date`, `termination_date`,
+  `manager_id`); the shipped list was read directly from the migration
+  instead.
+- **Frontend component extracted, not duplicated a third time** —
+  `CustomFieldsCard` moved from an inline definition in
+  `ApplicationShow.tsx` to `resources/js/Components/CustomFieldsCard.tsx`,
+  generalized via an `endpointUrl` prop rather than an assumption baked
+  into the component. Recruitment's own two usages are behaviorally
+  unchanged.
+- All 21 new tests passed on the first run; the full CustomFields (93
+  tests), Employees (92 tests), Recruitment, and TenantModule suites
+  all passed unchanged.
+
+`lifecycle_processes`/`leave_requests` remain next per the roadmap.
+Whether configurable field-visibility rules (Checkpoint 53 candidate
+per the recommendation above) get prioritized ahead of Custom Forms
+still depends on real usage evidence from Employee custom fields in
+practice — this checkpoint's own implementation didn't surface a need
+for one, but that's not the same as ruling one out.
+
 ## Final product promise
 
 > One secure platform connecting people, workflows, services, assets,

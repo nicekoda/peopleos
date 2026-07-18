@@ -23,6 +23,7 @@ import {
 const ENTITY_TABS: { value: string; label: string }[] = [
     { value: 'recruitment_applicant', label: 'Recruitment Applicants' },
     { value: 'job_application', label: 'Job Applications' },
+    { value: 'employee', label: 'Employees' },
 ];
 
 interface FieldFormState {

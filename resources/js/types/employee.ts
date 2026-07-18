@@ -40,6 +40,11 @@ export interface Employee {
     confirmation_date: string | null;
     created_at: string | null;
     updated_at: string | null;
+    // Checkpoint 51 — this employee's own active custom field values
+    // (field_key => value); a disabled field or one the viewer lacks
+    // tier access to is simply absent, same as recruitment_applicant/
+    // job_application already work.
+    custom_field_values?: Record<string, unknown>;
 }
 
 export interface PaginatedResponse<T> {

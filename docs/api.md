@@ -415,17 +415,28 @@ this was a gap in the audit's own coverage, not a real access-control
 hole (the live smoke test in Checkpoint 47 already proved the
 middleware itself works).
 
-## Custom Fields (Checkpoint 48, extended Checkpoint 49, field-level access Checkpoint 50)
+## Custom Fields (Checkpoint 48, extended Checkpoint 49/51, field-level access Checkpoint 50)
 
 Backend-owned field definitions per entity, plus their values exposed
 through the owning entity's own endpoints — no standalone values API.
 See `docs/architecture.md#custom-fields-foundation-checkpoint-48`,
 `docs/architecture.md#custom-fields-for-job-applications-checkpoint-49`,
-and `docs/architecture.md#field-level-visibility-and-sensitive-field-access-checkpoint-50`
+`docs/architecture.md#field-level-visibility-and-sensitive-field-access-checkpoint-50`,
+and `docs/architecture.md#employee-custom-fields-checkpoint-51`
 for the full design. Supported entities: `recruitment_applicant`
-(the candidate's identity) and `job_application` (the pipeline
-record, `App\Models\RecruitmentApplication`) — the same `{entityType}`
-route serves both, just with a different value.
+(the candidate's identity), `job_application` (the pipeline record,
+`App\Models\RecruitmentApplication`), and `employee`
+(`App\Models\Employee`) — the same `{entityType}` route serves all
+three, just with a different value.
+
+**No static `module:{key}` gate on these routes as of Checkpoint 51**
+— which module (if any) an entity requires is resolved at runtime from
+`CustomFieldEntity::requiredModule()` (`recruitment_applicant`/
+`job_application` → Recruitment; `employee` → none, Employees is core)
+rather than a single route-level literal, since these three routes now
+serve entities that don't all belong to the same module. A disabled
+required module still produces the identical `403` shape as before
+(`{"message": "This module is not enabled for your organisation.", "reason": "module_disabled"}`).
 
 | Method | Path | Permission | Notes |
 |---|---|---|---|
@@ -575,6 +586,45 @@ or `archived` can still have its fields (including both custom-field
 payload keys) updated. Custom field values inherit this exactly,
 since they're written through the same action.
 
+### Employee values (Checkpoint 51)
+
+`Employee` uses a single payload key, `custom_field_values` — unlike
+`job_application`, it has no nested sibling entity, so there's no
+same-field-key collision risk to disambiguate with a second key:
+
+```json
+// PATCH /api/v1/employees/{employee} — permission: employees.update
+{
+  "custom_field_values": {
+    "uniform_size": "L"
+  }
+}
+```
+
+```json
+// GET /api/v1/employees/{employee} — permission: employees.view
+{
+  "data": {
+    "id": "01h...",
+    "first_name": "...",
+    "custom_field_values": {
+      "uniform_size": "L"
+    }
+  }
+}
+```
+
+Same rules as the other two entities: only active fields are
+returned/writable; a value the requester lacks tier access to is
+omitted from the read and rejected with `403` on write; an unknown
+`field_key` (including a `recruitment_applicant`/`job_application`
+field submitted here, or an `employee` field submitted to
+`job-applications`) returns `422`. `employees.view_sensitive` — the
+existing gate over the system columns `personal_email`/`phone` — has
+no relationship to `custom_field_values` at all; a sensitive/
+confidential/restricted Employee custom field is governed solely by
+`custom_fields.access_sensitive`/`access_confidential`/`access_restricted`.
+
 ## Audit Logs
 
 Read-only (Checkpoint 24) — no create/update/delete route exists
@@ -694,10 +744,15 @@ all). Every other field is always present when known.
     "probation_end_date": null,
     "confirmation_date": null,
     "created_at": "2026-07-02T00:00:00+00:00",
-    "updated_at": "2026-07-02T00:00:00+00:00"
+    "updated_at": "2026-07-02T00:00:00+00:00",
+    "custom_field_values": {}
   }
 }
 ```
+
+**`custom_field_values` (Checkpoint 51)** — see [Custom Fields](#custom-fields-checkpoint-48-extended-checkpoint-4951-field-level-access-checkpoint-50)
+above for the full read/write shape, permission model, and how this is
+entirely separate from `employees.view_sensitive`.
 
 **`linked_user` — added Checkpoint 43.** `null` unless a `User` account
 is already linked, otherwise `{"id": 7, "name": "Jane Doe"}` — mirrors

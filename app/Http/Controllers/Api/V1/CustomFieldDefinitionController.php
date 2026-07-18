@@ -10,6 +10,7 @@ use App\Http\Resources\CustomFieldDefinitionResource;
 use App\Models\CustomFieldDefinition;
 use App\Models\Tenant;
 use App\Services\CustomFields\CustomFieldDefinitionService;
+use App\Services\TenantModuleService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
@@ -20,12 +21,23 @@ use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
  * route-model-binding 404, same posture TenantModuleController already
  * established for `$moduleKey`. Definitions are never hard-deleted —
  * only enabled/disabled via `update()`'s `status` field (decision 12).
+ *
+ * Checkpoint 51 — module enforcement moved here from a hardcoded
+ * `module:recruitment` route middleware, which was only ever correct
+ * because both entities that existed at the time (recruitment_applicant,
+ * job_application) belong to Recruitment. `CustomFieldEntity::requiredModule()`
+ * is the real per-entity source of truth now (null for Employee, a core/
+ * never-toggleable module) — every future entity declares its own
+ * requirement there instead of a route-level guess. Same 403 response
+ * shape `EnsureModuleEnabled` already produces, so existing frontend
+ * error handling for a disabled module needs no changes.
  */
 class CustomFieldDefinitionController extends Controller
 {
     public function index(Request $request, string $entityType): AnonymousResourceCollection
     {
         $entity = $this->resolveEntityType($entityType);
+        $this->ensureModuleEnabled($entity);
 
         $definitions = CustomFieldDefinition::query()
             ->where('entity_type', $entity->value)
@@ -39,6 +51,7 @@ class CustomFieldDefinitionController extends Controller
     public function store(StoreCustomFieldDefinitionRequest $request, string $entityType, CustomFieldDefinitionService $service): JsonResponse
     {
         $entity = $this->resolveEntityType($entityType);
+        $this->ensureModuleEnabled($entity);
         $validated = $request->validated();
 
         $definition = $service->create(
@@ -56,6 +69,7 @@ class CustomFieldDefinitionController extends Controller
     public function update(UpdateCustomFieldDefinitionRequest $request, CustomFieldDefinition $customFieldDefinition, CustomFieldDefinitionService $service): CustomFieldDefinitionResource
     {
         $this->ensureBelongsToCurrentTenant($customFieldDefinition);
+        $this->ensureModuleEnabled($customFieldDefinition->entity_type);
 
         $validated = $request->validated();
 
@@ -76,6 +90,24 @@ class CustomFieldDefinitionController extends Controller
         abort_if($entity === null, 422, 'Unknown or unsupported entity type.');
 
         return $entity;
+    }
+
+    /**
+     * Runs after tenant/entity resolution, before any definition read or
+     * write — mirrors EnsureModuleEnabled's own check and response shape
+     * exactly, just resolved from the entity's own declared requirement
+     * instead of a route-config-time literal.
+     */
+    private function ensureModuleEnabled(CustomFieldEntity $entity): void
+    {
+        $module = $entity->requiredModule();
+
+        if ($module !== null && ! app(TenantModuleService::class)->isEnabled($module)) {
+            abort(response()->json([
+                'message' => 'This module is not enabled for your organisation.',
+                'reason' => 'module_disabled',
+            ], 403));
+        }
     }
 
     /**

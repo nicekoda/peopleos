@@ -129,12 +129,20 @@ enum TenantModule: string
     public function routeGroupPrefixes(): array
     {
         return match ($this) {
-            // Checkpoint 48 — custom-fields is gated by module:recruitment
-            // only because the sole CustomFieldEntity case today
-            // (recruitment_applicant) belongs to this module; this must
-            // become entity-type-aware once a second, differently-gated
-            // entity is added (see docs/architecture.md).
-            self::Recruitment => ['job-openings', 'job-applications', 'recruitment', 'custom-fields', 'settings/custom-fields'],
+            // Checkpoint 51 — custom-fields/settings/custom-fields are
+            // deliberately NOT listed here anymore: those routes now
+            // serve multiple entities that don't all belong to
+            // Recruitment (Employee belongs to no toggleable module at
+            // all), so a single static module:{key} gate on them would
+            // be wrong for at least one entity. Module enforcement for
+            // custom-fields moved to a runtime check in
+            // CustomFieldDefinitionController, keyed off each entity's
+            // own CustomFieldEntity::requiredModule() — see
+            // docs/architecture.md. This audit command only verifies
+            // routes that DO belong to one specific module; it
+            // intentionally has no opinion on routes like these that
+            // are correctly module-agnostic at the route level.
+            self::Recruitment => ['job-openings', 'job-applications', 'recruitment'],
             self::Lifecycle => ['lifecycle-processes', 'lifecycle-tasks', 'lifecycle', 'settings/lifecycle-task-templates'],
             self::Leave => ['leave-types', 'leave-requests', 'leave-balances', 'leave', 'settings/leave-types'],
             self::Documents => ['employees/{employee}/documents', 'document-categories', 'documents', 'settings/document-categories'],

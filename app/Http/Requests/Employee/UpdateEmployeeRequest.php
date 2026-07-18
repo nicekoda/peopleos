@@ -104,6 +104,11 @@ class UpdateEmployeeRequest extends FormRequest
             'start_date' => ['nullable', 'date'],
             'probation_end_date' => ['nullable', 'date', 'after_or_equal:start_date'],
             'confirmation_date' => ['nullable', 'date'],
+            // Checkpoint 51 — actual per-key validation (format, required,
+            // option/tier access) happens in CustomFieldValueService/
+            // CustomFieldValueValidator, not here — this only accepts the
+            // shape.
+            'custom_field_values' => ['sometimes', 'array'],
         ];
     }
 }

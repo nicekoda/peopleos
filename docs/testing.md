@@ -1762,6 +1762,39 @@ directly and fetch the real `uesl` tenant's `HR Director`/`HR Manager`/
 to HR Director without updating this decision) fails a test, rather
 than passing silently.
 
+## A pre-existing test's fixture became a false negative once its "unsupported" example became real (Checkpoint 51)
+
+`CustomFieldDefinitionApiTest::test_unknown_entity_type_is_rejected_with_422`
+predates `employee` existing as a `CustomFieldEntity` case and used
+`custom-fields/employee` as its example of an unsupported entity type.
+Adding `Employee` in Checkpoint 51 flipped that assertion from
+correct to wrong — `POST custom-fields/employee` legitimately started
+returning `201` instead of `422`, which is the right new behavior, not
+a regression. Same lesson as Checkpoint 50's audit-masking test fix:
+before "fixing" a newly-failing pre-existing test, check whether the
+system's behavior changed correctly out from under the test's own
+example data. Fixed by swapping the example to a still-genuinely
+fictional entity type (`lifecycle_process`) rather than loosening the
+assertion — the test keeps proving exactly what it always proved.
+
+## Proving a runtime module-gate replaces a static one, not just moves the bug (Checkpoint 51)
+
+Removing the hardcoded `module:recruitment` middleware from the
+`custom-fields/*` routes and replacing it with a runtime
+`CustomFieldEntity::requiredModule()` check could easily have been
+"fixed" in a way that silently broke the *other* direction — e.g. by
+accident, checking the wrong entity's module requirement, or by
+forgetting to check at all for one of the three actions
+(`index`/`store`/`update`). A single test proving "Employee custom
+fields still work with Recruitment disabled" would not have caught
+that regression on its own. `CustomFieldEmployeeValueApiTest` pairs it
+with the opposite assertion in the same spirit as the tenant-isolation
+tests elsewhere in this suite: `test_job_application_custom_fields_blocked_when_recruitment_module_disabled`
+proves the *other* two entities still correctly depend on the module,
+in the same test run, against the same disabled-module tenant state —
+proving the fix actually discriminates per entity, not just that it
+stopped blocking Employee.
+
 ## Known limitations
 
 - No test coverage reporting configured yet.

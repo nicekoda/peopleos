@@ -110,7 +110,11 @@ class CustomFieldDefinitionApiTest extends TestCase
         $user = $this->userWithPermissions($tenant, 'custom_fields.view', 'custom_fields.manage');
 
         $this->actingAs($user)->getJson($this->url($tenant, 'custom-fields/not_a_real_entity'))->assertStatus(422);
-        $this->actingAs($user)->postJson($this->url($tenant, 'custom-fields/employee'), [
+        // employee became a real, supported entity in Checkpoint 51 —
+        // using a genuinely fictional entity type here instead, so this
+        // test keeps proving "unknown entity type rejected" rather than
+        // accidentally asserting employee support doesn't exist.
+        $this->actingAs($user)->postJson($this->url($tenant, 'custom-fields/lifecycle_process'), [
             'field_key' => 'x',
             'label' => 'X',
             'field_type' => 'text',

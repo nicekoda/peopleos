@@ -363,15 +363,18 @@ Route::middleware(['auth', 'tenant.matches'])->prefix('api/v1')->group(function 
 
     // Checkpoint 48 — Custom Fields Foundation. {entityType} is a plain
     // string, resolved/validated inside the controller (422 on unknown,
-    // never a 404) — same posture as {moduleKey} above. Gated by
-    // module:recruitment since the only entity today (recruitment_applicant)
-    // belongs to that module; this becomes entity-type-aware once a
-    // second, differently-gated entity is added (see docs/architecture.md).
-    // custom_fields.manage controls definitions only — reading/writing
-    // an entity's own values stays gated by that entity's own permission
-    // (job_applications.view/.update above), never a second value
+    // never a 404) — same posture as {moduleKey} above. Checkpoint 51 —
+    // no static module:{key} gate here anymore: which module (if any)
+    // must be enabled is entity-type-aware, resolved at runtime from
+    // CustomFieldEntity::requiredModule() inside the controller itself,
+    // since a single route can no longer assume every entity it serves
+    // belongs to the same module (Employee belongs to none — a core,
+    // never-toggleable module). custom_fields.manage controls
+    // definitions only — reading/writing an entity's own values stays
+    // gated by that entity's own permission (job_applications.view/
+    // .update/employees.view/.update above), never a second value
     // permission axis.
-    Route::get('custom-fields/{entityType}', [CustomFieldDefinitionController::class, 'index'])->middleware(['module:recruitment', 'permission:custom_fields.view']);
-    Route::post('custom-fields/{entityType}', [CustomFieldDefinitionController::class, 'store'])->middleware(['module:recruitment', 'permission:custom_fields.manage']);
-    Route::patch('custom-fields/{customFieldDefinition}', [CustomFieldDefinitionController::class, 'update'])->middleware(['module:recruitment', 'permission:custom_fields.manage']);
+    Route::get('custom-fields/{entityType}', [CustomFieldDefinitionController::class, 'index'])->middleware(['permission:custom_fields.view']);
+    Route::post('custom-fields/{entityType}', [CustomFieldDefinitionController::class, 'store'])->middleware(['permission:custom_fields.manage']);
+    Route::patch('custom-fields/{customFieldDefinition}', [CustomFieldDefinitionController::class, 'update'])->middleware(['permission:custom_fields.manage']);
 });

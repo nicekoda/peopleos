@@ -3318,3 +3318,156 @@ to bypass parent-entity access. A future system-field (not just
 custom-field) visibility feature could reuse the same
 `hasTierAccess()` primitive this checkpoint introduced, since it was
 deliberately written generically rather than custom-field-specific.
+
+## Employee Custom Fields (Checkpoint 51)
+
+`Employee` (`App\Models\Employee`) is entity #3 for the custom-fields
+engine — the reusability proof from Checkpoint 49 repeated a second
+time, now against the platform's most sensitive core table, with the
+Checkpoint 50 field-level visibility model already in place from the
+very first line of code (unlike Checkpoint 48/49's own field-level
+visibility gap, which existed until Checkpoint 50 closed it
+retroactively — Employee custom fields never had that gap at all).
+
+**Zero schema/service change, confirmed the same way as Checkpoint
+49.** `CustomFieldEntity` gained one new case; `Employee` gained one
+relation method (`customFieldValues()`, mirroring
+`RecruitmentApplicant`'s); `UpdateEmployeeRequest` gained one new
+validation rule; `EmployeeController::update()` gained one new
+`CustomFieldValueService::setValuesFor()` call; `EmployeeResource`
+gained one new `getActiveValuesFor()` call. No migration, no change to
+`CustomFieldDefinitionService`, `CustomFieldValueService`,
+`CustomFieldValueValidator`, or `CustomFieldAuditEvents`.
+
+**Parent permission mapping**: `employees.view` gates reading Employee
+custom field values (via `CustomFieldEntity::valueViewPermission()`),
+`employees.update` gates writing them
+(`valueUpdatePermission()`) — confirmed by directly reading
+`routes/api.php` before assuming, the same posture as Checkpoint 49's
+`job_applications.view`/`.update` mapping. Sensitivity tiers layer on
+top exactly as Checkpoint 50 defined: `normal` needs only the parent
+permission; `sensitive`/`confidential`/`restricted` additionally need
+`custom_fields.access_sensitive`/`access_confidential`/`access_restricted`,
+with no implied hierarchy between them. No new permission concept was
+introduced for Employee — it reuses the identical tier model
+unchanged.
+
+### A real gap found and fixed: the `custom-fields/*` routes' module gate wasn't entity-aware
+
+`routes/api.php`'s three `custom-fields/*` routes, and
+`routes/web.php`'s `settings/custom-fields` page route, were hardcoded
+to `module:recruitment` — correct only because every entity that
+existed until now (`recruitment_applicant`, `job_application`)
+belonged to Recruitment. `Employee` belongs to no toggleable module at
+all (`TenantModule::Employees` is core, and
+`TenantModuleService::isEnabled()` returns `true` unconditionally for
+any non-toggleable module) — left unfixed, a tenant that disabled
+Recruitment would have been unable to create, view, or manage Employee
+custom field definitions at all, a real functional bug this
+checkpoint's own scope would otherwise have shipped into, not a
+hypothetical.
+
+**Fix**: `CustomFieldEntity::requiredModule(): ?TenantModule` is now
+the single source of truth for which module (if any) an entity
+requires — `TenantModule::Recruitment` for `RecruitmentApplicant`/
+`JobApplication`, `null` for `Employee`. The static `module:recruitment`
+middleware was removed from all four routes (three API, one web page);
+`CustomFieldDefinitionController` now checks the requirement at
+runtime (`index()`/`store()` resolve it from the `$entityType` route
+parameter, `update()` resolves it from the definition's own
+`entity_type`), producing the identical 403 response shape
+`EnsureModuleEnabled` already used, so no frontend error-handling
+change was needed. `TenantModule::routeGroupPrefixes()`'s `Recruitment`
+case no longer lists `custom-fields`/`settings/custom-fields` — those
+routes are correctly module-agnostic at the route level now, and
+`route:audit-module-gates` (which only asserts routes that *do*
+belong to one specific module carry that gate) has no opinion on them,
+by design. A direct regression test
+(`test_employee_custom_fields_work_when_recruitment_module_disabled`/
+`test_job_application_custom_fields_blocked_when_recruitment_module_disabled`)
+proves both halves of the fix, not just the Employee side. Every
+future entity belonging to a different toggleable module
+(`lifecycle_processes` → Lifecycle, `leave_requests` → Leave) declares
+its own requirement through this same method — no further route-layer
+redesign needed.
+
+### `employees.view_sensitive` vs. `custom_fields.access_*` — deliberately separate, never merged
+
+These gate two structurally different things and must not be
+confused: `employees.view_sensitive` is a fixed, hand-rolled gate over
+exactly two **system columns** (`personal_email`, `phone`), enforced
+entirely inside `EmployeeResource` — read-only, with no independent
+write-side check (`UpdateEmployeeRequest`/`EmployeeController::update()`
+confirmed to have none). `custom_fields.access_sensitive/confidential/
+restricted` gate **tenant-defined custom fields only**, enforced
+identically for both read and write in `CustomFieldValueService`. A
+tenant could define an Employee custom field named
+`emergency_contact_note` with `sensitivity: sensitive` — its
+visibility is governed solely by `custom_fields.access_sensitive`,
+with zero interaction with `employees.view_sensitive`. This checkpoint
+does not change `employees.view_sensitive`'s behavior at all.
+
+**Future security-hardening candidate, explicitly not fixed here**:
+`employees.view_sensitive`'s write-side gap (any holder of
+`employees.update` can write `personal_email`/`phone` blind, without
+also needing `employees.view_sensitive`) is real, but redesigning
+existing Employee system-field permissions is out of this checkpoint's
+scope — logged for a future checkpoint that might introduce
+`employees.update_sensitive` or equivalent backend enforcement,
+deliberately not solved as a side effect of adding custom fields.
+
+### Reserved keys — derived from the real schema, not assumed
+
+`CustomFieldEntity::Employee`'s `reservedFieldKeys()` lists every real
+`employees` column (`id`, `tenant_id`, `employee_number`, `first_name`,
+`middle_name`, `last_name`, `preferred_name`, `work_email`,
+`personal_email`, `phone`, `status`, `employment_type`,
+`department_id`, `location_id`, `position_id`, `manager_employee_id`,
+`start_date`, `probation_end_date`, `confirmation_date`, `user_id`,
+`linked_at`, `linked_by`, `created_at`, `updated_at`, `created_by`,
+`updated_by`, `deleted_at`), read directly from the migration rather
+than assumed — several names in an earlier draft (`job_title`,
+`department`, `location`, `hire_date`, `termination_date`, `manager_id`)
+don't match the actual schema and were corrected. Relation names
+(`department`, `location`, `position`, `manager`) are reserved
+alongside their `_id` columns, defensively — a custom field literally
+named `department` would otherwise read confusingly next to the real
+nested `department` object `EmployeeResource` already returns.
+
+### No recruitment-to-employee custom-field copying
+
+Unchanged from Checkpoint 49's own non-copy guarantee:
+`JobApplicationController::convertToEmployee()` still doesn't
+reference `custom_field_values` anywhere, so recruitment custom fields
+(applicant or application) are never copied onto the new `Employee`
+row on conversion. Employee custom fields are entirely separate,
+employee-scoped values from day one. A future application-to-employee
+field mapping remains its own separate, approved design, unaffected by
+this checkpoint.
+
+### Frontend: `CustomFieldsCard` extracted to a shared component
+
+`CustomFieldsCard` (previously defined inline inside
+`ApplicationShow.tsx`, used twice for the two recruitment entities) is
+now `resources/js/Components/CustomFieldsCard.tsx`, reused a third
+time by `Employees/Show.tsx` rather than duplicated again. Generalized
+via an `endpointUrl` prop (was hardcoded to
+`` /job-applications/${applicationId} `` internally) and a widened
+`payloadKey: string` (was a two-literal union type specific to
+recruitment). Recruitment's own usage is behaviorally unchanged — both
+`ApplicationShow.tsx` call sites now pass `endpointUrl` explicitly but
+submit to the same endpoint and payload keys as before. Employee's
+usage needs only one payload key (`custom_field_values`) since,
+unlike `JobApplication`, `Employee` has no nested sibling entity by
+which the same field key could collide.
+
+### Future
+
+Same as Checkpoint 48/49's Future list, now shared across all three
+entities: a real field-level *system*-field visibility feature (reusing
+`hasTierAccess()`), a form/page designer, workflow/report/dashboard/
+AI-filter integration querying `custom_field_values` generically,
+configuration export/import, and package/entitlement limits.
+Additionally: the `employees.view_sensitive` write-side hardening
+candidate noted above; `lifecycle_processes`/`leave_requests` remain
+next per the roadmap, each declaring its own `requiredModule()`.

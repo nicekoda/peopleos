@@ -2,7 +2,7 @@
 
 namespace App\Http\Controllers\Api\V1;
 
-use App\Enums\CustomFieldEntity;
+use App\Http\Controllers\Concerns\EnsuresCustomFieldEntityModuleEnabled;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\CustomFields\StoreCustomFieldDefinitionRequest;
 use App\Http\Requests\CustomFields\UpdateCustomFieldDefinitionRequest;
@@ -10,7 +10,6 @@ use App\Http\Resources\CustomFieldDefinitionResource;
 use App\Models\CustomFieldDefinition;
 use App\Models\Tenant;
 use App\Services\CustomFields\CustomFieldDefinitionService;
-use App\Services\TenantModuleService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
@@ -34,6 +33,8 @@ use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
  */
 class CustomFieldDefinitionController extends Controller
 {
+    use EnsuresCustomFieldEntityModuleEnabled;
+
     public function index(Request $request, string $entityType): AnonymousResourceCollection
     {
         $entity = $this->resolveEntityType($entityType);
@@ -82,32 +83,6 @@ class CustomFieldDefinitionController extends Controller
         );
 
         return new CustomFieldDefinitionResource($definition);
-    }
-
-    private function resolveEntityType(string $entityType): CustomFieldEntity
-    {
-        $entity = CustomFieldEntity::tryFrom($entityType);
-        abort_if($entity === null, 422, 'Unknown or unsupported entity type.');
-
-        return $entity;
-    }
-
-    /**
-     * Runs after tenant/entity resolution, before any definition read or
-     * write — mirrors EnsureModuleEnabled's own check and response shape
-     * exactly, just resolved from the entity's own declared requirement
-     * instead of a route-config-time literal.
-     */
-    private function ensureModuleEnabled(CustomFieldEntity $entity): void
-    {
-        $module = $entity->requiredModule();
-
-        if ($module !== null && ! app(TenantModuleService::class)->isEnabled($module)) {
-            abort(response()->json([
-                'message' => 'This module is not enabled for your organisation.',
-                'reason' => 'module_disabled',
-            ], 403));
-        }
     }
 
     /**

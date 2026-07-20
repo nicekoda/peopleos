@@ -186,6 +186,11 @@ Route::middleware(['auth', 'tenant.matches'])->group(function () {
     Route::get('settings/custom-fields', [SettingsController::class, 'customFields'])
         ->middleware(['permission:custom_fields.view'])->name('settings.custom-fields');
 
+    // Checkpoint 52 — Custom Forms Foundation. Same "no static module
+    // gate" reasoning as settings/custom-fields above.
+    Route::get('settings/custom-forms', [SettingsController::class, 'customForms'])
+        ->middleware(['permission:custom_forms.view'])->name('settings.custom-forms');
+
     // Safe "coming later" placeholders — same pattern originally used
     // for Documents/Policies in Checkpoint 16, each gated by the
     // existing permission closest to that section's real future data,

@@ -128,9 +128,17 @@ const sections: Section[] = [
     {
         key: 'custom_fields',
         title: 'Custom Fields',
-        description: 'Manage tenant-defined fields for recruitment applicants.',
+        description: 'Manage tenant-defined fields for recruitment applicants, job applications, and employees.',
         href: '/settings/custom-fields',
         permission: 'custom_fields.view',
+        comingLater: false,
+    },
+    {
+        key: 'custom_forms',
+        title: 'Custom Forms',
+        description: 'Group existing custom fields into sections for display on an entity’s own page.',
+        href: '/settings/custom-forms',
+        permission: 'custom_forms.view',
         comingLater: false,
     },
     {

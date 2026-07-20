@@ -2,6 +2,9 @@
 
 use App\Http\Controllers\Api\V1\AuditLogController;
 use App\Http\Controllers\Api\V1\CustomFieldDefinitionController;
+use App\Http\Controllers\Api\V1\CustomFormController;
+use App\Http\Controllers\Api\V1\CustomFormFieldController;
+use App\Http\Controllers\Api\V1\CustomFormSectionController;
 use App\Http\Controllers\Api\V1\DashboardController;
 use App\Http\Controllers\Api\V1\DepartmentController;
 use App\Http\Controllers\Api\V1\DocumentCategoryController;
@@ -377,4 +380,28 @@ Route::middleware(['auth', 'tenant.matches'])->prefix('api/v1')->group(function 
     Route::get('custom-fields/{entityType}', [CustomFieldDefinitionController::class, 'index'])->middleware(['permission:custom_fields.view']);
     Route::post('custom-fields/{entityType}', [CustomFieldDefinitionController::class, 'store'])->middleware(['permission:custom_fields.manage']);
     Route::patch('custom-fields/{customFieldDefinition}', [CustomFieldDefinitionController::class, 'update'])->middleware(['permission:custom_fields.manage']);
+
+    // Checkpoint 52 — Custom Forms Foundation. A form/section/field is
+    // metadata only — grouping/labeling/ordering existing custom
+    // fields, never a second read/write path for values. No static
+    // module:{key} gate here either, same reasoning as custom-fields
+    // above — module requirement is resolved at runtime per entity via
+    // CustomFieldEntity::requiredModule(). custom_forms.manage controls
+    // form/section/field configuration only; submitting values through
+    // an entity's own endpoint (e.g. PATCH /employees/{employee}) stays
+    // gated entirely by that entity's own parent permission plus
+    // custom-field tier access — no custom_forms.submit exists.
+    // No separate GET {customForm} "show" route: index() already eager-
+    // loads every form's full sections.fields.customFieldDefinition tree,
+    // so a per-form fetch would just be redundant — and a second GET
+    // route sharing the same single-segment URI shape as {entityType}
+    // above would never be reachable anyway (Laravel matches the first
+    // registered route for an identical URI pattern).
+    Route::get('custom-forms/{entityType}', [CustomFormController::class, 'index'])->middleware(['permission:custom_forms.view']);
+    Route::post('custom-forms/{entityType}', [CustomFormController::class, 'store'])->middleware(['permission:custom_forms.manage']);
+    Route::patch('custom-forms/{customForm}', [CustomFormController::class, 'update'])->middleware(['permission:custom_forms.manage']);
+    Route::post('custom-forms/{customForm}/sections', [CustomFormSectionController::class, 'store'])->middleware(['permission:custom_forms.manage']);
+    Route::patch('custom-form-sections/{customFormSection}', [CustomFormSectionController::class, 'update'])->middleware(['permission:custom_forms.manage']);
+    Route::post('custom-form-sections/{customFormSection}/fields', [CustomFormFieldController::class, 'store'])->middleware(['permission:custom_forms.manage']);
+    Route::patch('custom-form-fields/{customFormField}', [CustomFormFieldController::class, 'update'])->middleware(['permission:custom_forms.manage']);
 });

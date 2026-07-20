@@ -190,6 +190,10 @@ class RoleSeeder extends Seeder
             // omission. .access_confidential/.access_restricted remain
             // Tenant-Admin-only.
             'custom_fields.access_sensitive',
+            // Checkpoint 52 — Custom Forms Foundation. View only, not
+            // manage (Tenant-Admin-only), mirroring custom_fields.view's
+            // exact same posture immediately above.
+            'custom_forms.view',
         ]);
 
         // Checkpoint 34 — HR Director previously had no permissions

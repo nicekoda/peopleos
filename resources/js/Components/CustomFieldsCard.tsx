@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import Card from '@/Components/Card';
 import Button from '@/Components/Button';
 import ErrorMessage from '@/Components/ErrorMessage';
+import CustomFieldInput from '@/Components/CustomFieldInput';
 import { api, toApiError, redirectIfUnauthenticated } from '@/lib/api';
 import { CustomFieldDefinitionState } from '@/types/customField';
 
@@ -25,6 +26,10 @@ import { CustomFieldDefinitionState } from '@/types/customField';
  * UX only — the frontend never receives a value it can't view in the
  * first place; the backend (CustomFieldValueService) is what actually
  * enforces this.
+ *
+ * Checkpoint 52 — per-field-type input rendering is now the shared
+ * CustomFieldInput component, also used by CustomFormRenderer, rather
+ * than a switch duplicated in both places.
  */
 export default function CustomFieldsCard({
     title,
@@ -105,38 +110,12 @@ export default function CustomFieldsCard({
                         <label className="block text-sm font-medium text-slate-700">
                             {field.label} {field.is_required && <span className="text-red-500">*</span>}
                         </label>
-                        {field.can_edit ? (
-                            field.field_type === 'single_select' ? (
-                                <select
-                                    className="mt-1 block w-full rounded-md border-0 px-3 py-2 text-sm shadow-sm ring-1 ring-inset ring-slate-300"
-                                    value={draft[field.field_key] ?? ''}
-                                    onChange={(e) => setDraft({ ...draft, [field.field_key]: e.target.value })}
-                                >
-                                    <option value="">— None —</option>
-                                    {field.options.filter((o) => o.status === 'active').map((option) => (
-                                        <option key={option.option_key} value={option.option_key}>
-                                            {option.label}
-                                        </option>
-                                    ))}
-                                </select>
-                            ) : field.field_type === 'boolean' ? (
-                                <input
-                                    type="checkbox"
-                                    className="mt-1 block h-4 w-4"
-                                    checked={draft[field.field_key] === 'true'}
-                                    onChange={(e) => setDraft({ ...draft, [field.field_key]: e.target.checked ? 'true' : 'false' })}
-                                />
-                            ) : (
-                                <input
-                                    type={field.field_type === 'number' ? 'number' : field.field_type === 'date' ? 'date' : field.field_type === 'email' ? 'email' : field.field_type === 'url' ? 'url' : 'text'}
-                                    className="mt-1 block w-full rounded-md border-0 px-3 py-2 text-sm shadow-sm ring-1 ring-inset ring-slate-300"
-                                    value={draft[field.field_key] ?? ''}
-                                    onChange={(e) => setDraft({ ...draft, [field.field_key]: e.target.value })}
-                                />
-                            )
-                        ) : (
-                            <p className="mt-1 text-sm text-slate-900">{draft[field.field_key] || '—'}</p>
-                        )}
+                        <CustomFieldInput
+                            field={field}
+                            value={draft[field.field_key] ?? ''}
+                            onChange={(value) => setDraft({ ...draft, [field.field_key]: value })}
+                            canEdit={field.can_edit}
+                        />
                         <ErrorMessage message={errors[`${payloadKey}.${field.field_key}`]?.[0]} />
                     </div>
                 ))}

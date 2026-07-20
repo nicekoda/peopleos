@@ -7,6 +7,7 @@ import Badge from '@/Components/Badge';
 import LoadingState from '@/Components/LoadingState';
 import PermissionGate from '@/Components/PermissionGate';
 import CustomFieldsCard from '@/Components/CustomFieldsCard';
+import CustomFormRenderer from '@/Components/CustomFormRenderer';
 import { useCan } from '@/hooks/useCan';
 import { api, toApiError, redirectIfUnauthenticated, ApiError } from '@/lib/api';
 import { Employee } from '@/types/employee';
@@ -193,7 +194,18 @@ export default function EmployeesShow() {
                     </dl>
                 </Card>
 
-                <div className="sm:col-span-2">
+                <div className="sm:col-span-2 space-y-4">
+                    {/* Checkpoint 52 — deliberately rendered alongside
+                        CustomFieldsCard, not instead of it, per the
+                        approved MVP decision: a field assigned to a
+                        form may appear in both places until the forms
+                        approach is proven. */}
+                    <CustomFormRenderer
+                        entityTypeUrl="employee"
+                        endpointUrl={`/employees/${employee.id}`}
+                        values={employee.custom_field_values}
+                        onSaved={load}
+                    />
                     <CustomFieldsCard
                         title="Custom fields"
                         entityTypeUrl="employee"

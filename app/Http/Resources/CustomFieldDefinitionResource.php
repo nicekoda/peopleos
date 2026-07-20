@@ -2,6 +2,7 @@
 
 namespace App\Http\Resources;
 
+use App\Services\CustomFields\CustomFieldAccessResolver;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 
@@ -21,7 +22,10 @@ use Illuminate\Http\Resources\Json\JsonResource;
  * (CustomFieldSensitivity::requiredAccessPermission()). Never a stored
  * value, never cached — this is pure UX metadata for the frontend to
  * decide what to render; the backend enforcement that actually matters
- * lives in CustomFieldValueService, not here.
+ * lives in CustomFieldValueService, not here. Checkpoint 52 — this
+ * computation was extracted into CustomFieldAccessResolver so
+ * CustomFormResource can reuse the exact same logic rather than
+ * re-deriving it.
  */
 class CustomFieldDefinitionResource extends JsonResource
 {
@@ -30,9 +34,7 @@ class CustomFieldDefinitionResource extends JsonResource
      */
     public function toArray(Request $request): array
     {
-        $user = $request->user();
-        $tierPermission = $this->sensitivity->requiredAccessPermission();
-        $hasTierAccess = $tierPermission === null || ($user?->hasPermission($tierPermission) ?? false);
+        $access = CustomFieldAccessResolver::resolve($this->resource, $request->user());
 
         return [
             'id' => $this->id,
@@ -46,8 +48,8 @@ class CustomFieldDefinitionResource extends JsonResource
             'sensitivity' => $this->sensitivity->value,
             'sort_order' => $this->sort_order,
             'status' => $this->status->value,
-            'can_view' => $hasTierAccess && ($user?->hasPermission($this->entity_type->valueViewPermission()) ?? false),
-            'can_edit' => $hasTierAccess && ($user?->hasPermission($this->entity_type->valueUpdatePermission()) ?? false),
+            'can_view' => $access['can_view'],
+            'can_edit' => $access['can_edit'],
             'options' => CustomFieldOptionResource::collection($this->whenLoaded('options')),
             'validation_rules' => $this->whenLoaded('validationRules', fn () => $this->validationRules->map(fn ($rule) => [
                 'rule_key' => $rule->rule_key->value,

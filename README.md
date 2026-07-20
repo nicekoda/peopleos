@@ -872,6 +872,35 @@ real but out of scope here — logged as a future security-hardening
 candidate, not fixed as part of this checkpoint. See
 `docs/architecture.md` for the full design.
 
+## Custom Forms Foundation (Checkpoint 52)
+
+The first controlled custom-forms layer — **Employee** is the first
+(and, for this checkpoint, only) supported surface. A form is
+deliberately a **presentation/grouping layer, never a second value
+pipeline**: `custom_forms`/`custom_form_sections`/`custom_form_fields`
+only describe which existing custom fields appear, in which sections,
+in what order, with optional label/help-text/placeholder overrides —
+they never store a value themselves. Submitting a form still means
+`PATCH /employees/{employee}` with `custom_field_values`, validated by
+the same `CustomFieldValueValidator` and saved by the same
+`CustomFieldValueService::setValuesFor()` that existed before this
+checkpoint — no new write endpoint, no new read endpoint for values,
+no new submission permission (`custom_forms.submit` does not exist).
+`entity_type` reuses `CustomFieldEntity` directly (no parallel
+`CustomFormEntity`), and module gating reuses
+`CustomFieldEntity::requiredModule()` at runtime, the exact pattern
+Checkpoint 51 established — an Employee form works regardless of the
+Recruitment module's state, and a future entity declares its own
+module the same way. `custom_forms.view`/`.manage` gate form/section/
+field *configuration* only, mirroring `custom_fields.view`/`.manage`'s
+exact default grants (Tenant Admin both, HR Manager view-only, nobody
+else by default). A field whose underlying custom field is disabled,
+or that the viewer lacks `can_view` for, is omitted from the rendered
+form structure entirely — server-enforced, not a frontend filter. See
+`docs/architecture.md` for the full design, including the deliberate
+MVP limitations (`is_required_override` is UI-only; `CustomFieldsCard`
+is kept unconditionally alongside the new form renderer for now).
+
 ## Documentation
 
 - [`docs/platform-vision.md`](docs/platform-vision.md) — the long-term product/architecture vision (platform kernel, module layer, subscription/entitlement model, event-driven architecture, AI governance) that every checkpoint's design should be checked against. Not tied to a checkpoint; update it when the vision changes, not when a feature ships.

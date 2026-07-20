@@ -667,6 +667,69 @@ still depends on real usage evidence from Employee custom fields in
 practice — this checkpoint's own implementation didn't surface a need
 for one, but that's not the same as ruling one out.
 
+**Checkpoint 52 — Custom Forms Foundation — completed.** Delivered
+exactly the entity the Checkpoint 50 recommendation named as the step
+after Employee custom fields: a controlled forms layer, Employee as
+the first surface, deliberately **not** a drag-and-drop designer,
+workflow engine, or report builder — foundation only, per your
+explicit scope boundary.
+
+- **A form is metadata, never a second value pipeline** — the single
+  design decision everything else follows from. `custom_forms`/
+  `custom_form_sections`/`custom_form_fields` describe which existing
+  custom fields appear, in which sections, in what order, with which
+  display overrides; they never store a value. Submitting a form still
+  means `PATCH /employees/{employee}` with `custom_field_values`,
+  validated and saved by the unmodified `CustomFieldValueValidator`/
+  `CustomFieldValueService`. No new value read/write endpoint, no new
+  submission permission.
+- **No schema/service change to anything that existed before this
+  checkpoint** — `CustomFieldEntity`, `CustomFieldDefinitionService`,
+  `CustomFieldValueService`, `CustomFieldValueValidator`,
+  `CustomFieldAuditEvents` are all untouched. `entity_type` reuses
+  `CustomFieldEntity` directly — evaluated and explicitly rejected a
+  parallel `CustomFormEntity`, since two enums that must always list
+  the same cases are a maintenance hazard waiting to drift.
+- **The Checkpoint 51 module-gate pattern reused, not reinvented** —
+  `CustomFieldEntity::requiredModule()` checked at runtime via a
+  shared trait now used by both the original custom-fields controller
+  and the three new form controllers, closing off the exact class of
+  bug Checkpoint 51 found and fixed, rather than leaving room for it to
+  reappear in a new corner of the codebase.
+- **A real routing collision found and fixed before it shipped** — two
+  planned GET routes shared an identical URI shape; `route:list` caught
+  it immediately, and the redundant one was dropped rather than papered
+  over with a fragile regex constraint.
+- **A non-negotiable client/server validation rule, applied literally**
+  — every access rule (tenant ownership, entity allowlist, module
+  requirement, key format/uniqueness/immutability, cross-tenant/
+  cross-entity field rejection, permission, tier access, can_view/
+  can_edit) is enforced server-side and independently proven by a test
+  that forges the API call directly, never merely asserting UI
+  behavior. This is now a standing expectation for every future
+  checkpoint, not particular to this one.
+- **`is_required_override` is UI-only, documented as a deliberate MVP
+  limitation** — teaching `CustomFieldValueValidator` about form-level
+  required overrides would mean giving it forms-awareness, which
+  breaks the "no parallel system" principle this checkpoint is built
+  around.
+- **`CustomFieldsCard` deliberately kept, rendered alongside the new
+  form renderer** — a field assigned to a form may appear in both
+  places on the same page for now, an accepted MVP overlap rather than
+  premature coupling to reconcile the two.
+- All 24 new tests passed after one fixture fix; the full CustomFields
+  (93 tests), CustomForms (24 tests), Employees, Tenant, and module-gate
+  audit-command suites all passed together (246 tests).
+
+**Standing sequencing note, reaffirmed**: the Checkpoint 50 recommendation
+named this as Checkpoint 52 (Employee Custom Fields → Custom Forms →
+Configurable Field Visibility Rules, or configurable rules moving up if
+Employee custom fields revealed complex needs early). They didn't — this
+checkpoint's own implementation surfaced no gap the fixed permission
+model couldn't handle. Whether configurable visibility rules become
+Checkpoint 53 still depends on real usage evidence once Custom Forms
+sees actual use, not on anything discovered while building it.
+
 ## Final product promise
 
 > One secure platform connecting people, workflows, services, assets,

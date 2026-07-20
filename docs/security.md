@@ -6168,6 +6168,129 @@ candidate above; `lifecycle_processes`/`leave_requests` remain next
 per the roadmap, each declaring its own module requirement through
 `CustomFieldEntity::requiredModule()`.
 
+## Custom Forms Foundation (Checkpoint 52)
+
+See
+[`architecture.md`](architecture.md#custom-forms-foundation-checkpoint-52)
+for the full technical design. This section covers the security
+posture of adding a forms layer on top of the existing custom-fields
+access model.
+
+### The security model gains no new surface — forms inherit everything custom fields already enforce
+
+A form never introduces a second value read/write path, so it
+inherits — rather than duplicates — every control already proven in
+Checkpoints 48–51: tenant ownership (`BelongsToTenant` on `CustomForm`,
+re-verified independently in every controller for its section/field
+children, which have no `tenant_id` of their own), the entity
+allowlist (`CustomFieldEntity::tryFrom()`), module gating
+(`CustomFieldEntity::requiredModule()`, checked at runtime via a
+shared trait now used by both `CustomFieldDefinitionController` and
+the new form controllers — not two independent implementations that
+could drift), parent-entity permission (`employees.view`/`.update`),
+tier permission (`custom_fields.access_sensitive/confidential/restricted`),
+`can_view`/`can_edit` (computed once, in `CustomFieldAccessResolver`,
+shared by both `CustomFieldDefinitionResource` and the new
+`CustomFormFieldResource`), `CustomFieldValueValidator`, and
+`CustomFieldValueService`. Nothing here required a second
+implementation of any of these — the whole point of building forms as
+metadata rather than a parallel pipeline.
+
+### Every rule enforced server-side, not just filtered client-side
+
+Per the explicit non-negotiable rule governing this checkpoint —
+frontend controls are for user experience only, the backend is the
+real security boundary — every one of the following is independently
+re-verified at the API layer, not assumed from whatever the Settings
+UI's picker or the entity page's renderer already filtered out:
+
+- **Tenant ownership** — `ensureFormBelongsToCurrentTenant()` in all
+  three form controllers, walking up from section/field to their
+  owning form's own `tenant_id`, 404 not 403.
+- **`entity_type` allowlist** — `CustomFieldEntity::tryFrom()`, 422 on
+  unknown, in the shared `resolveEntityType()` trait method.
+- **`requiredModule()` enforcement** — checked at runtime before any
+  form/section/field read or write, in the same shared trait.
+- **`form_key`/`section_key` format, uniqueness, and immutability** —
+  enforced in `CustomFormDefinitionService`, not merely in the
+  FormRequest shape check. `form_key`/`section_key` are omitted
+  entirely from the update FormRequests' own rules, so a resent value
+  can never be silently accepted.
+- **`custom_field_definition_id` belongs to the same tenant and the
+  same `entity_type` as the form** — `CustomFormDefinitionService::resolveFieldDefinitionForSection()`
+  re-queries and re-checks this directly, independent of whatever a
+  frontend picker filtered to. Proven by a direct test that forges a
+  request adding a `recruitment_applicant` field to an `employee` form
+  (rejected `422`) and a direct test adding another tenant's field
+  entirely (also rejected `422`, `custom_form_fields` row never
+  created).
+- **Disabled form/section/field handling** — a disabled *custom field*
+  is omitted from the rendered form structure server-side
+  (`CustomFormSectionResource`), never relying on the frontend to hide
+  it; a disabled *form field row* (removed from a section) still
+  requires no client cooperation to enforce, since it's simply absent
+  from what the resource returns.
+- **`custom_forms.view`/`.manage` and parent-entity permission for
+  writes** — both checked by route middleware/`CustomFieldValueService`
+  independently, never by the presence or absence of a button in the
+  Settings UI.
+- **`can_view`/`can_edit`** — computed server-side and used to
+  actually omit data (reads) or reject writes (`403`), never merely to
+  decide what a component renders.
+- **Values validated and saved through the existing engine** — a
+  forged `PATCH /employees/{employee}` naming a field the form
+  wouldn't have shown, or the actor can't edit, is still rejected by
+  `CustomFieldValueService`/`CustomFieldValueValidator` exactly as it
+  always was — forms add no new trust boundary here to get right or
+  wrong.
+- **Audit logging** — both `custom_form.*` config events and
+  `custom_field.value_updated` fire from the service layer, never
+  contingent on what the client claims happened.
+
+### Direct API bypass tests, not just UI-behavior tests
+
+Every test above forges a request the way a malicious or buggy client
+would — never asserting "the button is hidden" or "the picker doesn't
+list this option" as a substitute for a real rejection. Representative
+examples: `test_field_from_wrong_entity_rejected` and
+`test_cross_tenant_field_added_to_form_rejected` both post directly to
+`custom-form-sections/{section}/fields` with an ID no real picker would
+ever have offered; `test_form_field_write_through_entity_endpoint_rejects_fields_actor_cannot_edit`
+and `test_confidential_field_in_form_still_requires_access_confidential`
+both PATCH `employees/{employee}` directly with a field key the actor's
+own form view would never have rendered as editable, confirming the
+`403` and the unchanged database state, not just the absence of a UI
+affordance.
+
+### `is_required_override` — UI-only, explicitly not a security control
+
+Documented here explicitly so it is never mistaken for an enforced
+rule: `is_required_override` never reaches `CustomFieldValueValidator`.
+A form can visually suggest a field is required more strongly than the
+underlying custom field enforces, but a request omitting that field
+value is still only rejected if the underlying field's own
+`is_required` says so. This is a UX limitation, not a security gap —
+no bypass is possible because there was never an enforced rule to
+bypass.
+
+### Current limitations
+
+Custom forms exist for Employee only in this checkpoint. No
+tenant-configurable visibility rules layer exists yet — forms respect
+the same fixed platform tiers Checkpoint 50 introduced. `CustomFieldsCard`
+and `CustomFormRenderer` both render on the Employee Show page
+simultaneously — a field assigned to a form may appear twice, a
+deliberate UX overlap, not a data-exposure concern (both surfaces
+enforce identical access rules).
+
+### Future
+
+Same as Checkpoint 48–51's Future lists, now with a forms layer on
+top. Additionally: real backend-enforced form-level required fields
+(a separate design, not built here); retiring or filtering
+`CustomFieldsCard` once forms are proven; `lifecycle_processes`/
+`leave_requests` as both custom-field and custom-form entities.
+
 ## Local Demo Credentials
 
 **Local development only — these are not real secrets and only work against your own local database.** Password comes from `SEED_USER_PASSWORD` in `.env` (not committed; `.env.example` has an empty placeholder).
@@ -6197,7 +6320,7 @@ data these six `uesl` logins see (Checkpoint 26's `DemoDataSeeder`).
 - No email verification enforcement on login (column exists, not yet checked).
 - Password reset exists as of Checkpoint 44 (the `password_reset_tokens` table, previously unused, now backs a real forgot-password flow) — see [Password Reset](#password-reset-checkpoint-44) below. An invite-email flow (built on the same token table) exists as of Checkpoint 46 — see [Invite-Email Flow for New Accounts](#invite-email-flow-for-new-accounts-checkpoint-46) below. Still no MFA or SSO.
 - A backend module registry (`recruitment`, `lifecycle`, `leave`, `documents`, `policies`, `hr_documents` toggleable per tenant) and a narrow branding surface (display name, logo, two colors) exist as of Checkpoint 47 — see [Module Registry & Branding Foundation](#module-registry--branding-foundation-checkpoint-47) below and `docs/platform-vision.md` for the long-term platform direction this checkpoint is the first foundation of. Still no entitlement/subscription layer sitting in front of enablement.
-- A tenant-scoped custom fields engine (EAV-leaning hybrid: `custom_field_definitions`/`custom_field_options`/`custom_field_validation_rules`/`custom_field_values`) exists as of Checkpoint 48 (`recruitment_applicant`), Checkpoint 49 (`job_application`, i.e. `App\Models\RecruitmentApplication`), and Checkpoint 51 (`employee`, i.e. `App\Models\Employee`) — see [Custom Fields Foundation](#custom-fields-foundation-checkpoint-48), [Custom Fields for Job Applications](#custom-fields-for-job-applications-checkpoint-49), and [Employee Custom Fields](#employee-custom-fields-checkpoint-51) below. No schema or core-service change was needed to add the second or third entity. As of Checkpoint 50, sensitivity classification also gates read/write access via fixed platform permissions (`custom_fields.access_sensitive`/`access_confidential`/`access_restricted`), not just audit masking — see [Field-Level Visibility and Sensitive Field Access](#field-level-visibility-and-sensitive-field-access-checkpoint-50) below; a tenant-configurable rules layer on top of this fixed model is still a documented future roadmap, not built yet. `lifecycle_processes`/`leave_requests` are a documented future roadmap, not built yet.
+- A tenant-scoped custom fields engine (EAV-leaning hybrid: `custom_field_definitions`/`custom_field_options`/`custom_field_validation_rules`/`custom_field_values`) exists as of Checkpoint 48 (`recruitment_applicant`), Checkpoint 49 (`job_application`, i.e. `App\Models\RecruitmentApplication`), and Checkpoint 51 (`employee`, i.e. `App\Models\Employee`) — see [Custom Fields Foundation](#custom-fields-foundation-checkpoint-48), [Custom Fields for Job Applications](#custom-fields-for-job-applications-checkpoint-49), and [Employee Custom Fields](#employee-custom-fields-checkpoint-51) below. No schema or core-service change was needed to add the second or third entity. As of Checkpoint 50, sensitivity classification also gates read/write access via fixed platform permissions (`custom_fields.access_sensitive`/`access_confidential`/`access_restricted`), not just audit masking — see [Field-Level Visibility and Sensitive Field Access](#field-level-visibility-and-sensitive-field-access-checkpoint-50) below; a tenant-configurable rules layer on top of this fixed model is still a documented future roadmap, not built yet. As of Checkpoint 52, a Custom Forms layer (`custom_forms`/`custom_form_sections`/`custom_form_fields`) groups existing custom fields into sections for Employee — see [Custom Forms Foundation](#custom-forms-foundation-checkpoint-52) below — deliberately a presentation layer only, never a second value pipeline. `lifecycle_processes`/`leave_requests` are a documented future roadmap, not built yet.
 - This app's first scheduled task exists as of Checkpoint 45 (`lifecycle:send-task-digest`, registered via `bootstrap/app.php`'s `->withSchedule()`) — see [Lifecycle Task Ordering & Reminders](#lifecycle-task-ordering--reminders-checkpoint-45) below. Production deployments must now add a `php artisan schedule:run` cron entry, which was never required before this checkpoint (see `docs/deployment.md` §6). Still no queued jobs anywhere in the app.
 - `DatabaseSeeder` uses `WithoutModelEvents`, which disables the `saving`/`creating` guards (on `User` and `Role`) during seeding. `UserSeeder`/`RoleSeeder` set `tenant_id`/`is_platform_admin`/`is_platform_role` explicitly on every row regardless, so this doesn't cause incorrect data — but it does mean a same-row consistency mistake in seed data would surface as a raw Postgres constraint error rather than the cleaner app-level exception. (The RBAC *assignment* guards — `assignRole()`, `givePermissionTo()`, `grantPermission()` — and audit logging calls are unaffected by this, since they're plain method logic, not Eloquent events.)
 - See "Current limitations" under Audit Logging above for the audit-specific gaps (no read endpoint, `givePermissionTo()`/tenant CRUD not logged yet).

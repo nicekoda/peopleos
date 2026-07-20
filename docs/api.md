@@ -625,6 +625,117 @@ no relationship to `custom_field_values` at all; a sensitive/
 confidential/restricted Employee custom field is governed solely by
 `custom_fields.access_sensitive`/`access_confidential`/`access_restricted`.
 
+## Custom Forms (Checkpoint 52)
+
+A form is metadata only — it groups existing custom fields into
+sections for display/submission, and never introduces a second way to
+read or write a value. See
+`docs/architecture.md#custom-forms-foundation-checkpoint-52` for the
+full design. Employee (`employee`) is the only supported entity in
+this checkpoint. No static `module:{key}` gate on any of these routes
+— same runtime `CustomFieldEntity::requiredModule()` check as
+Custom Fields above.
+
+| Method | Path | Permission | Notes |
+|---|---|---|---|
+| `GET` | `/api/v1/custom-forms/{entityType}` | `custom_forms.view` | `422` if `entityType` is unknown. Returns every form (active and inactive) for that entity, each with its full `sections.fields` tree |
+| `POST` | `/api/v1/custom-forms/{entityType}` | `custom_forms.manage` | Creates a form. `form_key` immutable after creation |
+| `PATCH` | `/api/v1/custom-forms/{customForm}` | `custom_forms.manage` | Updates name/description/status/sort_order. `form_key`/`entity_type` never accepted |
+| `POST` | `/api/v1/custom-forms/{customForm}/sections` | `custom_forms.manage` | Adds a section. `section_key` immutable after creation |
+| `PATCH` | `/api/v1/custom-form-sections/{customFormSection}` | `custom_forms.manage` | Updates title/description/status/sort_order. `section_key` never accepted |
+| `POST` | `/api/v1/custom-form-sections/{customFormSection}/fields` | `custom_forms.manage` | Adds an existing custom field to the section via `custom_field_definition_id`. `422` if the field belongs to a different tenant or a different `entity_type` than the form |
+| `PATCH` | `/api/v1/custom-form-fields/{customFormField}` | `custom_forms.manage` | Updates label_override/help_text/placeholder/is_required_override/status/sort_order. `custom_field_definition_id` never accepted — remove and re-add to point at a different field |
+
+No `custom_forms.submit` permission exists, and no separate
+`GET /custom-forms/{customForm}` "show one form" route exists either
+— `index()` already returns each form's full nested structure, and a
+second GET route sharing the same single-segment URI shape as
+`{entityType}` would never be reachable in Laravel's route matching
+anyway.
+
+### Response shape
+
+```json
+// GET /api/v1/custom-forms/employee
+{
+  "data": [
+    {
+      "id": "01h...",
+      "entity_type": "employee",
+      "form_key": "employee_additional_info",
+      "name": "Employee Additional Information",
+      "description": null,
+      "status": "active",
+      "sort_order": 0,
+      "sections": [
+        {
+          "id": "01h...",
+          "section_key": "general",
+          "title": "General",
+          "description": null,
+          "sort_order": 0,
+          "status": "active",
+          "fields": [
+            {
+              "id": "01h...",
+              "label_override": null,
+              "help_text": "Pick a size",
+              "placeholder": null,
+              "is_required_override": null,
+              "sort_order": 0,
+              "status": "active",
+              "custom_field_definition": {
+                "id": "01h...",
+                "entity_type": "employee",
+                "field_key": "uniform_size",
+                "label": "Uniform Size",
+                "field_type": "text",
+                "sensitivity": "normal",
+                "can_view": true,
+                "can_edit": true
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
+```
+
+**A field is omitted from `fields` entirely** (never returned with a
+`can_view: false` flag, never a placeholder) if the underlying custom
+field is disabled, or the requesting user's `can_view` for it is
+false — server-enforced in `CustomFormSectionResource`, the same "omit
+means omit" rule already used for values. **Forms and sections are
+returned regardless of `status`** — Settings needs to see and manage
+disabled ones; a live-rendering consumer (the Employee Show page)
+filters to `status: "active"` client-side, the same split
+responsibility `CustomFieldsCard`'s frontend already has for
+definitions.
+
+### Submitting values — no new endpoint
+
+A form has no submit endpoint of its own. Values are still submitted
+through the entity's own existing endpoint:
+
+```json
+// PATCH /api/v1/employees/{employee} — permission: employees.update
+{
+  "custom_field_values": {
+    "uniform_size": "L"
+  }
+}
+```
+
+This is the identical `custom_field_values` payload documented under
+Employee values above — a form's frontend simply scopes which keys it
+submits to the fields in its own sections. Every existing rule still
+applies unchanged: an unknown key, a tier the actor lacks, or a
+disabled field all return the same `422`/`403` they always did,
+completely independent of whether a form happens to reference that
+field.
+
 ## Audit Logs
 
 Read-only (Checkpoint 24) — no create/update/delete route exists

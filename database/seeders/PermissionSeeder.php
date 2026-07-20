@@ -117,6 +117,17 @@ class PermissionSeeder extends Seeder
             // intentional, conservative MVP decision, not an omission
             // (see docs/security.md).
             'custom_fields' => ['view', 'manage', 'access_sensitive', 'access_confidential', 'access_restricted'],
+            // Checkpoint 52 — Custom Forms Foundation. Mirrors
+            // custom_fields.view/.manage exactly: .manage is Tenant-
+            // Admin-only (form/section/field configuration is a
+            // tenant-wide structural concern, same reasoning as custom
+            // field definitions); .view may additionally be granted to
+            // HR Manager. There is no custom_forms.submit — submitting
+            // values through a form stays gated entirely by the owning
+            // entity's own permission (employees.view/.update) plus
+            // custom-field tier access, never a second value-permission
+            // axis, the same posture custom_fields.* already has.
+            'custom_forms' => ['view', 'manage'],
         ];
 
         foreach ($tenantPermissions as $category => $actions) {

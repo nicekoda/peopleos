@@ -3471,3 +3471,204 @@ configuration export/import, and package/entitlement limits.
 Additionally: the `employees.view_sensitive` write-side hardening
 candidate noted above; `lifecycle_processes`/`leave_requests` remain
 next per the roadmap, each declaring its own `requiredModule()`.
+
+## Custom Forms Foundation (Checkpoint 52)
+
+The first controlled custom-forms layer, built on top of the engine
+proven across Checkpoints 48–51. **Employee** is the first supported
+surface — chosen over Recruitment (whose Application Show page already
+juggles two custom-field entities via two separate payload keys,
+specifically to avoid a collision problem a forms layer would only
+reintroduce) and over inventing a new "HR request" domain object
+(which doesn't exist anywhere in the codebase and would be scope creep
+disguised as a forms foundation).
+
+### The load-bearing design decision: a form is metadata, never a second value pipeline
+
+A `CustomForm`/`CustomFormSection`/`CustomFormField` row describes
+**which existing custom fields appear, in which sections, in what
+order, with which display overrides** — nothing else. Concretely:
+
+- **No new write endpoint.** Submitting a form still means
+  `PATCH /employees/{employee}` with `custom_field_values` — the exact
+  call `CustomFieldsCard` already makes — scoped by the frontend to
+  the field keys belonging to that form's sections.
+  `CustomFieldValueService::setValuesFor()` is called with zero
+  changes; every existing guarantee (tier check, disabled-field
+  rejection, audit event) applies automatically because it's the same
+  code path, not a parallel one.
+- **No new read endpoint for values.** `EmployeeResource`'s existing
+  `custom_field_values` remains the only source of values. The one
+  genuinely new endpoint, `GET /custom-forms/{entityType}`, returns
+  **structure** only (sections/fields/labels/help-text/order) — never
+  values.
+- **No new permission axis for submission.** Writing through a form is
+  gated by exactly the same parent-entity permission
+  (`employees.update`) and tier permission
+  (`custom_fields.access_*`) as writing directly. There is no
+  `custom_forms.submit`.
+- **`CustomFieldValueValidator`/`CustomFieldDefinitionService`/
+  `CustomFieldAuditEvents` are untouched** — zero changes to any of
+  them. `CustomFieldEntity` itself is also untouched; forms reuse its
+  existing `requiredModule()`/`valueViewPermission()`/
+  `valueUpdatePermission()` as-is.
+
+### Schema — no `tenant_id` on child rows, matching `custom_field_options`' own convention
+
+```
+custom_forms          (tenant_id, entity_type, form_key, name, description, status, sort_order, created_by, updated_by, timestamps)
+custom_form_sections  (custom_form_id, section_key, title, description, sort_order, status, created_by, updated_by, timestamps)
+custom_form_fields    (custom_form_section_id, custom_field_definition_id, label_override, help_text, placeholder, is_required_override, sort_order, status, created_by, updated_by, timestamps)
+```
+
+An earlier draft of this schema put `tenant_id` on both child tables.
+Reading `custom_field_options`' actual migration first showed it has
+**no `tenant_id` column at all** — tenant isolation is inherited
+transitively through the parent FK, never denormalized onto the child
+row, with defense-in-depth tenant checks living in the controller
+instead. The corrected schema mirrors this exactly:
+`CustomFormSection`/`CustomFormField` have no `BelongsToTenant`, no
+`tenant_id`; every controller still independently re-verifies tenant
+ownership by walking up to the owning `CustomForm` (`ensureFormBelongsToCurrentTenant()`),
+the same "never trust that whatever gated the caller in already proved
+this" posture used throughout this app. `custom_form_fields.custom_field_definition_id`
+uses `restrictOnDelete()` — consistent with custom field definitions
+never being hard-deleted in the first place.
+
+### `entity_type` reuses `CustomFieldEntity` — no parallel `CustomFormEntity`
+
+A separate `CustomFormEntity` enum would need to be kept in permanent
+lockstep with `CustomFieldEntity` (both listing the same cases, both
+needing their own `requiredModule()`), a real ongoing footgun — a
+future entity added to one and forgotten in the other silently breaks
+something. Since a form's fields must always belong to the entity the
+form itself targets, and that entity must already be a supported
+`CustomFieldEntity` case, `custom_forms.entity_type` is simply a
+`CustomFieldEntity` value, validated with the identical
+`tryFrom()`/422 pattern `CustomFieldDefinitionController` already
+established.
+
+### Module gating — the Checkpoint 51 pattern reused, not reinvented
+
+`CustomFieldEntity::requiredModule()` is checked at runtime inside
+`CustomFormController`/`CustomFormSectionController`/`CustomFormFieldController`
+— no static `module:{key}` route middleware anywhere on the six new
+routes. To avoid a second copy of the module-check logic (the whole
+reason Checkpoint 51's bug happened — a hardcoded gate nobody updated
+when a new entity arrived), the check itself now lives in a shared
+trait, `EnsuresCustomFieldEntityModuleEnabled`, used by both
+`CustomFieldDefinitionController` (refactored to use it, same
+behavior, zero logic change) and the three new form controllers. A
+paired regression test (`test_employee_form_works_when_recruitment_module_disabled`
+/ `test_recruitment_form_blocked_when_recruitment_module_disabled`)
+proves both directions in the same test run, the same "prove the fix
+discriminates per entity, not just that it stopped blocking Employee"
+reasoning Checkpoint 51's own test used.
+
+### `can_view`/`can_edit` computed once, shared between two Resources
+
+The can_view/can_edit computation (entity's own parent permission
+combined with the field's sensitivity-tier permission) was extracted
+from `CustomFieldDefinitionResource` into `CustomFieldAccessResolver::resolve()`,
+a stateless static helper. `CustomFormFieldResource` embeds the field's
+full `CustomFieldDefinitionResource` (never a second, divergent
+definition shape), so both resources compute `can_view`/`can_edit`
+through the exact same code path — no risk of the two silently
+drifting apart over time.
+
+### Field-level omission is server-enforced; form/section-status filtering is a legitimate frontend concern
+
+`CustomFormSectionResource` omits a field from its `fields` array
+entirely when the underlying `CustomFieldDefinition` is disabled, or
+the requester's `can_view` is false — the same "omit means omit, never
+a null-but-present entry, never the raw value" rule
+`CustomFieldValueService::getActiveValuesFor()` already enforces for
+values. This is unconditional — even for Settings > Custom Forms,
+management of a disabled *custom field* happens through the existing
+`Settings > Custom Fields` page, not through the forms UI, so nothing
+is lost by omitting it here.
+
+By contrast, `GET /custom-forms/{entityType}` returns **both active
+and inactive forms/sections** — Settings needs to see and manage
+disabled ones. The **entity-page renderer filters to `status === 'active'`
+client-side** before rendering, the exact same split responsibility
+`CustomFieldsCard`'s frontend already has for custom field definitions
+(the backend returns everything a management UI needs; a live-render
+consumer filters what it actually shows). This is not a security gap:
+an inactive form/section carries no confidentiality implication to
+someone who already holds `custom_forms.view` — the same reasoning
+`CustomFieldDefinitionResource` already applies by always returning
+inactive field definitions too.
+
+### One real routing collision found and resolved before it ever shipped
+
+The original route sketch included both
+`GET /custom-forms/{entityType}` (list, for an entity) and
+`GET /custom-forms/{customForm}` (show, for one form) — two GET routes
+sharing an identical single-segment URI shape. Laravel resolves this
+by always matching whichever route registered first, so the second
+would never have been reachable. Since `index()` already eager-loads
+every form's full `sections.fields.customFieldDefinition` tree, a
+separate per-form fetch would only return already-available data — the
+`show()` endpoint was dropped rather than solved with a fragile regex
+route constraint.
+
+### `is_required_override` is UI-only in this checkpoint — deliberately, not by oversight
+
+`CustomFormField.is_required_override` can mark a field more strongly
+required within a specific form's context (an asterisk, client-side
+nudge) without mutating the underlying custom field's own global
+`is_required`. It is **never consulted by `CustomFieldValueValidator`**
+— teaching the validator about form-level overrides would mean giving
+it forms-awareness, breaking the "no parallel system" principle this
+checkpoint is built around. A form can visually suggest a field is
+required more strongly than the underlying field enforces, but cannot
+force it beyond what the field itself already requires. A future,
+separately-designed checkpoint could add real form-level required
+enforcement without needing to touch this schema.
+
+### Frontend: one shared `CustomFieldInput`, `CustomFieldsCard` kept unconditionally
+
+The per-field-type input switch (text/textarea/boolean/select/
+multi-select) was extracted from `CustomFieldsCard` into
+`resources/js/Components/CustomFieldInput.tsx`, reused by the new
+`CustomFormRenderer` — the same "extract once genuinely needed twice"
+reasoning behind Checkpoint 51's own `CustomFieldsCard` extraction, so
+neither component carries a diverging copy of that switch statement.
+
+`CustomFormRenderer` fetches `GET /custom-forms/employee`, filters to
+active forms/sections client-side, and renders each active form as its
+own independently-submittable card (mirroring `CustomFieldsCard`'s own
+"one card per unit of data" shape) — submission goes through the exact
+same `PATCH /employees/{employee}` call, scoped to that form's own
+field keys. **`CustomFieldsCard` is kept, unconditionally, rendered
+alongside `CustomFormRenderer`** on `Employees/Show.tsx` — a field
+assigned to a form can appear in both places on the same page. This is
+a deliberate MVP overlap, not an oversight: retiring or filtering
+`CustomFieldsCard` now would add coupling this checkpoint doesn't need
+before the forms approach is proven in practice.
+
+### Audit behaviour — config events are new, value events are untouched
+
+`CustomFormAuditEvents` (mirroring `CustomFieldAuditEvents`'s own
+shape) emits `custom_form.created`/`updated`/`enabled`/`disabled`/
+`section_added`/`section_updated`/`section_removed`/`field_added`/
+`field_updated`/`field_removed` — configuration changes only. Value
+changes continue firing `custom_field.value_updated` exclusively,
+through the unmodified `CustomFieldAuditEvents::valueUpdated()` — no
+form-submission value event was created; a test explicitly proves
+`custom_form.value_updated` never exists in the audit log.
+
+### Future
+
+A real field-level *system*-field visibility feature; a form/page
+designer (this checkpoint's simple up/down reorder is deliberately not
+that); workflow/approval/report/dashboard/AI-filter integration
+querying form structure generically; `is_required_override` becoming
+real backend-enforced validation, once designed separately; retiring
+or filtering `CustomFieldsCard` once the forms approach is proven;
+`lifecycle_processes`/`leave_requests` as both custom-field *and*
+custom-form entities, each declaring its own `requiredModule()`;
+configurable field-visibility rules remain the Checkpoint 53 candidate
+per the roadmap in `docs/platform-vision.md`, unaffected by this
+checkpoint.

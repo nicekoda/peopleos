@@ -68,4 +68,13 @@ class SettingsController extends Controller
     {
         return Inertia::render('Settings/CustomFields');
     }
+
+    /**
+     * Checkpoint 52 — same thin-page pattern; form/section/field data
+     * is fetched client-side from /api/v1/custom-forms/{entityType}.
+     */
+    public function customForms(): Response
+    {
+        return Inertia::render('Settings/CustomForms');
+    }
 }

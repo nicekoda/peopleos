@@ -1795,6 +1795,50 @@ in the same test run, against the same disabled-module tenant state —
 proving the fix actually discriminates per entity, not just that it
 stopped blocking Employee.
 
+## A route sketch that would have silently broken (Checkpoint 52)
+
+The original Checkpoint 52 route plan included both
+`GET /custom-forms/{entityType}` (list forms for an entity) and
+`GET /custom-forms/{customForm}` (show one form) — two GET routes with
+an identical single-segment URI shape. Laravel resolves ambiguous
+route matches by always picking whichever route registered first, so
+the second would have been permanently unreachable — not a 404, not an
+error, just silently routed to the wrong controller method forever,
+the kind of bug that's easy to miss because the *first* route still
+"works" and nothing throws. Caught by running `php artisan route:list`
+immediately after wiring the routes, before writing a single test
+against them — the fix was to drop the redundant `show()` endpoint
+entirely (`index()` already eager-loads every form's full nested
+structure, so a per-form fetch would only return already-available
+data), not to reach for a fragile regex route constraint to
+disambiguate a 26-character ULID from an arbitrary entity-type string.
+The lesson: when two routes could plausibly share a URI shape, check
+`route:list` for the literal registered order before assuming Laravel
+will "figure it out" — it won't.
+
+## Direct API bypass tests are the point, not a nice-to-have (Checkpoint 52)
+
+Per an explicit standing rule from this checkpoint's approval ("both
+client-side and server-side validation are required... frontend
+controls are for user experience only"), every Checkpoint 52 test that
+proves an access rule forges the request the way a real attacker or a
+buggy client would, never asserting UI behavior as a stand-in for a
+real rejection. Concretely, `CustomFormApiTest` never checks "the
+picker doesn't list this field" — it checks
+`test_field_from_wrong_entity_rejected`/`test_cross_tenant_field_added_to_form_rejected`
+by POSTing a `custom_field_definition_id` directly that no real
+picker would ever have offered, and confirms both the `422` and that
+no `custom_form_fields` row was created. Similarly,
+`test_form_field_write_through_entity_endpoint_rejects_fields_actor_cannot_edit`
+PATCHes `employees/{employee}` directly with a field key the actor's
+own form view would never render as editable, confirming both the
+`403` and that the database value never changed. This is a deliberate
+test-writing habit worth carrying into every future checkpoint, not
+just this one: if a rule can be checked by forging the API call
+directly, write that test — a passing "the button is hidden" test
+proves nothing about whether the backend would reject the same action
+taken another way.
+
 ## Known limitations
 
 - No test coverage reporting configured yet.

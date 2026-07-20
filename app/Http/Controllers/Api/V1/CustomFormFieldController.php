@@ -30,8 +30,9 @@ class CustomFormFieldController extends Controller
 
     public function update(UpdateCustomFormFieldRequest $request, CustomFormField $customFormField, CustomFormDefinitionService $service): CustomFormFieldResource
     {
-        $this->ensureFormBelongsToCurrentTenant($customFormField->section->form);
-        $this->ensureModuleEnabled($customFormField->section->form->entity_type);
+        $form = $customFormField->section?->form;
+        $this->ensureFormBelongsToCurrentTenant($form);
+        $this->ensureModuleEnabled($form->entity_type);
 
         $field = $service->updateField($customFormField, $request->validated(), $request->user());
 
@@ -43,9 +44,18 @@ class CustomFormFieldController extends Controller
      * CustomForm — neither CustomFormSection nor CustomFormField has
      * its own tenant_id, so this walks all the way up to the form. 404,
      * not 403.
+     *
+     * $form is nullable here even though the relation chain is typed
+     * non-null: BelongsToTenant's global scope applies to every hop, so
+     * a field whose section/form belongs to a *different* tenant than
+     * the one currently resolved silently resolves to null (either hop)
+     * rather than the real (other-tenant) form. Must be checked before
+     * the tenant-id comparison, or this throws a TypeError instead of a
+     * clean 404 on a cross-tenant direct-ID request.
      */
-    private function ensureFormBelongsToCurrentTenant(CustomForm $form): void
+    private function ensureFormBelongsToCurrentTenant(?CustomForm $form): void
     {
+        abort_if($form === null, 404);
         abort_unless($form->tenant_id === app(Tenant::class)->id, 404);
     }
 }

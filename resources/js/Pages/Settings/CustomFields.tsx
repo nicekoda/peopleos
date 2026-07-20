@@ -12,9 +12,12 @@ import { api, toApiError, redirectIfUnauthenticated, ApiError } from '@/lib/api'
 import {
     CustomFieldDefinitionState,
     CustomFieldOptionState,
+    CustomFieldVisibilityRuleState,
     CUSTOM_FIELD_SENSITIVITIES,
     CUSTOM_FIELD_TYPES,
 } from '@/types/customField';
+import { Role } from '@/types/role';
+import { PaginatedResponse } from '@/types/employee';
 
 // Checkpoint 49 added Job Application as entity #2 — simple tabs, not a
 // dropdown, since only two entities are supported (decision 5). See
@@ -95,6 +98,14 @@ export default function SettingsCustomFields() {
     const [editForm, setEditForm] = useState<FieldFormState>(emptyForm);
     const [editErrors, setEditErrors] = useState<Record<string, string[]>>({});
 
+    // Checkpoint 53 — roles aren't entity-scoped, so this loads once
+    // (only ever needed by whoever can reach this page's manage state,
+    // i.e. Tenant Admin, who always holds roles.view too).
+    const [roles, setRoles] = useState<Role[] | null>(null);
+    const [ruleForm, setRuleForm] = useState({ role_id: '', can_view: true, can_edit: false });
+    const [ruleErrors, setRuleErrors] = useState<Record<string, string[]>>({});
+    const [ruleSaving, setRuleSaving] = useState(false);
+
     const load = useCallback(() => {
         setError(null);
         api.get<{ data: CustomFieldDefinitionState[] }>(`/custom-fields/${entityType}`)
@@ -117,6 +128,14 @@ export default function SettingsCustomFields() {
         setFields(null);
         load();
     }, [load]);
+
+    useEffect(() => {
+        if (!canManage || roles !== null) return;
+
+        api.get<PaginatedResponse<Role>>('/roles')
+            .then((response) => setRoles(response.data.data))
+            .catch(() => setRoles([]));
+    }, [canManage, roles]);
 
     const usesOptions = (fieldType: string) => fieldType === 'single_select' || fieldType === 'multi_select';
 
@@ -151,6 +170,8 @@ export default function SettingsCustomFields() {
     const startEdit = (field: CustomFieldDefinitionState) => {
         setEditingId(field.id);
         setEditErrors({});
+        setRuleForm({ role_id: '', can_view: true, can_edit: false });
+        setRuleErrors({});
         setEditForm({
             field_key: field.field_key,
             label: field.label,
@@ -220,6 +241,39 @@ export default function SettingsCustomFields() {
 
     const addOptionRow = (form: FieldFormState, setForm: (f: FieldFormState) => void) => {
         setForm({ ...form, options: [...form.options, { option_key: '', label: '', status: 'active' }] });
+    };
+
+    const submitAddRule = (field: CustomFieldDefinitionState) => {
+        if (!ruleForm.role_id) return;
+        setRuleSaving(true);
+        setRuleErrors({});
+
+        api.post(`/custom-fields/${field.id}/visibility-rules`, {
+            role_id: Number(ruleForm.role_id),
+            can_view: ruleForm.can_view,
+            can_edit: ruleForm.can_edit,
+        })
+            .then(() => {
+                setRuleForm({ role_id: '', can_view: true, can_edit: false });
+                load();
+            })
+            .catch((err) => {
+                const apiError = toApiError(err);
+                if (redirectIfUnauthenticated(apiError)) return;
+                setRuleErrors(apiError.errors ?? { role_id: [apiError.message] });
+            })
+            .finally(() => setRuleSaving(false));
+    };
+
+    const updateRule = (rule: CustomFieldVisibilityRuleState, changes: Partial<Pick<CustomFieldVisibilityRuleState, 'can_view' | 'can_edit' | 'status'>>) => {
+        setRuleSaving(true);
+        api.patch(`/custom-field-visibility-rules/${rule.id}`, changes)
+            .then(() => load())
+            .catch((err) => {
+                const apiError = toApiError(err);
+                if (!redirectIfUnauthenticated(apiError)) setError(apiError);
+            })
+            .finally(() => setRuleSaving(false));
     };
 
     const sorted = fields ? [...fields].sort((a, b) => a.sort_order - b.sort_order) : null;
@@ -476,6 +530,106 @@ export default function SettingsCustomFields() {
                                         <Button type="button" onClick={() => submitEdit(field)} disabled={saving}>
                                             {saving ? 'Saving…' : 'Save'}
                                         </Button>
+                                    </div>
+
+                                    <div className="border-t border-slate-200 pt-4">
+                                        <p className="text-sm font-medium text-slate-700">Visibility rules</p>
+                                        <p className="mt-1 text-xs text-slate-500">
+                                            Grants a role view/edit access beyond the default sensitivity tier, or makes the field
+                                            read-only or fully hidden for that role. A user still needs the underlying entity
+                                            permission — a rule never grants access on its own.
+                                        </p>
+
+                                        {field.visibility_rules.length === 0 && (
+                                            <p className="mt-2 text-sm text-slate-500">No visibility rules for this field.</p>
+                                        )}
+
+                                        {field.visibility_rules.map((rule) => (
+                                            <div key={rule.id} className="mt-2 flex flex-wrap items-center gap-3 rounded-md bg-slate-50 px-3 py-2">
+                                                <span className="text-sm font-medium text-slate-800">{rule.role.name}</span>
+                                                <Badge tone={rule.status === 'active' ? 'success' : 'neutral'}>
+                                                    {rule.status === 'active' ? 'Active' : 'Disabled'}
+                                                </Badge>
+                                                <label className="flex items-center gap-1 text-xs text-slate-600">
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={rule.can_view}
+                                                        disabled={ruleSaving}
+                                                        onChange={(e) =>
+                                                            updateRule(rule, {
+                                                                can_view: e.target.checked,
+                                                                can_edit: e.target.checked ? rule.can_edit : false,
+                                                            })
+                                                        }
+                                                    />
+                                                    Can view
+                                                </label>
+                                                <label className="flex items-center gap-1 text-xs text-slate-600">
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={rule.can_edit}
+                                                        disabled={ruleSaving || !rule.can_view}
+                                                        onChange={(e) => updateRule(rule, { can_edit: e.target.checked })}
+                                                    />
+                                                    Can edit
+                                                </label>
+                                                <Button
+                                                    type="button"
+                                                    variant="secondary"
+                                                    className="ml-auto"
+                                                    disabled={ruleSaving}
+                                                    onClick={() => updateRule(rule, { status: rule.status === 'active' ? 'inactive' : 'active' })}
+                                                >
+                                                    {rule.status === 'active' ? 'Disable' : 'Enable'}
+                                                </Button>
+                                            </div>
+                                        ))}
+
+                                        <div className="mt-3 flex flex-wrap items-end gap-3">
+                                            <SelectField
+                                                label="Add rule for role"
+                                                name={`rule-role-${field.id}`}
+                                                value={ruleForm.role_id}
+                                                onChange={(e) => setRuleForm({ ...ruleForm, role_id: e.target.value })}
+                                                error={ruleErrors.role_id?.[0]}
+                                            >
+                                                <option value="">Select a role…</option>
+                                                {(roles ?? [])
+                                                    .filter((role) => role.slug !== 'tenant-admin')
+                                                    .filter((role) => !field.visibility_rules.some((rule) => rule.role.id === role.id))
+                                                    .map((role) => (
+                                                        <option key={role.id} value={role.id}>
+                                                            {role.name}
+                                                        </option>
+                                                    ))}
+                                            </SelectField>
+                                            <label className="flex items-center gap-1 text-xs text-slate-600">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={ruleForm.can_view}
+                                                    onChange={(e) =>
+                                                        setRuleForm({
+                                                            ...ruleForm,
+                                                            can_view: e.target.checked,
+                                                            can_edit: e.target.checked ? ruleForm.can_edit : false,
+                                                        })
+                                                    }
+                                                />
+                                                Can view
+                                            </label>
+                                            <label className="flex items-center gap-1 text-xs text-slate-600">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={ruleForm.can_edit}
+                                                    disabled={!ruleForm.can_view}
+                                                    onChange={(e) => setRuleForm({ ...ruleForm, can_edit: e.target.checked })}
+                                                />
+                                                Can edit
+                                            </label>
+                                            <Button type="button" variant="secondary" disabled={ruleSaving || !ruleForm.role_id} onClick={() => submitAddRule(field)}>
+                                                {ruleSaving ? 'Saving…' : 'Add rule'}
+                                            </Button>
+                                        </div>
                                     </div>
                                 </div>
                             ) : (

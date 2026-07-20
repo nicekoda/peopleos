@@ -730,6 +730,63 @@ model couldn't handle. Whether configurable visibility rules become
 Checkpoint 53 still depends on real usage evidence once Custom Forms
 sees actual use, not on anything discovered while building it.
 
+**Checkpoint 53 — Configurable Field Visibility Rules — completed.**
+Delivered the smallest version of the configurable-rules layer the
+Checkpoint 50 recommendation named — role-based only, `can_view`/
+`can_edit` only, a strict override on top of the fixed sensitivity
+model, never a replacement or bypass of parent-entity access, exactly
+as that recommendation required.
+
+- **A real enforcement gap found and fixed as the central decision**:
+  `CustomFieldAccessResolver` (Checkpoint 52, API-response metadata
+  only) and `CustomFieldValueService`'s own private tier check
+  (Checkpoint 50, real read/write enforcement) were two independent
+  implementations of the same computation. Adding rule-awareness to
+  only one would have made the API claim a rule took effect while
+  writes still silently enforced the old tier-only logic. Fixed by
+  making the service call the resolver directly and deleting its
+  private duplicate — the resolver is now the single source of truth
+  for both UX metadata and real enforcement, proven unchanged-by-default
+  via a dedicated regression test plus the full pre-existing 266-test
+  suite passing without modification.
+- **Override-only, no effect/mode column** — `can_view`/`can_edit`
+  alone express grant-beyond-tier, read-only, and full-deny;
+  most-permissive-wins when a caller holds multiple roles with
+  matching rules; the entity's own parent permission is always AND'd
+  in on top, never replaceable by a rule.
+- **Role-based only, with the direct-permission-grant asymmetry stated
+  explicitly, not glossed over** — a rule matches only roles the
+  caller actually holds; a user with an equivalent direct permission
+  grant (independent of role membership) is unaffected by a rule
+  targeting that role. Documented as an accepted MVP limitation with
+  its own test, not a silent gap.
+- **Tenant Admin cannot be targeted** — checked by slug
+  (`tenant-admin`), not the broader `is_system_role` flag, since every
+  seeded tenant role is a system role and that flag would make the
+  feature unusable.
+- **A second, pre-existing bug found while testing tenant isolation**:
+  the identical "cross-tenant relation silently resolves to null"
+  defect this checkpoint's own controller had was also found, on
+  inspection, in the already-shipped Checkpoint 52
+  `CustomFormSectionController`/`CustomFormFieldController::update()` —
+  never triggered by that checkpoint's own tests, since none PATCHed a
+  cross-tenant section/field directly by ID. Fixed in all three
+  controllers as part of this checkpoint, with two regression tests
+  added retroactively to close the coverage gap. Not a data-exposure
+  bug (no cross-tenant read or write ever succeeded) but a worse
+  failure mode (uncaught 500) than the intended clean 404.
+- All 20 new tests passed after fixing the tenant-isolation bug and
+  three test-setup permission gaps; the full CustomFields, CustomForms,
+  Employees, Tenant, and module-gate audit-command suites all passed
+  together (266 tests).
+
+**Standing sequencing note, reaffirmed again**: report/export/AI-filter
+enforcement of visibility rules, permission-based (not just role-based)
+targeting, and per-user rule overrides remain future work, gated on the
+same "real usage evidence first" principle every checkpoint in this
+sequence has followed — `CustomFieldAccessResolver` was kept generic
+enough to be the reuse point when that work begins.
+
 ## Final product promise
 
 > One secure platform connecting people, workflows, services, assets,

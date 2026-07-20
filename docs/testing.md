@@ -1839,6 +1839,53 @@ directly, write that test — a passing "the button is hidden" test
 proves nothing about whether the backend would reject the same action
 taken another way.
 
+## A refactor's regression test proves "no rule" behaves identically, not just "with a rule" (Checkpoint 53)
+
+Unifying `CustomFieldValueService`'s own tier check with
+`CustomFieldAccessResolver::resolve()` touched every read and write of
+every custom field in the app, not just the new visibility-rule code
+path — the highest-blast-radius change in this checkpoint. Per the
+approved plan, `CustomFieldVisibilityRuleApiTest` includes
+`test_default_sensitivity_behaviour_unchanged_when_no_visibility_rule_exists`,
+which asserts the exact same access outcome as before the refactor
+*when no rule exists at all* — proving the refactor is behavior-preserving
+in the common case, not just correct in the new-feature case. The
+broader proof is the full existing Checkpoint 48–52 suite (266 tests
+across `CustomFields`/`CustomForms`/`Employees`/`Tenant`) passing
+unchanged after the refactor — a targeted regression test plus an
+unmodified full-suite pass together, neither alone would have been
+sufficient confidence for a change this central.
+
+## Writing a tenant-isolation test surfaced a bug the feature's own code didn't have (Checkpoint 53)
+
+`test_tenant_isolation_for_visibility_rules` (PATCH a cross-tenant
+visibility rule directly by ID, expect `404`) initially failed with an
+uncaught `500` instead. The bug wasn't in the new rule logic at all —
+it was in how the controller re-verified tenant ownership by walking a
+`belongsTo` relation to a `BelongsToTenant`-scoped ancestor: that
+global scope silently resolves the relation to `null` across a tenant
+boundary (searching for the *other* tenant's row while scoped to the
+*current* tenant), and the `null` then hit a non-nullable type-hinted
+parameter. Checking whether this shape existed elsewhere (rather than
+assuming it was novel to the new controller) found the identical defect,
+unfixed, in the already-shipped Checkpoint 52
+`CustomFormSectionController`/`CustomFormFieldController::update()` —
+confirmed by `grep -n "cross_tenant\|cross-tenant"` against
+`CustomFormApiTest.php`, which showed only cross-tenant *form* access
+(safe by construction — `{customForm}` binds directly to a
+tenant-scoped model, so route-model-binding itself 404s before the
+controller runs) and cross-tenant field IDs *submitted as payload
+values* (a different code path, already covered) were ever tested —
+never a direct cross-tenant PATCH of a child row by its own ID. Two
+regression tests were added retroactively to `CustomFormApiTest.php`
+(`test_cross_tenant_section_access_by_id_blocked`/
+`test_cross_tenant_field_access_by_id_blocked`) to close that gap. The
+lesson: writing a new checkpoint's own tenant-isolation test is worth
+treating as an opportunity to check whether the *identical* test shape
+already exists for structurally similar controllers from prior
+checkpoints — this bug had been shipped and accepted for an entire
+checkpoint before anything exercised it.
+
 ## Known limitations
 
 - No test coverage reporting configured yet.

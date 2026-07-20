@@ -415,14 +415,15 @@ this was a gap in the audit's own coverage, not a real access-control
 hole (the live smoke test in Checkpoint 47 already proved the
 middleware itself works).
 
-## Custom Fields (Checkpoint 48, extended Checkpoint 49/51, field-level access Checkpoint 50)
+## Custom Fields (Checkpoint 48, extended Checkpoint 49/51, field-level access Checkpoint 50, visibility rules Checkpoint 53)
 
 Backend-owned field definitions per entity, plus their values exposed
 through the owning entity's own endpoints — no standalone values API.
 See `docs/architecture.md#custom-fields-foundation-checkpoint-48`,
 `docs/architecture.md#custom-fields-for-job-applications-checkpoint-49`,
 `docs/architecture.md#field-level-visibility-and-sensitive-field-access-checkpoint-50`,
-and `docs/architecture.md#employee-custom-fields-checkpoint-51`
+`docs/architecture.md#employee-custom-fields-checkpoint-51`, and
+`docs/architecture.md#configurable-field-visibility-rules-checkpoint-53`
 for the full design. Supported entities: `recruitment_applicant`
 (the candidate's identity), `job_application` (the pipeline record,
 `App\Models\RecruitmentApplication`), and `employee`
@@ -443,6 +444,8 @@ required module still produces the identical `403` shape as before
 | `GET` | `/api/v1/custom-fields/{entityType}` | `custom_fields.view` | `422` if `entityType` is unknown. Returns every definition (active and inactive) for that entity, with its options/validation rules |
 | `POST` | `/api/v1/custom-fields/{entityType}` | `custom_fields.manage` | Creates a definition. `field_key` immutable after creation; `422` on bad format, reserved key, duplicate key, or the 50-fields-per-entity cap |
 | `PATCH` | `/api/v1/custom-fields/{customFieldDefinition}` | `custom_fields.manage` | Updates label/description/type/required/default/sensitivity/sort_order/status/options/validation_rules. `field_key` is never accepted. `field_type` change is `422` if the field already has stored values |
+| `POST` | `/api/v1/custom-fields/{customFieldDefinition}/visibility-rules` | `custom_fields.manage` | Creates a role-based visibility rule (Checkpoint 53). `422` if `role_id` belongs to another tenant, a platform role, the Tenant Admin role, already has a rule for this field, or `can_edit: true` with `can_view: false` |
+| `PATCH` | `/api/v1/custom-field-visibility-rules/{customFieldVisibilityRule}` | `custom_fields.manage` | Updates `can_view`/`can_edit`/`status` on an existing rule. `role_id`/`custom_field_definition_id` are immutable — never accepted |
 
 ### Response shape
 
@@ -467,28 +470,35 @@ required module still produces the identical `403` shape as before
       "options": [
         { "option_key": "citizen", "label": "Citizen", "sort_order": 0, "status": "active" }
       ],
-      "validation_rules": []
+      "validation_rules": [],
+      "visibility_rules": [
+        { "id": "01h...", "role": { "id": 12, "name": "HR Manager" }, "can_view": true, "can_edit": false, "status": "active" }
+      ]
     }
   ]
 }
 ```
 
-Never returned: `tenant_id`, `created_by`, `updated_by`.
+Never returned: `tenant_id`, `created_by`, `updated_by`. A visibility
+rule row never returns anything about the role beyond its `id`/`name`
+(never the role's own permission set).
 
-**`can_view`/`can_edit` (Checkpoint 50)** are computed fresh for the
-requesting user on every request, never stored — `can_view` combines
-the entity's own view permission (e.g. `job_applications.view`) with
-the field's sensitivity-tier permission (see below); `can_edit` does
-the same with the update permission. Both are UX metadata only, to
-drive frontend rendering (hide the field, or show it read-only) — the
-actual security boundary is enforced server-side in
-`CustomFieldValueService`, independent of these flags.
+**`can_view`/`can_edit` (Checkpoint 50, rule-aware as of Checkpoint
+53)** are computed fresh for the requesting user on every request,
+never stored — `can_view` combines the entity's own view permission
+(e.g. `job_applications.view`) with the field's sensitivity-tier-or-rule
+access (see below); `can_edit` does the same with the update
+permission. Both are UX metadata only, to drive frontend rendering
+(hide the field, or show it read-only) — the actual security boundary
+is enforced server-side in `CustomFieldValueService`, independent of
+these flags, through the same `CustomFieldAccessResolver` that computes
+this metadata (unified as of Checkpoint 53 — see
+`docs/architecture.md#configurable-field-visibility-rules-checkpoint-53`).
 
-### Field-level access (Checkpoint 50)
+### Field-level access (Checkpoint 50, overridable by role-based rules as of Checkpoint 53)
 
 Each field's `sensitivity` (`normal`/`sensitive`/`confidential`/
-`restricted`) maps to a fixed, platform-defined permission — no
-per-tenant configurable rules exist yet:
+`restricted`) maps to a fixed, platform-defined permission by default:
 
 | Sensitivity | Required permission |
 |---|---|
@@ -515,6 +525,47 @@ Audit-log masking (Checkpoint 48) is **unchanged** by this checkpoint
 — a `sensitive`/`confidential`/`restricted` value is masked in the
 audit log regardless of the acting user's own tier access, since a
 different, less-privileged user may read that audit log later.
+
+### Visibility rules (Checkpoint 53)
+
+A tenant-configurable, **role-based override** on top of the fixed
+tier table above. `POST /custom-fields/{customFieldDefinition}/visibility-rules`:
+
+```json
+{ "role_id": 12, "can_view": true, "can_edit": false }
+```
+
+`PATCH /custom-field-visibility-rules/{customFieldVisibilityRule}`:
+
+```json
+{ "can_view": true, "can_edit": true, "status": "active" }
+```
+
+Resolution: if the requester holds a role with one or more *active*
+matching rules, those rules' `can_view`/`can_edit` **replace** (not
+merge with) the default tier computation, aggregated
+**most-permissive-wins** across every matching role. If no rule
+matches any role the requester holds, the fixed tier table above
+applies unchanged. Either path, the entity's own parent permission
+(`employees.view`/`.update`, etc.) is still required and can never be
+bypassed by a rule. `can_edit: true` requires `can_view: true` — the
+opposite (`422`) has no meaning and is rejected on both create and
+update.
+
+A rule can never target: a role from another tenant (`422`), a
+platform role (`422`), or the Tenant Admin role by slug (`422`) — Tenant
+Admin already holds every tier permission automatically and must never
+be locked out of its own Settings pages. Rules are never hard-deleted,
+only disabled via `status`. Config changes emit
+`custom_field_visibility_rule.created`/`updated`/`enabled`/`disabled`
+audit events (never a field value); value writes continue to emit only
+`custom_field.value_updated`, unaffected.
+
+**Known limitation**: rules match only roles the requester actually
+holds — a user with an equivalent *direct* permission grant
+(`user_permissions`, independent of role membership) is unaffected by
+any rule targeting "the role that would normally carry that
+permission." See `docs/security.md#configurable-field-visibility-rules-checkpoint-53`.
 
 ### Values — exposed through the owning entity, not a separate endpoint
 

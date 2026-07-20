@@ -27,6 +27,16 @@ use Illuminate\Http\Resources\Json\JsonResource;
  * CustomFormResource can reuse the exact same logic rather than
  * re-deriving it.
  */
+/**
+ * Checkpoint 53 — can_view/can_edit above now also reflect any active
+ * configurable visibility rule matching the caller's roles
+ * (CustomFieldAccessResolver itself was extended; nothing changed
+ * here). visibility_rules lists every rule regardless of status,
+ * gated by the same custom_fields.view permission that already gates
+ * reaching this resource at all — there is no separate "management
+ * only" response shape anywhere in this subsystem. Never exposes
+ * anything about a role beyond its id/name.
+ */
 class CustomFieldDefinitionResource extends JsonResource
 {
     /**
@@ -55,6 +65,7 @@ class CustomFieldDefinitionResource extends JsonResource
                 'rule_key' => $rule->rule_key->value,
                 'rule_value' => $rule->rule_value,
             ])),
+            'visibility_rules' => CustomFieldVisibilityRuleResource::collection($this->whenLoaded('visibilityRules')),
             'created_at' => $this->created_at?->toIso8601String(),
             'updated_at' => $this->updated_at?->toIso8601String(),
         ];

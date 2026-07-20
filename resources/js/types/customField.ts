@@ -25,6 +25,28 @@ export interface CustomFieldValidationRuleState {
     rule_value: string | null;
 }
 
+export type CustomFieldVisibilityRuleStatus = 'active' | 'inactive';
+
+// Checkpoint 53 — mirrors CustomFieldVisibilityRuleResource exactly.
+// An override on top of the fixed sensitivity tier: can_view/can_edit
+// here fully replace (not merge with) the default tier computation for
+// any caller holding this role, aggregated most-permissive-wins across
+// roles when more than one rule matches. Never returned for a role the
+// caller cannot otherwise see (custom_fields.view already gates the
+// whole definition response this is nested under).
+export interface CustomFieldVisibilityRuleState {
+    id: string;
+    role: {
+        id: number;
+        name: string;
+    };
+    can_view: boolean;
+    can_edit: boolean;
+    status: CustomFieldVisibilityRuleStatus;
+    created_at: string | null;
+    updated_at: string | null;
+}
+
 export interface CustomFieldDefinitionState {
     id: string;
     entity_type: string;
@@ -45,6 +67,7 @@ export interface CustomFieldDefinitionState {
     can_edit: boolean;
     options: CustomFieldOptionState[];
     validation_rules: CustomFieldValidationRuleState[];
+    visibility_rules: CustomFieldVisibilityRuleState[];
 }
 
 export const CUSTOM_FIELD_TYPES: { value: CustomFieldType; label: string; usesOptions: boolean }[] = [

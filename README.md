@@ -901,6 +901,54 @@ form structure entirely — server-enforced, not a frontend filter. See
 MVP limitations (`is_required_override` is UI-only; `CustomFieldsCard`
 is kept unconditionally alongside the new form renderer for now).
 
+## Configurable Field Visibility Rules (Checkpoint 53)
+
+A tenant-configurable **override layer** on top of the fixed
+sensitivity-tier model from Checkpoint 50 — `custom_field_visibility_rules`
+lets a Tenant Admin grant a specific role view/edit access to a custom
+field beyond its default tier, make a field read-only for a role, or
+fully hide a field from a role, without touching the field's own
+`sensitivity` value. Rules are **role-based only** for this MVP (no
+per-user rules), **override-only** (no separate effect/mode/allow/deny
+column — `can_view`/`can_edit` alone express grant, read-only, or full
+deny), and **most-permissive-wins** when a caller holds more than one
+role with a matching rule. A rule can never bypass the entity's own
+parent permission (`employees.view`/`.update`, etc.) — that check is
+always AND'd in on top, never replaced. The Tenant Admin role itself
+cannot be targeted by a rule (checked by slug, `tenant-admin`, not the
+broader `is_system_role` flag — every seeded tenant role is a system
+role, so that flag can't be reused here without breaking the feature).
+
+The central implementation decision was **unifying enforcement**:
+`CustomFieldAccessResolver` (built in Checkpoint 52 for API response
+metadata only) and `CustomFieldValueService`'s own private tier check
+(from Checkpoint 50) had never been the same code path — adding
+rule-awareness to only one of them would have left real value
+read/write enforcement blind to rules while the UI showed a rule
+taking effect. `CustomFieldValueService` now delegates to
+`CustomFieldAccessResolver::resolve()` for every read/write, making the
+resolver the single source of truth for both UX metadata and actual
+enforcement. Custom Forms (Checkpoint 52) automatically respect rules
+too, since `CustomFormResource` was already calling the same resolver.
+
+A second, unrelated latent bug was found and fixed while building this
+checkpoint's tenant-isolation test: `CustomFormSectionController` and
+`CustomFormFieldController::update()` (both shipped in Checkpoint 52)
+crashed with an uncaught 500 instead of a 404 when a cross-tenant
+section/field ID was PATCHed directly — `BelongsToTenant`'s global
+scope silently resolves the `section->form`/`section->form` relation
+chain to `null` when the real owner is a different tenant than the one
+currently resolved, and that `null` was flowing into a non-nullable
+type-hinted parameter. Fixed in both controllers (and in the new
+`CustomFieldVisibilityRuleController`, which has the identical shape)
+with an explicit null check before the tenant-id comparison. Checkpoint
+52's own test suite never exercised this exact scenario (only
+cross-tenant *form* access and cross-tenant field-ID-in-payload were
+covered) — regression tests for direct cross-tenant section/field
+access by ID were added retroactively. See `docs/architecture.md` and
+`docs/security.md` for the full design and the direct-permission-grant
+asymmetry this model deliberately accepts.
+
 ## Documentation
 
 - [`docs/platform-vision.md`](docs/platform-vision.md) — the long-term product/architecture vision (platform kernel, module layer, subscription/entitlement model, event-driven architecture, AI governance) that every checkpoint's design should be checked against. Not tied to a checkpoint; update it when the vision changes, not when a feature ships.

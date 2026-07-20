@@ -42,7 +42,7 @@ class CustomFieldDefinitionController extends Controller
 
         $definitions = CustomFieldDefinition::query()
             ->where('entity_type', $entity->value)
-            ->with(['options', 'validationRules'])
+            ->with(['options', 'validationRules', 'visibilityRules.role'])
             ->orderBy('sort_order')
             ->get();
 
@@ -64,7 +64,7 @@ class CustomFieldDefinitionController extends Controller
             actor: $request->user(),
         );
 
-        return (new CustomFieldDefinitionResource($definition))->response()->setStatusCode(201);
+        return (new CustomFieldDefinitionResource($definition->load('visibilityRules.role')))->response()->setStatusCode(201);
     }
 
     public function update(UpdateCustomFieldDefinitionRequest $request, CustomFieldDefinition $customFieldDefinition, CustomFieldDefinitionService $service): CustomFieldDefinitionResource
@@ -82,7 +82,7 @@ class CustomFieldDefinitionController extends Controller
             actor: $request->user(),
         );
 
-        return new CustomFieldDefinitionResource($definition);
+        return new CustomFieldDefinitionResource($definition->load('visibilityRules.role'));
     }
 
     /**

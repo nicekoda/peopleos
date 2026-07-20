@@ -61,6 +61,19 @@ class CustomFieldDefinition extends Model
         return $this->hasMany(CustomFieldOption::class)->orderBy('sort_order');
     }
 
+    /**
+     * Checkpoint 53 — the configurable override layer on top of the
+     * fixed sensitivity-tier model. Consulted exclusively through
+     * CustomFieldAccessResolver::resolve(), never queried directly by
+     * any other consumer (CustomFieldValueService, CustomFieldDefinitionResource,
+     * CustomFormResource/CustomFormSectionResource) — one source of
+     * truth, not a second one.
+     */
+    public function visibilityRules(): HasMany
+    {
+        return $this->hasMany(CustomFieldVisibilityRule::class);
+    }
+
     public function values(): HasMany
     {
         return $this->hasMany(CustomFieldValue::class);

@@ -3672,3 +3672,231 @@ custom-form entities, each declaring its own `requiredModule()`;
 configurable field-visibility rules remain the Checkpoint 53 candidate
 per the roadmap in `docs/platform-vision.md`, unaffected by this
 checkpoint.
+
+## Configurable Field Visibility Rules (Checkpoint 53)
+
+An **override layer** on top of the fixed sensitivity-tier model from
+Checkpoint 50 — `custom_field_visibility_rules` lets a Tenant Admin
+grant a specific *role* view/edit access to a custom field beyond its
+default tier, make a field read-only, or fully hide it, on a
+per-field-per-role basis. This is deliberately the smallest version of
+the "future" configurable-rules layer flagged in Checkpoint 50 and
+Checkpoint 52's own `Future` sections — role-based only, no conditions,
+no per-user rules, no export/report/AI enforcement yet.
+
+### The central decision: unifying enforcement, not just adding a rule table
+
+Before writing any rule logic, the existing code was read directly and
+a real gap was found: `CustomFieldAccessResolver::resolve()` (built in
+Checkpoint 52) and `CustomFieldValueService`'s own private
+`hasTierAccess()` (from Checkpoint 50) were **two separate
+implementations of the same tier check** — the resolver only ever fed
+`CustomFieldDefinitionResource`/`CustomFormFieldResource`'s `can_view`/
+`can_edit` UX metadata, while the service's own private method
+independently gated real reads/writes. Adding rule-awareness to only
+the resolver would have made the API *say* a rule granted access while
+the service still silently enforced the old tier-only check underneath
+— a UI/enforcement split that would have been a real security bug, not
+a cosmetic one.
+
+**Fix**: `CustomFieldValueService::getActiveValuesFor()`/`setValuesFor()`
+now call `CustomFieldAccessResolver::resolve($definition, $viewer)['can_view'/'can_edit']`
+directly; the private `hasTierAccess()` method was deleted entirely.
+`CustomFieldAccessResolver` is now the **single source of truth** for
+custom-field visibility/editability, consulted by every caller —
+`CustomFieldDefinitionResource`, `CustomFormFieldResource` (via the
+embedded definition resource), and `CustomFieldValueService`. A
+regression test (`test_default_sensitivity_behaviour_unchanged_when_no_visibility_rule_exists`)
+proves this refactor alone changes nothing when no rule exists — the
+full existing Checkpoint 48–52 test suite (266 tests) passing unchanged
+is the broader proof.
+
+### Rule model — override-only, no effect/mode column
+
+```
+custom_field_visibility_rules (
+    id, custom_field_definition_id, role_id,
+    can_view, can_edit, status, created_by, updated_by, timestamps
+)
+```
+
+No separate `effect`/`mode`/`allow`/`deny` column — `can_view`/
+`can_edit` alone express the full range needed:
+
+| `can_view` | `can_edit` | Meaning |
+|---|---|---|
+| `true` | `true` | Grant (beyond default tier, if it wouldn't otherwise pass) |
+| `true` | `false` | Read-only for this role |
+| `false` | `false` | Full deny for this role |
+| `false` | `true` | **Rejected at write time** — editing without viewing makes no sense |
+
+**Resolution order** (`CustomFieldAccessResolver::resolveTierOrRuleAccess()`):
+if one or more *active* rules match any role the caller holds, those
+rules **fully replace** (never merge with) the default tier
+computation for that caller — **most-permissive-wins** aggregated
+across matching roles (`Collection::contains()` OR across `can_view`,
+same for `can_edit`). If no rule matches any held role, behavior falls
+back to the unchanged Checkpoint 50 tier computation. Either path, the
+entity's own parent permission (`valueViewPermission()`/
+`valueUpdatePermission()`) is always AND'd in afterward, never
+replaceable by a rule — a rule can widen or narrow *tier* access, never
+grant access to an entity the caller couldn't otherwise view/edit at
+all.
+
+`custom_field_definition_id` is a `foreignUlid` (matching every other
+custom-field table); `role_id` is a plain `foreignId` — `roles.id` is
+`bigint`, unlike every tenant-owned table since Checkpoint 48, verified
+by reading the actual `roles` migration before writing this one rather
+than assuming ULID consistency. No `tenant_id` column — same
+transitively-inherited-through-the-parent-FK pattern as
+`custom_field_options`/`custom_form_sections`/`custom_form_fields`; a
+`unique(custom_field_definition_id, role_id)` constraint means at most
+one rule per field-role pair (edit the existing rule instead of
+creating a second one).
+
+### Role-based only — the direct-permission-grant asymmetry, stated plainly
+
+`User::hasPermission()` checks **role-held permissions OR a direct
+per-user grant** (`user_permissions`, from the original RBAC design) —
+whichever is true. A visibility rule only ever matches a role the
+caller **actually holds** (`$user->roles()->pluck('roles.id')`); it has
+no way to see or react to a direct permission grant. Concretely: if a
+user has no role granting `custom_fields.access_sensitive` but was
+individually granted `employees.access_sensitive`-equivalent access via
+`grantPermission()`, a visibility rule targeting "the role that would
+normally hold that tier" does not affect them at all — they still fall
+through to (and pass) the ordinary tier check on their own direct
+grant, unaffected by any rule's existence. This is by design (test:
+`test_direct_permission_grant_is_unaffected_by_role_based_rules`), not
+a gap — extending rules to also match direct grants is future,
+explicitly out of scope for this MVP.
+
+### Tenant Admin role cannot be targeted — checked by slug, not `is_system_role`
+
+Every one of the 20 seeded tenant roles (Tenant Admin, HR Director, HR
+Manager, ..., Implementation Engineer) is `is_system_role: true` —
+confirmed by reading `RoleSeeder` directly before designing this
+safeguard. Rejecting rules against *any* system role (the guard
+`RolePermissionController::update()` already uses for permission-set
+edits) would make this feature unusable, since every realistic
+rule-target role is a system role. Instead,
+`CustomFieldVisibilityRuleService::resolveRoleForDefinition()` rejects
+specifically `$role->slug === 'tenant-admin'` — Tenant Admin already
+holds every non-platform permission and every sensitivity tier
+automatically (`RoleSeeder` line 76), so a rule against it could never
+do anything except accidentally *lock out* the one role that must
+never lose configuration access to this feature (or any other Settings
+page) in a tenant.
+
+### Tenant safety — the same re-verification pattern, applied a fourth time
+
+`CustomFieldVisibilityRule` has no `BelongsToTenant`/`tenant_id` of its
+own — `CustomFieldVisibilityRuleController` walks up to the owning
+`CustomFieldDefinition` (which *is* `BelongsToTenant`-scoped) and
+compares `tenant_id` explicitly, the same posture used three times
+before for `custom_field_options`/`custom_form_sections`/
+`custom_form_fields`. The role itself is independently re-verified too:
+`resolveRoleForDefinition()` rejects a `role_id` belonging to a
+different tenant, a platform role, or the Tenant Admin role, before
+ever constructing a rule — the frontend-supplied `role_id`/
+`custom_field_definition_id` are never trusted.
+
+### A second bug found while testing tenant isolation — not new to this checkpoint
+
+Writing the tenant-isolation test for
+`CustomFieldVisibilityRuleController::update()` surfaced an uncaught
+500 (`TypeError`) instead of the expected 404. Root cause:
+`$customFieldVisibilityRule->customFieldDefinition` walks a `belongsTo`
+relation to `CustomFieldDefinition`, which **is** `BelongsToTenant`-scoped
+— but that global scope applies to the relation query too, filtered to
+whichever tenant is *currently resolved* from the request's subdomain,
+not the tenant the rule's field actually belongs to. A rule belonging
+to a different tenant than the caller's therefore resolves
+`->customFieldDefinition` to `null`, and that `null` was flowing into a
+non-nullable type-hinted parameter.
+
+Checking whether the identical shape existed elsewhere found it does:
+`CustomFormSectionController`/`CustomFormFieldController::update()`
+(shipped, accepted, in production since Checkpoint 52) have the exact
+same defect — both walk `section->form` (or `field->section->form`) to
+reach a `BelongsToTenant`-scoped ancestor, and a cross-tenant
+section/field ID resolves that relation to `null` the same way.
+Checkpoint 52's own test suite never exercised "PATCH a cross-tenant
+section/field directly by its own ID" (only cross-tenant *form* access
+via `{customForm}` — which is safe by construction, since Laravel's
+route-model-binding on a directly `BelongsToTenant`-scoped model 404s
+before the controller ever runs — and a cross-tenant field ID
+*submitted as a payload value* were covered, a different scenario
+caught by the service's own explicit check).
+
+**Fixed in all three controllers** with an explicit null check before
+the tenant-id comparison, returning the intended 404 instead of
+crashing. Two regression tests
+(`test_cross_tenant_section_access_by_id_blocked`/
+`test_cross_tenant_field_access_by_id_blocked`) were added to the
+existing Checkpoint 52 `CustomFormApiTest.php` to close the coverage
+gap that let this ship unnoticed. This was never a data-exposure bug —
+no cross-tenant data was ever returned and no cross-tenant write ever
+succeeded — but an uncaught 500 is a worse failure mode than a clean
+404 (stack traces, noisier logs, less predictable client handling), so
+it was fixed as part of this checkpoint rather than filed separately.
+
+### API/resource behaviour
+
+`CustomFieldDefinitionResource.visibility_rules` lists every rule for
+that field regardless of status, via `CustomFieldVisibilityRuleResource`
+(deliberately narrow: rule id, `role: {id, name}` only — never the
+role's own permission set, never `custom_field_definition_id`/
+`created_by`/`updated_by`). Gated by the same `custom_fields.view` that
+already gates reaching the definition response at all — there is no
+separate "management-only" response shape anywhere in this subsystem
+to hook a stricter gate into, matching the same reasoning
+`CustomFormResource` already applies to its own nested sections/fields.
+`can_view`/`can_edit` on the definition itself already reflect the
+final computed value (defaults + rules + aggregation + disabled-field
+exclusion) with no separate "raw" vs. "computed" distinction exposed.
+
+Two routes, both requiring `custom_fields.manage` (no new permission):
+`POST /custom-fields/{customFieldDefinition}/visibility-rules` and
+`PATCH /custom-field-visibility-rules/{customFieldVisibilityRule}`. No
+static `module:{key}` middleware — module enforcement is resolved at
+runtime from the definition's own `entity_type`, via the same
+`EnsuresCustomFieldEntityModuleEnabled` trait every other custom-field/
+custom-form controller uses. Rules are never hard-deleted, only
+enabled/disabled via `status`, matching every other row in this
+subsystem.
+
+### Audit behaviour
+
+`CustomFieldVisibilityRuleAuditEvents` (mirroring `CustomFormAuditEvents`'s
+shape) emits `custom_field_visibility_rule.created`/`updated`/`enabled`/
+`disabled` — configuration changes only. Metadata always includes
+`field_key`, `entity_type`, `role_id`, `role_name`, and the previous/new
+`can_view`/`can_edit` pair — **never a field value**, since these rows
+never hold one. Value audit is completely unaffected: writes through a
+rule-visible field still emit exactly `custom_field.value_updated`,
+through the unmodified `CustomFieldAuditEvents::valueUpdated()`.
+
+### Frontend
+
+A "Visibility rules" section inside each custom field's existing edit
+panel (`Settings/CustomFields.tsx`) — no separate page, no matrix
+editor. Lists existing rules (role name, status badge, `can_view`/
+`can_edit` checkboxes editable inline, enable/disable button); an
+"add rule" row below lets a Tenant Admin pick an un-ruled, non-Tenant-Admin
+role (sourced from the existing `GET /roles` endpoint) and set initial
+`can_view`/`can_edit`. The `can_edit` checkbox is disabled whenever
+`can_view` is unchecked, both in the add-rule row and per existing
+rule, mirroring the backend's own `can_edit` requires `can_view` rule
+client-side to avoid a guaranteed 422 — the backend remains the actual
+enforcement boundary regardless.
+
+### Future
+
+Extending rules to also match direct permission grants, not just
+roles; permission-based (rather than role-based) targeting; row-level
+conditions (department/location/manager-chain); report/export/AI-filter
+integration reusing `CustomFieldAccessResolver` (the resolver was
+deliberately kept generic enough for this); a real system-field (not
+just custom-field) visibility layer, reusing the same resolver
+primitive; per-user rule overrides layered on top of role-based ones.

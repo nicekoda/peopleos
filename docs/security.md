@@ -6291,6 +6291,115 @@ top. Additionally: real backend-enforced form-level required fields
 `CustomFieldsCard` once forms are proven; `lifecycle_processes`/
 `leave_requests` as both custom-field and custom-form entities.
 
+## Configurable Field Visibility Rules (Checkpoint 53)
+
+See
+[`architecture.md`](architecture.md#configurable-field-visibility-rules-checkpoint-53)
+for the full technical design. This section covers the security
+posture of adding tenant-configurable, role-based visibility rules on
+top of the fixed Checkpoint 50 sensitivity-tier model.
+
+### A rule narrows or widens tier access only — it never grants entity access
+
+A visibility rule's `can_view`/`can_edit` replace the *tier*
+computation only. The entity's own parent permission
+(`employees.view`/`.update`, etc.) is always AND'd in on top,
+independently, in `CustomFieldAccessResolver::resolve()` — a rule
+granting `can_view: true, can_edit: true` to a role that doesn't hold
+`employees.view` at all still results in `can_view: false` for that
+role. Proven directly by `test_rule_cannot_bypass_parent_view_permission`/
+`test_rule_cannot_bypass_parent_update_permission`, which grant the
+broadest possible rule and confirm the field remains fully inaccessible
+without the parent permission.
+
+### The enforcement-unification fix is the security-relevant change in this checkpoint
+
+Before this checkpoint, `CustomFieldValueService`'s real read/write
+enforcement and `CustomFieldAccessResolver`'s API-response metadata
+were two independent implementations of the same tier check — a latent
+risk that a future change to one would silently diverge from the
+other, or (more concretely here) that adding rule-awareness to only one
+of them would make responses claim a rule took effect while writes
+still enforced the old tier-only logic underneath, or vice versa. Both
+now call the same `CustomFieldAccessResolver::resolve()` — there is
+exactly one implementation of "can this user view/edit this field",
+consulted identically by the Resource layer and the Service layer. See
+`architecture.md` for the full before/after.
+
+### Role-based only — the direct-permission-grant asymmetry is a real, accepted limitation
+
+Because a rule matches only the roles a user actually holds
+(`$user->roles()->pluck('roles.id')`), a user with an equivalent
+**direct permission grant** (`user_permissions`, independent of role
+membership) is unaffected by any rule targeting "the role that would
+normally carry that permission." This is not a bypass of a rule (rules
+don't apply to them at all in that scenario) and not a security
+regression (their access is governed by the ordinary, already-existing
+direct-grant tier check) — but it does mean visibility rules are not a
+complete access-control override for every path to a permission, only
+the role-based one. Documented explicitly rather than silently, per
+explicit design decision, with a dedicated test
+(`test_direct_permission_grant_is_unaffected_by_role_based_rules`).
+
+### Tenant Admin cannot be targeted, and the safeguard is deliberately narrower than `is_system_role`
+
+Every seeded tenant role is `is_system_role: true`, so a rule-creation
+guard against *any* system role would make the feature unusable.
+Instead, `CustomFieldVisibilityRuleService` rejects specifically the
+`tenant-admin` slug. This is a narrower, more surgical safeguard than
+the `is_system_role` guard `RolePermissionController` uses for
+permission-set edits — appropriate here because the risk being guarded
+against is different (accidentally locking Tenant Admin out of its own
+Settings pages, not protecting a role's permission *set* from being
+rewritten).
+
+### Every rule enforced server-side, with direct API bypass tests
+
+Consistent with every prior checkpoint's non-negotiable rule — frontend
+is UX only, backend is the real boundary. Direct-request tests prove,
+independent of any UI: a role from another tenant is rejected (`422`);
+a platform role is rejected (`422`); the Tenant Admin role is rejected
+(`422`); a `custom_field_definition_id` from another tenant is rejected
+(`404`, since the field itself doesn't resolve for the caller's
+tenant); `can_edit: true` with `can_view: false` is rejected (`422`); a
+rule cannot expose a disabled field or a field whose entity's required
+module is disabled (both remain hidden regardless of rule content); a
+rule change is visible immediately in both `CustomFieldDefinitionResource`
+and `CustomFormResource` without any caching layer to invalidate.
+
+### A pre-existing bug (Checkpoint 52) found and fixed as part of this checkpoint's tenant-isolation testing
+
+Writing this checkpoint's tenant-isolation test surfaced an uncaught
+500 instead of a 404 when a cross-tenant visibility rule was PATCHed
+directly by ID — root-caused to a `BelongsToTenant`-scoped relation
+silently resolving to `null` across a tenant boundary, then flowing
+into a non-nullable parameter. The identical defect was found, on
+inspection, in the already-shipped Checkpoint 52
+`CustomFormSectionController`/`CustomFormFieldController::update()` —
+never triggered by that checkpoint's own tests, since no test PATCHed a
+cross-tenant section/field directly by ID. This was never a data
+exposure (no cross-tenant read or write ever succeeded — the request
+always failed, just with the wrong status code and an unhandled
+exception instead of a clean rejection) but was fixed in all three
+controllers as part of this checkpoint, with two new regression tests
+added to close the coverage gap. See `architecture.md` for the full
+root-cause explanation.
+
+### Current limitations
+
+Role-based only (no per-user rule overrides); no conditions/expressions
+beyond `can_view`/`can_edit`; no report/export/AI-filter enforcement
+yet (though `CustomFieldAccessResolver` was kept generic enough to be
+reused there); the direct-permission-grant asymmetry described above.
+
+### Future
+
+Same as Checkpoint 48–52's Future lists. Additionally: rules matching
+direct permission grants, not just role membership; permission-based
+(rather than role-based) rule targeting; report/export/AI-filter
+integration reusing `CustomFieldAccessResolver`; a real system-field
+visibility layer built on the same resolver primitive.
+
 ## Local Demo Credentials
 
 **Local development only — these are not real secrets and only work against your own local database.** Password comes from `SEED_USER_PASSWORD` in `.env` (not committed; `.env.example` has an empty placeholder).
@@ -6320,7 +6429,7 @@ data these six `uesl` logins see (Checkpoint 26's `DemoDataSeeder`).
 - No email verification enforcement on login (column exists, not yet checked).
 - Password reset exists as of Checkpoint 44 (the `password_reset_tokens` table, previously unused, now backs a real forgot-password flow) — see [Password Reset](#password-reset-checkpoint-44) below. An invite-email flow (built on the same token table) exists as of Checkpoint 46 — see [Invite-Email Flow for New Accounts](#invite-email-flow-for-new-accounts-checkpoint-46) below. Still no MFA or SSO.
 - A backend module registry (`recruitment`, `lifecycle`, `leave`, `documents`, `policies`, `hr_documents` toggleable per tenant) and a narrow branding surface (display name, logo, two colors) exist as of Checkpoint 47 — see [Module Registry & Branding Foundation](#module-registry--branding-foundation-checkpoint-47) below and `docs/platform-vision.md` for the long-term platform direction this checkpoint is the first foundation of. Still no entitlement/subscription layer sitting in front of enablement.
-- A tenant-scoped custom fields engine (EAV-leaning hybrid: `custom_field_definitions`/`custom_field_options`/`custom_field_validation_rules`/`custom_field_values`) exists as of Checkpoint 48 (`recruitment_applicant`), Checkpoint 49 (`job_application`, i.e. `App\Models\RecruitmentApplication`), and Checkpoint 51 (`employee`, i.e. `App\Models\Employee`) — see [Custom Fields Foundation](#custom-fields-foundation-checkpoint-48), [Custom Fields for Job Applications](#custom-fields-for-job-applications-checkpoint-49), and [Employee Custom Fields](#employee-custom-fields-checkpoint-51) below. No schema or core-service change was needed to add the second or third entity. As of Checkpoint 50, sensitivity classification also gates read/write access via fixed platform permissions (`custom_fields.access_sensitive`/`access_confidential`/`access_restricted`), not just audit masking — see [Field-Level Visibility and Sensitive Field Access](#field-level-visibility-and-sensitive-field-access-checkpoint-50) below; a tenant-configurable rules layer on top of this fixed model is still a documented future roadmap, not built yet. As of Checkpoint 52, a Custom Forms layer (`custom_forms`/`custom_form_sections`/`custom_form_fields`) groups existing custom fields into sections for Employee — see [Custom Forms Foundation](#custom-forms-foundation-checkpoint-52) below — deliberately a presentation layer only, never a second value pipeline. `lifecycle_processes`/`leave_requests` are a documented future roadmap, not built yet.
+- A tenant-scoped custom fields engine (EAV-leaning hybrid: `custom_field_definitions`/`custom_field_options`/`custom_field_validation_rules`/`custom_field_values`) exists as of Checkpoint 48 (`recruitment_applicant`), Checkpoint 49 (`job_application`, i.e. `App\Models\RecruitmentApplication`), and Checkpoint 51 (`employee`, i.e. `App\Models\Employee`) — see [Custom Fields Foundation](#custom-fields-foundation-checkpoint-48), [Custom Fields for Job Applications](#custom-fields-for-job-applications-checkpoint-49), and [Employee Custom Fields](#employee-custom-fields-checkpoint-51) below. No schema or core-service change was needed to add the second or third entity. As of Checkpoint 50, sensitivity classification also gates read/write access via fixed platform permissions (`custom_fields.access_sensitive`/`access_confidential`/`access_restricted`), not just audit masking — see [Field-Level Visibility and Sensitive Field Access](#field-level-visibility-and-sensitive-field-access-checkpoint-50) below; a tenant-configurable rules layer on top of this fixed model is still a documented future roadmap, not built yet. As of Checkpoint 52, a Custom Forms layer (`custom_forms`/`custom_form_sections`/`custom_form_fields`) groups existing custom fields into sections for Employee — see [Custom Forms Foundation](#custom-forms-foundation-checkpoint-52) below — deliberately a presentation layer only, never a second value pipeline. As of Checkpoint 53, a tenant-configurable, role-based visibility-rules layer (`custom_field_visibility_rules`) can override the fixed sensitivity tiers per field per role — see [Configurable Field Visibility Rules](#configurable-field-visibility-rules-checkpoint-53) below — role-based only, with a documented direct-permission-grant asymmetry. `lifecycle_processes`/`leave_requests` are a documented future roadmap, not built yet.
 - This app's first scheduled task exists as of Checkpoint 45 (`lifecycle:send-task-digest`, registered via `bootstrap/app.php`'s `->withSchedule()`) — see [Lifecycle Task Ordering & Reminders](#lifecycle-task-ordering--reminders-checkpoint-45) below. Production deployments must now add a `php artisan schedule:run` cron entry, which was never required before this checkpoint (see `docs/deployment.md` §6). Still no queued jobs anywhere in the app.
 - `DatabaseSeeder` uses `WithoutModelEvents`, which disables the `saving`/`creating` guards (on `User` and `Role`) during seeding. `UserSeeder`/`RoleSeeder` set `tenant_id`/`is_platform_admin`/`is_platform_role` explicitly on every row regardless, so this doesn't cause incorrect data — but it does mean a same-row consistency mistake in seed data would surface as a raw Postgres constraint error rather than the cleaner app-level exception. (The RBAC *assignment* guards — `assignRole()`, `givePermissionTo()`, `grantPermission()` — and audit logging calls are unaffected by this, since they're plain method logic, not Eloquent events.)
 - See "Current limitations" under Audit Logging above for the audit-specific gaps (no read endpoint, `givePermissionTo()`/tenant CRUD not logged yet).

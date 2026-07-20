@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\Api\V1\AuditLogController;
 use App\Http\Controllers\Api\V1\CustomFieldDefinitionController;
+use App\Http\Controllers\Api\V1\CustomFieldVisibilityRuleController;
 use App\Http\Controllers\Api\V1\CustomFormController;
 use App\Http\Controllers\Api\V1\CustomFormFieldController;
 use App\Http\Controllers\Api\V1\CustomFormSectionController;
@@ -380,6 +381,17 @@ Route::middleware(['auth', 'tenant.matches'])->prefix('api/v1')->group(function 
     Route::get('custom-fields/{entityType}', [CustomFieldDefinitionController::class, 'index'])->middleware(['permission:custom_fields.view']);
     Route::post('custom-fields/{entityType}', [CustomFieldDefinitionController::class, 'store'])->middleware(['permission:custom_fields.manage']);
     Route::patch('custom-fields/{customFieldDefinition}', [CustomFieldDefinitionController::class, 'update'])->middleware(['permission:custom_fields.manage']);
+
+    // Checkpoint 53 — Configurable Field Visibility Rules. An override
+    // layer on top of the fixed sensitivity-tier model above, never a
+    // replacement for it — see CustomFieldAccessResolver. Rules are
+    // never hard-deleted, only enabled/disabled via update()'s status
+    // field. No static module:{key} gate, same runtime
+    // requiredModule() check as the routes above. No separate
+    // custom_field_visibility_rules.manage permission — reuses
+    // custom_fields.manage/.view exactly.
+    Route::post('custom-fields/{customFieldDefinition}/visibility-rules', [CustomFieldVisibilityRuleController::class, 'store'])->middleware(['permission:custom_fields.manage']);
+    Route::patch('custom-field-visibility-rules/{customFieldVisibilityRule}', [CustomFieldVisibilityRuleController::class, 'update'])->middleware(['permission:custom_fields.manage']);
 
     // Checkpoint 52 — Custom Forms Foundation. A form/section/field is
     // metadata only — grouping/labeling/ordering existing custom

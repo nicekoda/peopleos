@@ -20,6 +20,14 @@ use Illuminate\Validation\ValidationException;
  * the entity being written to, and the field is active before accepting
  * a new value for it — defense in depth, not a replacement for the
  * caller's own checks.
+ *
+ * Checkpoint 53 — field-level access (both read-omission and write-403)
+ * is now decided exclusively by `CustomFieldAccessResolver::resolve()`,
+ * replacing a previous private `hasTierAccess()` that only ever checked
+ * the fixed sensitivity tier and knew nothing about configurable
+ * visibility rules. There is now exactly one implementation of "can this
+ * user view/edit this field" in the entire application — this class no
+ * longer has its own copy of that logic.
  */
 class CustomFieldValueService
 {
@@ -53,7 +61,7 @@ class CustomFieldValueService
         $result = [];
 
         foreach ($definitions as $definition) {
-            if (! $this->hasTierAccess($definition, $viewer)) {
+            if (! CustomFieldAccessResolver::resolve($definition, $viewer)['can_view']) {
                 continue;
             }
 
@@ -88,10 +96,11 @@ class CustomFieldValueService
 
             // Checkpoint 50 — an authorization failure, not a validation
             // one: 403, not 422. Submitting a field_key the caller lacks
-            // tier access to is rejected outright, never silently
+            // access to (by tier, or by Checkpoint 53's configurable
+            // visibility rules) is rejected outright, never silently
             // dropped — a user must not be able to write a value to a
             // field they could never even see.
-            if (! $this->hasTierAccess($definition, $actor)) {
+            if (! CustomFieldAccessResolver::resolve($definition, $actor)['can_edit']) {
                 abort(403, "You do not have permission to edit '{$fieldKey}'.");
             }
 
@@ -142,25 +151,6 @@ class CustomFieldValueService
         }
 
         return $changes;
-    }
-
-    /**
-     * Checkpoint 50 — the shared field-level access primitive, used
-     * identically for read (getActiveValuesFor) and write
-     * (setValuesFor). Deliberately generic (just "does this user hold
-     * this permission key"), so a future system-field visibility
-     * feature can reuse it without depending on anything custom-field-
-     * specific — only CustomFieldSensitivity::requiredAccessPermission()
-     * would need a system-field equivalent, not this check itself.
-     * Purely additive on top of whatever parent-entity permission
-     * already gated the caller reaching this service at all — never a
-     * replacement for it.
-     */
-    private function hasTierAccess(CustomFieldDefinition $definition, User $user): bool
-    {
-        $permission = $definition->sensitivity->requiredAccessPermission();
-
-        return $permission === null || $user->hasPermission($permission);
     }
 
     /**

@@ -485,6 +485,44 @@ class CustomFormApiTest extends TestCase
         $this->actingAs($adminA)->patchJson($this->url($tenantA, "custom-forms/{$formB->id}"), ['name' => 'Hijacked'])->assertNotFound();
     }
 
+    // Regression (Checkpoint 53): PATCHing a cross-tenant section directly
+    // by its own ID must 404, not crash. CustomFormSection has no
+    // tenant_id of its own, so the controller walks section->form to
+    // reach a BelongsToTenant-scoped ancestor — but that relation query
+    // is itself scoped to the *currently resolved* tenant, so a section
+    // whose real form belongs to a different tenant resolves ->form to
+    // null. Previously this null flowed into a non-nullable type-hinted
+    // parameter and threw a TypeError (uncaught 500) instead of 404.
+    public function test_cross_tenant_section_access_by_id_blocked(): void
+    {
+        $tenantA = Tenant::factory()->create();
+        $tenantB = Tenant::factory()->create();
+        $userB = $this->userWithPermissions($tenantB, 'custom_forms.view', 'custom_forms.manage');
+        $formB = $this->createForm($tenantB, $userB);
+        $sectionB = $this->createSection($tenantB, $userB, $formB);
+
+        $adminA = $this->userWithPermissions($tenantA, 'custom_forms.view', 'custom_forms.manage');
+        $this->actingAs($adminA)->patchJson($this->url($tenantA, "custom-form-sections/{$sectionB->id}"), ['title' => 'Hijacked'])->assertNotFound();
+    }
+
+    // Regression (Checkpoint 53): same as above, one level deeper —
+    // PATCHing a cross-tenant field directly by its own ID must 404,
+    // not crash. CustomFormField walks section->form to reach the
+    // tenant-scoped ancestor.
+    public function test_cross_tenant_field_access_by_id_blocked(): void
+    {
+        $tenantA = Tenant::factory()->create();
+        $tenantB = Tenant::factory()->create();
+        $userB = $this->userWithPermissions($tenantB, 'custom_forms.view', 'custom_forms.manage', 'custom_fields.manage', 'employees.view', 'employees.update');
+        $formB = $this->createForm($tenantB, $userB);
+        $sectionB = $this->createSection($tenantB, $userB, $formB);
+        $fieldDefB = $this->employeeField($tenantB, $userB, ['field_key' => 'tenant_b_field_2']);
+        $fieldB = $this->addField($tenantB, $userB, $sectionB, $fieldDefB);
+
+        $adminA = $this->userWithPermissions($tenantA, 'custom_forms.view', 'custom_forms.manage');
+        $this->actingAs($adminA)->patchJson($this->url($tenantA, "custom-form-fields/{$fieldB->id}"), ['sort_order' => 5])->assertNotFound();
+    }
+
     // 24: disabled form not returned by the entity-page-relevant portion of
     // list endpoint (still returned raw for Settings management — the
     // frontend, like CustomFieldsCard, filters to status === active).

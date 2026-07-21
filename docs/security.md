@@ -6385,6 +6385,25 @@ controllers as part of this checkpoint, with two new regression tests
 added to close the coverage gap. See `architecture.md` for the full
 root-cause explanation.
 
+### Two standing lessons this checkpoint surfaced — binding on every future checkpoint
+
+See `architecture.md#two-standing-security-engineering-lessons--apply-to-every-future-checkpoint-not-just-this-one`
+for the full explanation. Stated briefly here since both are general
+PeopleOS security-engineering rules, not Checkpoint-53-specific
+trivia:
+
+1. **Never let access-control logic exist in two places.** A
+   Resource/metadata computation and the real service-layer
+   enforcement of the same rule must call one shared function — never
+   two independent implementations that can silently drift apart.
+2. **A cross-tenant ownership check that walks a relation must treat
+   that relation as nullable and fail closed.** `BelongsToTenant`'s
+   global scope means a `belongsTo` chain to a tenant-scoped ancestor
+   can silently resolve to `null` when the real owner is a different
+   tenant — the check must `abort_if(null, 404)` before comparing
+   `tenant_id`, never assume the relation resolved. A non-nullable
+   type hint here turns a safe rejection into an unhandled 500.
+
 ### Current limitations
 
 Role-based only (no per-user rule overrides); no conditions/expressions

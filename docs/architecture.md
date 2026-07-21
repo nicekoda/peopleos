@@ -3891,6 +3891,51 @@ rule, mirroring the backend's own `can_edit` requires `can_view` rule
 client-side to avoid a guaranteed 422 — the backend remains the actual
 enforcement boundary regardless.
 
+### Two standing security-engineering lessons — apply to every future checkpoint, not just this one
+
+Both bugs this checkpoint found and fixed are instances of a general
+class of mistake, not one-off quirks of custom fields. Stated here as
+standing rules for every checkpoint that follows:
+
+1. **Access logic must never be duplicated between metadata/resource
+   computation and real service-layer enforcement.** Before this
+   checkpoint, `CustomFieldAccessResolver` (feeding API `can_view`/
+   `can_edit` metadata) and `CustomFieldValueService` (enforcing actual
+   reads/writes) were two independent implementations of the same
+   tier check — a design that made it possible to "fix" one without
+   the other, exactly the shape of bug that lets a UI correctly show a
+   restriction while the backend silently doesn't enforce it (or vice
+   versa: enforce something the UI no longer reflects). **Whenever a
+   future checkpoint adds a new axis of access control (report
+   filters, export gating, AI-visibility, a system-field equivalent),
+   it must extend the one existing resolver/service call path, never
+   introduce a second computation of "can this user see/edit this."**
+   If a second call site needs the same answer, it must call the same
+   function — copying the logic, even "temporarily," is the mistake to
+   avoid.
+2. **Cross-tenant relation walking must never assume a scoped relation
+   resolves — a null result must produce 404/403, never an uncaught
+   500.** Any controller that re-verifies tenant ownership by walking
+   a `belongsTo` chain to a `BelongsToTenant`-scoped ancestor (the
+   pattern used by every child row with no `tenant_id` of its own:
+   `custom_field_options`, `custom_form_sections`, `custom_form_fields`,
+   `custom_field_visibility_rules`, and any future one) must treat that
+   relation as **nullable**, because `BelongsToTenant`'s global scope
+   applies to the relation query too — a row belonging to a *different*
+   tenant than the one currently resolved will silently resolve the
+   relation to `null` rather than returning the other tenant's real
+   row. A non-nullable type hint on the receiving check method turns
+   that into an uncaught `TypeError` (500) instead of the intended
+   404/403. **Every such ownership-check method must accept a nullable
+   parameter and `abort_if($related === null, 404)` before comparing
+   `tenant_id`.** This was found twice in one checkpoint (the new
+   `CustomFieldVisibilityRuleController` and the already-shipped
+   Checkpoint 52 `CustomFormSectionController`/`CustomFormFieldController`)
+   precisely because it's easy to miss without a direct
+   "PATCH a cross-tenant child row by its own ID" test — write that
+   test for every new controller of this shape, not only a
+   cross-tenant test on the parent.
+
 ### Future
 
 Extending rules to also match direct permission grants, not just

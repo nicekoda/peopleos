@@ -1907,6 +1907,13 @@ conflict with already-shipped, already-tested behavior, that's new
 information the plan's author didn't have, and it's worth a pause, not
 a guess.
 
+**Standing generalization of this lesson**: when one API response
+serves both a management surface and a live-rendering surface, don't
+remove management data to fix a rendering problem — separate the two
+concerns, and put the fix in whichever layer owns the rendering
+decision. See `docs/architecture.md#standing-product-engineering-lesson`
+for the full statement.
+
 ## Testing a frontend-only rendering change without a frontend test runner (Checkpoint 54)
 
 This checkpoint's actual change — which of two cards a field renders in

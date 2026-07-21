@@ -4104,6 +4104,27 @@ succeed or fail by exactly the same rules it always has, since both
 cards submit through the identical `PATCH /employees/{employee}` call
 with `custom_field_values`.
 
+### Standing product-engineering lesson
+
+The `CustomFormSectionResource` conflict found while building this
+checkpoint (see above) generalizes beyond this one fix — stated here as
+a standing rule for every future checkpoint, not a one-off note:
+
+**When one API response serves both a management surface and a
+live-rendering surface, do not remove management data blindly to fix a
+rendering problem.** Separate the two concerns explicitly: the
+management surface (Settings) needs to see and act on every row
+regardless of status; the rendering surface (an entity page) needs to
+see only what should currently display. The fix belongs in whichever
+layer owns the *rendering* decision — here, the client-side renderer —
+never in the shared response both surfaces depend on, unless the
+management surface's own needs are re-verified first. This same shape
+already existed twice in this codebase before this checkpoint (forms'
+and sections' own active/inactive status, both left unfiltered at the
+resource level for exactly this reason) — the mistake this checkpoint
+almost made was not recognizing the third instance of the same
+pattern before writing code.
+
 ### Future
 
 Recruitment (`ApplicationShow.tsx`) still renders its two

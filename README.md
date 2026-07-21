@@ -949,6 +949,39 @@ access by ID were added retroactively. See `docs/architecture.md` and
 `docs/security.md` for the full design and the direct-permission-grant
 asymmetry this model deliberately accepts.
 
+## Form Assignment / Employee UI Cleanup (Checkpoint 54)
+
+Closes the deliberate Checkpoint 52 MVP overlap — `CustomFormRenderer`
+and `CustomFieldsCard` no longer both render every viewable Employee
+custom field unconditionally. `CustomFormRenderer` shows fields
+assigned to an active form/section/field row; `CustomFieldsCard` is now
+a **fallback**, showing only active, viewable fields *not* assigned to
+any active form. Assignment is computed entirely **client-side** in
+`Employees/Show.tsx`, from the same two endpoints the page already
+fetched (`GET /custom-forms/employee`, `GET /custom-fields/employee`)
+— no new backend endpoint, no new field on any Resource, no change to
+`CustomFieldValueService`/`CustomFieldValueValidator`/
+`CustomFieldAccessResolver`. This is a UI-placement decision, not a
+security decision — both surfaces still independently enforce
+`can_view`/`can_edit`, disabled-field omission, and tenant isolation
+exactly as before; nothing about where a field renders changes what
+the backend will accept or return.
+
+A real gap was found while confirming this checkpoint's own
+requirements: disabling one form-field row (removing a single field
+from a section without disabling the whole section or form) never
+actually hid it from the rendered form — `CustomFormRenderer` filtered
+forms and sections by their own `active` status but never applied the
+same filter to individual field rows. Fixed client-side, in
+`CustomFormRenderer` only — **not** in `CustomFormSectionResource`,
+because that resource's response is shared with `Settings > Custom
+Forms`, which depends on seeing (and restoring) disabled field rows for
+its own management UI. Duplicate assignment of the same custom field
+across multiple active forms remains allowed, unrestricted, by explicit
+MVP decision — it renders in each form independently and is excluded
+from the fallback card either way. See `docs/architecture.md` for the
+full design.
+
 ## Documentation
 
 - [`docs/platform-vision.md`](docs/platform-vision.md) — the long-term product/architecture vision (platform kernel, module layer, subscription/entitlement model, event-driven architecture, AI governance) that every checkpoint's design should be checked against. Not tied to a checkpoint; update it when the vision changes, not when a feature ships.

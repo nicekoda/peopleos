@@ -304,6 +304,70 @@ class CustomFormApiTest extends TestCase
         $this->assertTrue($sections->first()['fields'] === []);
     }
 
+    // Checkpoint 54 regression: disabling one form-field row must
+    // continue to keep its status correctly reported (and its data
+    // present) in GET /custom-forms/{entityType} — Settings > Custom
+    // Forms relies on this exact response to show a "Disabled" badge
+    // and a "Restore" button, so the row itself must never disappear
+    // from the API response (unlike a disabled *custom field*, which
+    // is correctly omitted entirely above). Only the entity-page
+    // renderer hides an inactive field row, client-side.
+    public function test_disabled_form_field_row_keeps_reporting_its_status(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $user = $this->userWithPermissions($tenant, 'custom_forms.view', 'custom_forms.manage', 'employees.view', 'employees.update');
+        $field = $this->employeeField($tenant, $user);
+        $form = $this->createForm($tenant, $user);
+        $section = $this->createSection($tenant, $user, $form);
+        $formField = $this->addField($tenant, $user, $section, $field);
+
+        $this->actingAs($user)->patchJson($this->url($tenant, "custom-form-fields/{$formField->id}"), ['status' => 'inactive'])->assertOk();
+
+        $response = $this->actingAs($user)->getJson($this->url($tenant, 'custom-forms/employee'));
+        $response->assertOk();
+        $fields = collect($response->json('data.0.sections.0.fields'));
+        $this->assertCount(1, $fields, 'a disabled form-field row must still be present in the API response for Settings to manage');
+        $this->assertSame('inactive', $fields->first()['status']);
+
+        $this->actingAs($user)->patchJson($this->url($tenant, "custom-form-fields/{$formField->id}"), ['status' => 'active'])->assertOk();
+
+        $response = $this->actingAs($user)->getJson($this->url($tenant, 'custom-forms/employee'));
+        $fields = collect($response->json('data.0.sections.0.fields'));
+        $this->assertCount(1, $fields);
+        $this->assertSame('active', $fields->first()['status']);
+    }
+
+    // Checkpoint 54: allowing duplicate cross-form assignment (an
+    // explicit MVP decision, not an oversight) — the same custom field
+    // assigned to two different active forms must appear, independently,
+    // in both forms' own response, with no dedup and no error.
+    public function test_field_assigned_to_two_active_forms_appears_in_both(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $user = $this->userWithPermissions($tenant, 'custom_forms.view', 'custom_forms.manage', 'employees.view', 'employees.update');
+        $field = $this->employeeField($tenant, $user);
+
+        $formA = $this->createForm($tenant, $user, ['form_key' => 'form_a', 'name' => 'Form A']);
+        $sectionA = $this->createSection($tenant, $user, $formA);
+        $this->addField($tenant, $user, $sectionA, $field);
+
+        $formB = $this->createForm($tenant, $user, ['form_key' => 'form_b', 'name' => 'Form B']);
+        $sectionB = $this->createSection($tenant, $user, $formB);
+        $this->addField($tenant, $user, $sectionB, $field);
+
+        $response = $this->actingAs($user)->getJson($this->url($tenant, 'custom-forms/employee'));
+        $response->assertOk();
+        $forms = collect($response->json('data'));
+
+        $fieldInFormA = collect($forms->firstWhere('form_key', 'form_a')['sections'][0]['fields']);
+        $fieldInFormB = collect($forms->firstWhere('form_key', 'form_b')['sections'][0]['fields']);
+
+        $this->assertCount(1, $fieldInFormA);
+        $this->assertCount(1, $fieldInFormB);
+        $this->assertSame('uniform_size', $fieldInFormA->first()['custom_field_definition']['field_key']);
+        $this->assertSame('uniform_size', $fieldInFormB->first()['custom_field_definition']['field_key']);
+    }
+
     // 15: form renders only can_view fields.
     public function test_form_structure_only_includes_can_view_fields(): void
     {

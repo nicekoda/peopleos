@@ -758,12 +758,21 @@ anyway.
 `can_view: false` flag, never a placeholder) if the underlying custom
 field is disabled, or the requesting user's `can_view` for it is
 false — server-enforced in `CustomFormSectionResource`, the same "omit
-means omit" rule already used for values. **Forms and sections are
-returned regardless of `status`** — Settings needs to see and manage
-disabled ones; a live-rendering consumer (the Employee Show page)
-filters to `status: "active"` client-side, the same split
-responsibility `CustomFieldsCard`'s frontend already has for
-definitions.
+means omit" rule already used for values. **Forms, sections, and
+individual form-field rows are all returned regardless of `status`**
+— Settings needs to see and manage disabled ones (including restoring
+a single disabled field row within an otherwise-active section); a
+live-rendering consumer (the Employee Show page) filters all three
+levels to `status: "active"` client-side, the same split responsibility
+`CustomFieldsCard`'s frontend already has for definitions.
+
+**Checkpoint 54** — the Employee Show page now uses this same response
+to compute which field keys are "assigned" to an active form (an
+unbroken `form.status === 'active'` → `section.status === 'active'` →
+`field.status === 'active'` chain) and excludes exactly those keys from
+its `CustomFieldsCard` fallback. This is a frontend rendering decision
+only — the response shape above is completely unchanged by Checkpoint
+54, and no new endpoint or field was added to support it.
 
 ### Submitting values — no new endpoint
 

@@ -3945,3 +3945,170 @@ integration reusing `CustomFieldAccessResolver` (the resolver was
 deliberately kept generic enough for this); a real system-field (not
 just custom-field) visibility layer, reusing the same resolver
 primitive; per-user rule overrides layered on top of role-based ones.
+
+## Form Assignment / Employee UI Cleanup (Checkpoint 54)
+
+Checkpoint 52 deliberately rendered `CustomFormRenderer` and
+`CustomFieldsCard` unconditionally side-by-side on the Employee Show
+page — a field assigned to a form could appear twice. That overlap was
+an accepted MVP tradeoff, explicitly scoped to be revisited once
+Checkpoint 53 proved visibility rules worked identically through both
+surfaces (which it did — see Checkpoint 53's live smoke test). This
+checkpoint closes the overlap: `CustomFormRenderer` shows fields
+assigned to an active form; `CustomFieldsCard` becomes a fallback for
+active, viewable fields not assigned to any active form.
+
+### The central decision: compute "assigned" client-side, from data already fetched
+
+`GET /custom-forms/{entityType}` already nests, per field, the full
+`CustomFieldDefinitionResource` (`sections[].fields[].custom_field_definition`),
+including `field_key`, `can_view`, `can_edit`, `status`. The frontend
+already fetched both `GET /custom-forms/employee` and
+`GET /custom-fields/employee` before this checkpoint — so "which field
+keys are assigned to an active form" is a set-difference computable
+entirely client-side, with **no new backend endpoint, no new field on
+any Resource, no new query parameter**.
+
+This was evaluated as a genuine option (a precomputed
+`is_assigned_to_active_form` flag on `CustomFieldDefinitionResource`)
+and explicitly rejected: it would touch a Resource shared by three
+entities (recruitment_applicant, job_application, employee) for an
+Employee-only UI concern, and there is no new trust boundary being
+crossed that would require server-side computation — both responses
+are already scoped to the requesting viewer's own permissions/rules,
+so each viewer correctly computes their own "assigned" set from their
+own data. A field a viewer cannot see is simply absent from their own
+`forms` response (`CustomFormSectionResource` already omits it) and
+therefore never counted as "assigned" for them either — no
+cross-viewer leakage is possible, because nothing here reads or infers
+anyone else's view of the data.
+
+### Data flow: lifted into `Employees/Show.tsx`, not owned by `CustomFormRenderer`
+
+`CustomFormRenderer` no longer self-fetches `GET /custom-forms/{entityType}`.
+`Employees/Show.tsx` fetches it once, computes `assignedFieldKeys` from
+the result, and passes the raw forms array down to `CustomFormRenderer`
+as a prop (now purely presentational) and the computed key set down to
+`CustomFieldsCard` as a new optional `excludeFieldKeys` prop. This was
+chosen over an alternative (keep `CustomFormRenderer` self-fetching,
+have it report the resolved key set back up via a callback prop) for
+two reasons: it avoids a "child reports state to parent" data flow that
+reads awkwardly, and it avoids a flash-then-hide render order problem —
+`CustomFieldsCard` never has a chance to render a field the moment
+before `assignedFieldKeys` becomes known, since both come from state
+`Employees/Show.tsx` already owns before either child renders.
+
+`CustomFieldsCard.tsx` gained one new optional prop,
+`excludeFieldKeys?: Set<string>`, applied as one more filter
+(`visibleDefs`) alongside its existing, unchanged `status === 'active'
+&& can_view` filter. `excludeFieldKeys` can only ever *narrow* what
+this component would otherwise show — it has no way to widen access,
+since it's applied strictly after the existing access filter, never
+instead of it. The component's submit logic was updated to submit only
+`visibleDefs` (fields it actually renders), not `defs` (every field it
+fetched) — a field excluded as form-assigned was never being edited in
+this card in the first place, so it must never be silently included in
+this card's own submission payload either.
+
+### A real gap found while confirming this checkpoint's own requirements
+
+The required behavior list for this checkpoint states plainly:
+disabling one form-field row must return that field to the fallback
+card. Verifying this surfaced that **`CustomFormRenderer` never
+actually hid a disabled form-field row** — it filtered forms and
+sections by their own `status === 'active'`, but individual
+`section.fields` entries were rendered unfiltered by their own status.
+A disabled row (removed from a section without disabling the whole
+section or form) kept rendering, silently, in Checkpoint 52's shipped
+code — confirmed by the existing test suite only ever asserting the
+*audit event* fired on disable, never that the field actually
+disappeared from what the renderer would show.
+
+**The fix does not live in `CustomFormSectionResource`.** An initial
+plan to filter inactive `CustomFormField` rows out of that Resource
+directly was reconsidered before implementation: `Settings > Custom
+Forms` reads the exact same `GET /custom-forms/{entityType}` response
+to show a disabled row's "Disabled" badge and its "Restore" button — a
+resource-level filter would make a disabled row's data vanish from the
+API entirely, permanently breaking that management UI (there is no
+other endpoint or query parameter that returns it). This mirrors the
+resource's own pre-existing, deliberate posture for forms and sections
+— both are returned active-and-inactive by the Resource, precisely so
+Settings can manage disabled ones, with the *entity-page renderer*
+responsible for filtering to active-only client-side. The fix applies
+the identical pattern to individual field rows: `CustomFormSectionResource`
+is unchanged; `CustomFormRenderer.tsx` gained the missing
+`status === 'active'` filter on `section.fields`, in the same places it
+already filters `form.sections`.
+
+Backend test coverage for this reflects that split precisely:
+`test_disabled_form_field_row_keeps_reporting_its_status` proves the
+row's data and status remain fully present and toggleable in the API
+response (protecting Settings' Restore button from ever regressing),
+rather than asserting the row disappears from the raw response — the
+disappearance is proven at the renderer/assignment-computation level
+instead, via the live smoke test and source-level review, since no
+frontend test runner exists in this repo.
+
+### Active/inactive cascading, and why it needed no new logic
+
+`assignedFieldKeys` in `Employees/Show.tsx` requires an unbroken chain
+of `form.status === 'active'` → `section.status === 'active'` →
+`field.status === 'active'` before counting a field as assigned — the
+exact same three-level chain `CustomFormRenderer` itself now requires
+before rendering a field (post-fix). A field disqualified at any level
+(disabled form, disabled section, or disabled form-field row)
+correctly reappears in the fallback `CustomFieldsCard`, verified by a
+dedicated live smoke test exercising all three levels independently. A
+field whose *underlying custom field* is disabled, or that a
+visibility rule denies, was never present in `forms` to begin with
+(`CustomFormSectionResource` already omits both cases, unchanged since
+Checkpoint 52/53) — it's simply absent from `assignedFieldKeys` and
+also excluded from `CustomFieldsCard`'s own independent `can_view`/
+`status` filter, so it appears in neither surface, with zero new code
+needed to make that true.
+
+### Duplicate cross-form assignment — explicitly allowed, not restricted
+
+The only DB-level uniqueness constraint on `custom_form_fields` is
+`unique(custom_form_section_id, custom_field_definition_id)` — scoped
+to one section. Nothing has ever stopped the same custom field being
+added to a second section or a second form entirely; `Settings > Custom
+Forms`' own field-picker (`fieldsAlreadyInForm()`) only dedupes within
+one form. This checkpoint makes no change to that: a field assigned to
+two active forms renders in both, independently
+(`test_field_assigned_to_two_active_forms_appears_in_both`), and is
+excluded from the fallback card either way, since `assignedFieldKeys`
+is a simple set (membership, not count).
+
+### Settings > Custom Forms — a help-text line, not a warning dialog
+
+A single non-blocking `<p>` was added next to the "add existing field"
+picker: *"Fields added to an active form no longer appear in the
+unassigned custom fields card on Employee profiles."* No modal, no
+confirmation step — consistent with every other config action in this
+subsystem (creating a field, disabling a form) never requiring
+confirmation.
+
+### Frontend security posture — unchanged, restated explicitly
+
+This checkpoint is a rendering-location change only. Every one of the
+following remains enforced exactly as before, entirely server-side,
+unaware this checkpoint exists: tenant isolation, parent-entity
+permissions, field-level visibility rules, `can_view`/`can_edit`,
+disabled-field omission, `CustomFieldValueValidator`, `CustomFieldValueService`
+writes, and audit masking. `excludeFieldKeys` and `assignedFieldKeys`
+are pure UX — a client that ignored them entirely and submitted a
+"form-assigned" field's value through `CustomFieldsCard` would still
+succeed or fail by exactly the same rules it always has, since both
+cards submit through the identical `PATCH /employees/{employee}` call
+with `custom_field_values`.
+
+### Future
+
+Recruitment (`ApplicationShow.tsx`) still renders its two
+`CustomFieldsCard` instances unconditionally, since Recruitment has no
+Custom Forms yet — the same assignment-computation pattern generalizes
+directly whenever that changes. A form/page designer, a form-assignment
+wizard, conditional sections, and form versioning remain explicitly out
+of scope, as they were in Checkpoint 52.

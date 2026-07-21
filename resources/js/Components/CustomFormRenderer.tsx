@@ -13,48 +13,48 @@ import { CustomFormState } from '@/types/customForm';
  * metadata only: submitting still means PATCH `endpointUrl` with
  * `custom_field_values` scoped to this form's own field keys — the
  * exact same call CustomFieldsCard already makes, never a new
- * write path. Deliberately renders alongside CustomFieldsCard, not
- * instead of it, per the approved MVP decision — a field assigned to a
- * form may appear in both places on the same page for now.
+ * write path.
  *
- * Inactive forms/sections are filtered out here, client-side — the
- * backend returns everything (active and inactive) so Settings can
- * manage disabled ones, the same split CustomFieldsCard already has
- * for definitions. Fields the viewer cannot see, or whose underlying
- * custom field is disabled, are never present in the API response at
- * all (server-enforced — see CustomFormSectionResource), so no
- * additional client-side field filtering is needed here.
+ * Checkpoint 54 — no longer self-fetches. The parent page (Employees/
+ * Show.tsx) fetches `GET /custom-forms/{entityType}` once and passes
+ * the raw result down as `forms`, so it can derive `assignedFieldKeys`
+ * from the exact same data this component renders from, with no risk
+ * of the two views disagreeing about what "active" means. Deliberately
+ * no longer rendered unconditionally alongside CustomFieldsCard — the
+ * parent now excludes assigned fields from the fallback card instead,
+ * closing the Checkpoint 52 MVP overlap now that Checkpoint 53 has
+ * proven visibility rules work identically through both surfaces.
+ *
+ * Inactive forms/sections/field-rows are filtered out here,
+ * client-side — the backend returns everything (active and inactive)
+ * so Settings can manage disabled ones, the same split CustomFieldsCard
+ * already has for definitions. A form-field row's own status was
+ * previously never filtered here at all (a real gap — see
+ * docs/architecture.md), meaning a disabled row kept rendering.
+ * Fields the viewer cannot see, or whose underlying custom field is
+ * disabled, are never present in the API response at all
+ * (server-enforced — see CustomFormSectionResource).
  */
 export default function CustomFormRenderer({
-    entityTypeUrl,
+    forms,
     endpointUrl,
     values,
     onSaved,
 }: {
-    entityTypeUrl: string;
+    forms: CustomFormState[] | null;
     endpointUrl: string;
     values: Record<string, unknown> | undefined;
     onSaved: () => void;
 }) {
-    const [forms, setForms] = useState<CustomFormState[] | null>(null);
+    const activeForms = (forms ?? []).filter((form) => form.status === 'active');
 
-    useEffect(() => {
-        api.get<{ data: CustomFormState[] }>(`/custom-forms/${entityTypeUrl}`)
-            .then((response) => setForms(response.data.data.filter((form) => form.status === 'active')))
-            .catch(() => {
-                // Non-fatal — the rest of the page still works if this
-                // fails (e.g. the viewer lacks custom_forms.view); no
-                // form section renders, same posture as CustomFieldsCard.
-            });
-    }, [entityTypeUrl]);
-
-    if (forms === null || forms.length === 0) {
+    if (forms === null || activeForms.length === 0) {
         return null;
     }
 
     return (
         <>
-            {forms.map((form) => (
+            {activeForms.map((form) => (
                 <CustomFormCard key={form.id} form={form} endpointUrl={endpointUrl} values={values} onSaved={onSaved} />
             ))}
         </>
@@ -85,7 +85,12 @@ function CustomFormCard({
     }, [values]);
 
     const sections = [...form.sections].filter((s) => s.status === 'active').sort((a, b) => a.sort_order - b.sort_order);
-    const allFields = sections.flatMap((section) => [...section.fields].sort((a, b) => a.sort_order - b.sort_order));
+    // A form-field row's own status was never filtered here before
+    // Checkpoint 54 — the backend intentionally returns disabled rows
+    // too (Settings > Custom Forms needs them for its Restore button),
+    // so this client-side filter is what actually hides a disabled row
+    // from the rendered form.
+    const allFields = sections.flatMap((section) => [...section.fields].filter((f) => f.status === 'active').sort((a, b) => a.sort_order - b.sort_order));
     const anyEditable = allFields.some((field) => field.custom_field_definition.can_edit);
 
     const submit = () => {
@@ -128,7 +133,7 @@ function CustomFormCard({
             <div className="space-y-5">
                 {form.description && <p className="-mt-1 text-sm text-slate-500">{form.description}</p>}
                 {sections.map((section) => {
-                    const sortedFields = [...section.fields].sort((a, b) => a.sort_order - b.sort_order);
+                    const sortedFields = [...section.fields].filter((f) => f.status === 'active').sort((a, b) => a.sort_order - b.sort_order);
                     if (sortedFields.length === 0) return null;
 
                     return (

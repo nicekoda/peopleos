@@ -11,6 +11,7 @@ import CustomFormRenderer from '@/Components/CustomFormRenderer';
 import { useCan } from '@/hooks/useCan';
 import { api, toApiError, redirectIfUnauthenticated, ApiError } from '@/lib/api';
 import { Employee } from '@/types/employee';
+import { CustomFormState } from '@/types/customForm';
 import { PageProps } from '@/types';
 
 interface ShowProps extends PageProps {
@@ -61,6 +62,7 @@ export default function EmployeesShow() {
 
     const [employee, setEmployee] = useState<Employee | null>(null);
     const [error, setError] = useState<ApiError | null>(null);
+    const [forms, setForms] = useState<CustomFormState[] | null>(null);
 
     const load = useCallback(() => {
         api.get<{ data: Employee }>(`/employees/${employeeId}`)
@@ -76,6 +78,38 @@ export default function EmployeesShow() {
     useEffect(() => {
         load();
     }, [load]);
+
+    useEffect(() => {
+        api.get<{ data: CustomFormState[] }>('/custom-forms/employee')
+            .then((response) => setForms(response.data.data))
+            .catch(() => {
+                // Non-fatal — same posture as CustomFieldsCard/
+                // CustomFormRenderer's own fetches: if the viewer lacks
+                // custom_forms.view, no form renders and every field
+                // simply falls back to the unassigned custom fields
+                // card instead, still gated by its own permission check.
+                setForms([]);
+            });
+    }, []);
+
+    // Checkpoint 54 — a field only counts as "assigned" (and is
+    // therefore excluded from the fallback CustomFieldsCard) if it's
+    // reachable through an active form -> active section -> active
+    // form-field row, the exact same chain CustomFormRenderer itself
+    // requires before rendering a field. A field hidden from this
+    // viewer by a visibility rule, or whose custom field is disabled,
+    // was never present in `forms` to begin with (CustomFormSectionResource
+    // already omits it) — it's simply absent from this set, not
+    // specially handled here.
+    const assignedFieldKeys = new Set(
+        (forms ?? [])
+            .filter((form) => form.status === 'active')
+            .flatMap((form) => form.sections)
+            .filter((section) => section.status === 'active')
+            .flatMap((section) => section.fields)
+            .filter((field) => field.status === 'active')
+            .map((field) => field.custom_field_definition.field_key),
+    );
 
     if (error) {
         return (
@@ -195,13 +229,17 @@ export default function EmployeesShow() {
                 </Card>
 
                 <div className="sm:col-span-2 space-y-4">
-                    {/* Checkpoint 52 — deliberately rendered alongside
-                        CustomFieldsCard, not instead of it, per the
-                        approved MVP decision: a field assigned to a
-                        form may appear in both places until the forms
-                        approach is proven. */}
+                    {/* Checkpoint 54 — CustomFormRenderer shows fields
+                        assigned to an active form; CustomFieldsCard is
+                        the fallback for active, viewable fields not
+                        assigned to any active form/section/field row
+                        (assignedFieldKeys, computed above from the same
+                        `forms` data this renders from). Replaces
+                        Checkpoint 52's deliberate MVP overlap now that
+                        Checkpoint 53 has proven visibility rules work
+                        identically through both surfaces. */}
                     <CustomFormRenderer
-                        entityTypeUrl="employee"
+                        forms={forms}
                         endpointUrl={`/employees/${employee.id}`}
                         values={employee.custom_field_values}
                         onSaved={load}
@@ -213,6 +251,7 @@ export default function EmployeesShow() {
                         payloadKey="custom_field_values"
                         values={employee.custom_field_values}
                         onSaved={load}
+                        excludeFieldKeys={assignedFieldKeys}
                     />
                 </div>
 

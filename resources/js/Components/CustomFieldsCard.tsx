@@ -30,6 +30,15 @@ import { CustomFieldDefinitionState } from '@/types/customField';
  * Checkpoint 52 — per-field-type input rendering is now the shared
  * CustomFieldInput component, also used by CustomFormRenderer, rather
  * than a switch duplicated in both places.
+ *
+ * Checkpoint 54 — gained an optional `excludeFieldKeys` prop so a page
+ * that also renders CustomFormRenderer can use this purely as a
+ * fallback for fields not assigned to any active form/section/field
+ * row, instead of rendering every viewable field unconditionally. This
+ * is a rendering-location decision only — the `status === 'active' &&
+ * can_view` filter below is unchanged and remains the actual (server-
+ * confirmed) access gate; `excludeFieldKeys` never widens what this
+ * component would otherwise show, only narrows it further for UX.
  */
 export default function CustomFieldsCard({
     title,
@@ -38,6 +47,7 @@ export default function CustomFieldsCard({
     payloadKey,
     values,
     onSaved,
+    excludeFieldKeys,
 }: {
     title: string;
     entityTypeUrl: string;
@@ -45,6 +55,7 @@ export default function CustomFieldsCard({
     payloadKey: string;
     values: Record<string, unknown> | undefined;
     onSaved: () => void;
+    excludeFieldKeys?: Set<string>;
 }) {
     const [defs, setDefs] = useState<CustomFieldDefinitionState[] | null>(null);
     const [draft, setDraft] = useState<Record<string, string>>({});
@@ -61,6 +72,8 @@ export default function CustomFieldsCard({
             });
     }, [entityTypeUrl]);
 
+    const visibleDefs = (defs ?? []).filter((field) => !excludeFieldKeys?.has(field.field_key));
+
     useEffect(() => {
         const nextDraft: Record<string, string> = {};
         Object.entries(values ?? {}).forEach(([key, value]) => {
@@ -74,10 +87,11 @@ export default function CustomFieldsCard({
         setErrors({});
 
         const payload: Record<string, unknown> = {};
-        // Only ever submit fields the caller can actually edit — never
-        // resubmit a read-only field's displayed value, even though the
-        // backend would reject it anyway (403) if we did.
-        (defs ?? []).filter((field) => field.can_edit).forEach((field) => {
+        // Only ever submit fields this card actually renders (i.e. not
+        // excluded as form-assigned) that the caller can also edit —
+        // never resubmit a read-only field's displayed value, even
+        // though the backend would reject it anyway (403) if we did.
+        visibleDefs.filter((field) => field.can_edit).forEach((field) => {
             const raw = draft[field.field_key] ?? '';
             if (field.field_type === 'multi_select') {
                 payload[field.field_key] = raw === '' ? [] : raw.split(',').map((v) => v.trim()).filter(Boolean);
@@ -98,14 +112,14 @@ export default function CustomFieldsCard({
             .finally(() => setSaving(false));
     };
 
-    if (defs === null || defs.length === 0) {
+    if (defs === null || visibleDefs.length === 0) {
         return null;
     }
 
     return (
         <Card title={title}>
             <div className="space-y-3">
-                {defs.map((field) => (
+                {visibleDefs.map((field) => (
                     <div key={field.field_key}>
                         <label className="block text-sm font-medium text-slate-700">
                             {field.label} {field.is_required && <span className="text-red-500">*</span>}
@@ -119,7 +133,7 @@ export default function CustomFieldsCard({
                         <ErrorMessage message={errors[`${payloadKey}.${field.field_key}`]?.[0]} />
                     </div>
                 ))}
-                {defs.some((field) => field.can_edit) && (
+                {visibleDefs.some((field) => field.can_edit) && (
                     <div className="flex justify-end">
                         <Button type="button" onClick={submit} disabled={saving}>
                             {saving ? 'Saving…' : `Save ${title.toLowerCase()}`}

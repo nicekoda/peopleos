@@ -787,6 +787,50 @@ same "real usage evidence first" principle every checkpoint in this
 sequence has followed — `CustomFieldAccessResolver` was kept generic
 enough to be the reuse point when that work begins.
 
+**Checkpoint 54 — Form Assignment / Employee UI Cleanup — completed.**
+Closed the Checkpoint 52 MVP overlap (`CustomFormRenderer` and
+`CustomFieldsCard` rendering every viewable field unconditionally,
+side-by-side) now that Checkpoint 53 proved visibility rules work
+identically through both surfaces — exactly the trigger condition
+Checkpoint 52's own `Future` section named for revisiting this.
+
+- **No new backend surface** — "which field keys are assigned to an
+  active form" is computed entirely client-side from two endpoints the
+  Employee Show page already fetched. A precomputed
+  `is_assigned_to_active_form` Resource flag was evaluated and rejected
+  — no new trust boundary is crossed, so there was no reason to touch a
+  Resource shared by three entities for an Employee-only UI concern.
+- **A real gap found and fixed while confirming this checkpoint's own
+  requirements**: `CustomFormRenderer` never filtered individual
+  form-field rows by their own active/inactive status — only forms and
+  sections. A disabled row silently kept rendering, a bug that existed,
+  unnoticed, since Checkpoint 52 shipped (the existing test suite only
+  ever asserted the audit event fired, never that the field actually
+  disappeared).
+- **A plan conflict surfaced, not silently resolved either way**: the
+  approved plan specified fixing the row-status gap inside
+  `CustomFormSectionResource` directly. Implementing that literally
+  would have broken `Settings > Custom Forms`' own "Restore" button,
+  which depends on that same response including disabled rows for
+  management. Flagged back before writing code; the resolution (fix
+  client-side in the renderer instead, matching the resource's own
+  pre-existing forms/sections precedent) was lower-risk than either
+  extreme (silently following the literal instruction, or silently
+  deviating from it without saying so).
+- **Duplicate cross-form assignment remains allowed**, unrestricted, by
+  explicit decision — the data model never prevented it, and nothing
+  about this checkpoint's UI goal required restricting it now.
+- All 2 new backend regression tests passed; the full CustomFields
+  (93 tests) and CustomForms (26 tests) suites passed together (141
+  tests) with zero regressions; the full 1,277-test suite (1 pre-
+  existing skip) passed unchanged.
+- **No frontend test runner exists in this repo** — frontend
+  correctness was verified via TypeScript check, production build, and
+  a live smoke test that replicates the exact `assignedFieldKeys`
+  client-side computation against real API responses (rather than
+  rendering a browser), proving every cascade case (disabled form,
+  disabled section, disabled row, two active forms) resolves correctly.
+
 ## Final product promise
 
 > One secure platform connecting people, workflows, services, assets,

@@ -1886,6 +1886,48 @@ already exists for structurally similar controllers from prior
 checkpoints — this bug had been shipped and accepted for an entire
 checkpoint before anything exercised it.
 
+## A plan's literal instruction conflicted with an already-shipped feature — surfaced, not silently followed or silently changed (Checkpoint 54)
+
+The approved Checkpoint 54 plan said to fix a disabled-form-field-row
+bug "in `CustomFormSectionResource`" and to test that the row
+"disappears from `GET /custom-forms/{entityType}`." Implementing that
+literally would have made a disabled row's data vanish from the API
+entirely — breaking `Settings > Custom Forms`' own "Restore" button,
+which depends on that same response including inactive rows. Neither
+silently implementing the literal instruction (breaking a shipped
+feature) nor silently implementing a different fix instead (deviating
+from an explicit approval without saying so) was the right move — the
+conflict was surfaced back for a decision before any code was written,
+with both options laid out concretely. The resolution (filter
+client-side in the renderer, not in the Resource) ended up being lower
+risk *and* more consistent with the codebase's own pre-existing pattern
+for forms/sections. Lesson: an approved plan is a snapshot of
+understanding at approval time — if implementation surfaces a concrete
+conflict with already-shipped, already-tested behavior, that's new
+information the plan's author didn't have, and it's worth a pause, not
+a guess.
+
+## Testing a frontend-only rendering change without a frontend test runner (Checkpoint 54)
+
+This checkpoint's actual change — which of two cards a field renders in
+— has no meaningful backend assertion, since neither
+`CustomFieldValueService` nor any Resource's *access* logic changed at
+all. The verification strategy used instead, in order: (1) two new
+backend regression tests proving the data both cards depend on is
+still shaped correctly (`test_disabled_form_field_row_keeps_reporting_its_status`,
+`test_field_assigned_to_two_active_forms_appears_in_both`); (2) a
+TypeScript check and production build as compile-level regression
+gates; (3) a live smoke test that doesn't render a browser at all, but
+instead replicates the exact `assignedFieldKeys` computation from
+`Employees/Show.tsx` in a PowerShell script driven against the real API
+responses, proving the same active-form → active-section → active-field-row
+chain produces the right set across every cascade case (disabled
+form, disabled section, disabled row, two active forms). This is a
+reasonable substitute for a frontend test runner precisely because the
+logic under test is a pure function of already-verified API responses
+— there was nothing about actual DOM rendering left to prove that the
+resource-shape-level check didn't already cover.
+
 ## Known limitations
 
 - No test coverage reporting configured yet.

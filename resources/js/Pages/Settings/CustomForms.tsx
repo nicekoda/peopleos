@@ -509,6 +509,9 @@ export default function SettingsCustomForms() {
                                                                 {fieldErrors.custom_field_definition_id && (
                                                                     <p className="mt-1 text-xs text-red-600">{fieldErrors.custom_field_definition_id[0]}</p>
                                                                 )}
+                                                                <p className="mt-1 text-xs text-slate-500">
+                                                                    Fields added to an active form no longer appear in the unassigned custom fields card on Employee profiles.
+                                                                </p>
                                                             </div>
                                                             <Button type="button" variant="secondary" onClick={() => setAddingFieldForSectionId(null)}>
                                                                 Cancel

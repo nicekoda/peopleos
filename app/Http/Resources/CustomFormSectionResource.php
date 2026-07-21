@@ -18,6 +18,16 @@ use Illuminate\Http\Resources\Json\JsonResource;
  * manage disabled sections; the entity-page renderer filters those out
  * client-side, the same split responsibility CustomFieldsCard already
  * has for custom field definitions.
+ *
+ * A CustomFormField row's own active/inactive status is deliberately
+ * NOT filtered here either, for the identical reason as sections above:
+ * Settings > Custom Forms reads this exact same response to show a
+ * disabled field row's "Disabled" badge and its "Restore" button — a
+ * resource-level filter would make a disabled row's data vanish from
+ * the API entirely, permanently breaking Settings' ability to manage
+ * it. The entity-page renderer (CustomFormRenderer) is what filters to
+ * active-only field rows client-side, the same split every other
+ * active/inactive distinction in this subsystem already uses.
  */
 class CustomFormSectionResource extends JsonResource
 {

@@ -6419,6 +6419,83 @@ direct permission grants, not just role membership; permission-based
 integration reusing `CustomFieldAccessResolver`; a real system-field
 visibility layer built on the same resolver primitive.
 
+## Form Assignment / Employee UI Cleanup (Checkpoint 54)
+
+See
+[`architecture.md`](architecture.md#form-assignment--employee-ui-cleanup-checkpoint-54)
+for the full technical design. This section covers why this checkpoint
+introduces no new security surface, despite changing what the Employee
+Show page visually renders.
+
+### This is a rendering-location decision, not an access-control decision
+
+`CustomFormRenderer` and `CustomFieldsCard` each still independently
+fetch their own data and independently enforce their own access rules
+exactly as before — `CustomFormSectionResource` still omits a field the
+viewer can't see or whose custom field is disabled; `CustomFieldsCard`
+still filters to `status === 'active' && can_view` on every fetch. The
+only new logic (`assignedFieldKeys`, `excludeFieldKeys`) decides *which
+of two already-authorized places* an already-visible field appears in
+— it has no path to grant visibility a field wouldn't otherwise have,
+because it's computed from, and applied strictly on top of, data that
+was already access-filtered before this checkpoint's code ever sees it.
+
+### No new endpoint, no new Resource field, no new trust boundary
+
+`assignedFieldKeys` is computed entirely client-side in `Employees/Show.tsx`
+from two responses (`GET /custom-forms/employee`, `GET /custom-fields/employee`)
+the page already fetched before this checkpoint, each already scoped to
+the requesting viewer's own permissions and visibility rules. Because
+each viewer computes their own set from their own responses, there is
+no scenario where one viewer's assignment computation could leak or
+depend on another viewer's data — the computation never crosses a
+tenant, role, or permission boundary that the two underlying API calls
+hadn't already resolved correctly on their own.
+
+### The form-field-row-status fix deliberately stayed client-side, not in the Resource
+
+A field-row-status filter was evaluated for `CustomFormSectionResource`
+itself and rejected: `Settings > Custom Forms` depends on that exact
+response including inactive field rows, to show a "Disabled" badge and
+restore them. Moving the filter into the Resource would have silently
+broken that management capability — a worse outcome than the bug being
+fixed. The chosen fix (client-side, in `CustomFormRenderer` only)
+follows the resource's own pre-existing precedent for forms and
+sections: return everything for management, filter to active-only in
+the entity-facing renderer. No backend behavior changed as a result of
+this fix — `CustomFormSectionResource` is byte-for-byte unchanged from
+Checkpoint 52.
+
+### Backend security enforcement — explicitly restated as unchanged
+
+Every one of the following is completely unaware this checkpoint
+exists, and none of them were touched: tenant isolation
+(`BelongsToTenant`, and the child-row re-verification pattern from
+Checkpoints 52/53), parent-entity permission checks
+(`employees.view`/`.update`), field-level visibility rules
+(`CustomFieldAccessResolver`, unified in Checkpoint 53),
+`can_view`/`can_edit` computation, disabled-field omission at both the
+definition and form-field-row level, `CustomFieldValueValidator`
+validation, `CustomFieldValueService` reads/writes, and audit masking
+(`custom_field.value_updated` remains the only value-audit event). A
+client that ignored `excludeFieldKeys` entirely and submitted a
+form-assigned field's value through `CustomFieldsCard` anyway would
+succeed or fail by exactly the same rules as before this checkpoint,
+since both cards submit through the identical
+`PATCH /employees/{employee}` call.
+
+### Current limitations
+
+Employee Show only — Recruitment's `ApplicationShow.tsx` still renders
+its custom-fields cards unconditionally (Recruitment has no Custom
+Forms yet). Duplicate cross-form assignment of the same custom field
+remains unrestricted, an explicit MVP decision. No frontend test runner
+exists in this repo, so the frontend-only parts of this checkpoint were
+verified via TypeScript check, production build, a live smoke test
+replicating the exact client-side assignment logic against real API
+responses, and source-level review — not an automated frontend test
+suite.
+
 ## Local Demo Credentials
 
 **Local development only — these are not real secrets and only work against your own local database.** Password comes from `SEED_USER_PASSWORD` in `.env` (not committed; `.env.example` has an empty placeholder).
@@ -6448,7 +6525,7 @@ data these six `uesl` logins see (Checkpoint 26's `DemoDataSeeder`).
 - No email verification enforcement on login (column exists, not yet checked).
 - Password reset exists as of Checkpoint 44 (the `password_reset_tokens` table, previously unused, now backs a real forgot-password flow) — see [Password Reset](#password-reset-checkpoint-44) below. An invite-email flow (built on the same token table) exists as of Checkpoint 46 — see [Invite-Email Flow for New Accounts](#invite-email-flow-for-new-accounts-checkpoint-46) below. Still no MFA or SSO.
 - A backend module registry (`recruitment`, `lifecycle`, `leave`, `documents`, `policies`, `hr_documents` toggleable per tenant) and a narrow branding surface (display name, logo, two colors) exist as of Checkpoint 47 — see [Module Registry & Branding Foundation](#module-registry--branding-foundation-checkpoint-47) below and `docs/platform-vision.md` for the long-term platform direction this checkpoint is the first foundation of. Still no entitlement/subscription layer sitting in front of enablement.
-- A tenant-scoped custom fields engine (EAV-leaning hybrid: `custom_field_definitions`/`custom_field_options`/`custom_field_validation_rules`/`custom_field_values`) exists as of Checkpoint 48 (`recruitment_applicant`), Checkpoint 49 (`job_application`, i.e. `App\Models\RecruitmentApplication`), and Checkpoint 51 (`employee`, i.e. `App\Models\Employee`) — see [Custom Fields Foundation](#custom-fields-foundation-checkpoint-48), [Custom Fields for Job Applications](#custom-fields-for-job-applications-checkpoint-49), and [Employee Custom Fields](#employee-custom-fields-checkpoint-51) below. No schema or core-service change was needed to add the second or third entity. As of Checkpoint 50, sensitivity classification also gates read/write access via fixed platform permissions (`custom_fields.access_sensitive`/`access_confidential`/`access_restricted`), not just audit masking — see [Field-Level Visibility and Sensitive Field Access](#field-level-visibility-and-sensitive-field-access-checkpoint-50) below; a tenant-configurable rules layer on top of this fixed model is still a documented future roadmap, not built yet. As of Checkpoint 52, a Custom Forms layer (`custom_forms`/`custom_form_sections`/`custom_form_fields`) groups existing custom fields into sections for Employee — see [Custom Forms Foundation](#custom-forms-foundation-checkpoint-52) below — deliberately a presentation layer only, never a second value pipeline. As of Checkpoint 53, a tenant-configurable, role-based visibility-rules layer (`custom_field_visibility_rules`) can override the fixed sensitivity tiers per field per role — see [Configurable Field Visibility Rules](#configurable-field-visibility-rules-checkpoint-53) below — role-based only, with a documented direct-permission-grant asymmetry. `lifecycle_processes`/`leave_requests` are a documented future roadmap, not built yet.
+- A tenant-scoped custom fields engine (EAV-leaning hybrid: `custom_field_definitions`/`custom_field_options`/`custom_field_validation_rules`/`custom_field_values`) exists as of Checkpoint 48 (`recruitment_applicant`), Checkpoint 49 (`job_application`, i.e. `App\Models\RecruitmentApplication`), and Checkpoint 51 (`employee`, i.e. `App\Models\Employee`) — see [Custom Fields Foundation](#custom-fields-foundation-checkpoint-48), [Custom Fields for Job Applications](#custom-fields-for-job-applications-checkpoint-49), and [Employee Custom Fields](#employee-custom-fields-checkpoint-51) below. No schema or core-service change was needed to add the second or third entity. As of Checkpoint 50, sensitivity classification also gates read/write access via fixed platform permissions (`custom_fields.access_sensitive`/`access_confidential`/`access_restricted`), not just audit masking — see [Field-Level Visibility and Sensitive Field Access](#field-level-visibility-and-sensitive-field-access-checkpoint-50) below; a tenant-configurable rules layer on top of this fixed model is still a documented future roadmap, not built yet. As of Checkpoint 52, a Custom Forms layer (`custom_forms`/`custom_form_sections`/`custom_form_fields`) groups existing custom fields into sections for Employee — see [Custom Forms Foundation](#custom-forms-foundation-checkpoint-52) below — deliberately a presentation layer only, never a second value pipeline. As of Checkpoint 53, a tenant-configurable, role-based visibility-rules layer (`custom_field_visibility_rules`) can override the fixed sensitivity tiers per field per role — see [Configurable Field Visibility Rules](#configurable-field-visibility-rules-checkpoint-53) below — role-based only, with a documented direct-permission-grant asymmetry. As of Checkpoint 54, the Employee Show page renders form-assigned custom fields through `CustomFormRenderer` and unassigned ones through a `CustomFieldsCard` fallback, rather than both surfaces unconditionally overlapping — see [Form Assignment / Employee UI Cleanup](#form-assignment--employee-ui-cleanup-checkpoint-54) below — a UI-placement change only, no new backend surface. `lifecycle_processes`/`leave_requests` are a documented future roadmap, not built yet.
 - This app's first scheduled task exists as of Checkpoint 45 (`lifecycle:send-task-digest`, registered via `bootstrap/app.php`'s `->withSchedule()`) — see [Lifecycle Task Ordering & Reminders](#lifecycle-task-ordering--reminders-checkpoint-45) below. Production deployments must now add a `php artisan schedule:run` cron entry, which was never required before this checkpoint (see `docs/deployment.md` §6). Still no queued jobs anywhere in the app.
 - `DatabaseSeeder` uses `WithoutModelEvents`, which disables the `saving`/`creating` guards (on `User` and `Role`) during seeding. `UserSeeder`/`RoleSeeder` set `tenant_id`/`is_platform_admin`/`is_platform_role` explicitly on every row regardless, so this doesn't cause incorrect data — but it does mean a same-row consistency mistake in seed data would surface as a raw Postgres constraint error rather than the cleaner app-level exception. (The RBAC *assignment* guards — `assignRole()`, `givePermissionTo()`, `grantPermission()` — and audit logging calls are unaffected by this, since they're plain method logic, not Eloquent events.)
 - See "Current limitations" under Audit Logging above for the audit-specific gaps (no read endpoint, `givePermissionTo()`/tenant CRUD not logged yet).
